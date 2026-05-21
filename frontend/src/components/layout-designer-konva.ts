@@ -128,11 +128,26 @@ export class LayoutDesignerKonvaStage {
     this.stage.destroy();
   }
 
+  /** Register DOM pointer coords with Konva (required for external listeners). */
+  updatePointerFromEvent(evt: PointerEvent | MouseEvent | WheelEvent): void {
+    this.stage.setPointersPositions(evt);
+  }
+
   /** Pointer position in layout model coordinates. */
-  getModelPointer(): [number, number] | null {
+  getModelPointer(evt?: PointerEvent | MouseEvent | WheelEvent): [number, number] | null {
+    if (evt) this.updatePointerFromEvent(evt);
     const pos = this._world.getRelativePointerPosition();
-    if (!pos) return null;
-    return [pos.x, pos.y];
+    if (pos) return [pos.x, pos.y];
+    return this._modelFromStagePointer();
+  }
+
+  private _modelFromStagePointer(): [number, number] | null {
+    const pointer = this.stage.getPointerPosition();
+    if (!pointer) return null;
+    return [
+      (pointer.x - this.viewOx) / this.viewScaleSafe,
+      (pointer.y - this.viewOy) / this.viewScaleSafe,
+    ];
   }
 
   get viewScaleSafe(): number {

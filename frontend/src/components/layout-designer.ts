@@ -121,6 +121,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _onWheel = (ev: WheelEvent): void => {
     if (!this._konva) return;
+    this._konva.updatePointerFromEvent(ev);
     ev.preventDefault();
     if (this._tool === "photo" && this._bgLayer) {
       const delta = ev.deltaY > 0 ? -0.04 : 0.04;
@@ -165,8 +166,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._konva?.fitView(this._vertices, this._guide?.points ?? []);
   }
 
-  private _pointerModel(): [number, number] | null {
-    return this._konva?.getModelPointer() ?? null;
+  private _pointerModel(ev?: PointerEvent | MouseEvent | WheelEvent): [number, number] | null {
+    return this._konva?.getModelPointer(ev) ?? null;
   }
 
   private _stageContainer(): HTMLElement | undefined {
@@ -246,7 +247,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _onPointerDown = (ev: PointerEvent): void => {
     ev.preventDefault();
-    const pos = this._pointerModel();
+    const pos = this._pointerModel(ev);
     if (!pos) return;
     const [mx, my] = pos;
 
@@ -307,7 +308,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
     if (this._tool === "rect" || this._tool === "ellipse") {
       this._beginNewGuideDrawing();
       this._shapeStart = [mx, my];
+      this._status =
+        this._tool === "rect"
+          ? "Rectangle: drag to size, release to finish"
+          : "Ellipse: drag to size, release to finish";
       this._stageContainer()?.setPointerCapture(ev.pointerId);
+      this._syncStage();
       return;
     }
 
@@ -333,12 +339,13 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._syncStage();
   };
 
-  private _onPointerMove = (_ev: PointerEvent): void => {
-    const pos = this._pointerModel();
+  private _onPointerMove = (ev: PointerEvent): void => {
+    const pos = this._pointerModel(ev);
     if (!pos) return;
     const [mx, my] = pos;
 
     if (this._photoPan && this._bgLayer && this._konva) {
+      this._konva.updatePointerFromEvent(ev);
       const pointer = this._konva.stage.getPointerPosition();
       if (!pointer) return;
       const w = this._konva.stage.width();
@@ -398,10 +405,20 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
     if (this._shapeStart && (this._tool === "rect" || this._tool === "ellipse")) {
-      const pos = this._pointerModel();
+      const pos = this._pointerModel(ev);
       if (!pos) return;
       const [mx, my] = pos;
       const [x0, y0] = this._shapeStart;
+      const minDrag = 4 / (this._konva?.viewScaleSafe ?? 1);
+      if (Math.hypot(mx - x0, my - y0) < minDrag) {
+        this._stageContainer()?.releasePointerCapture(ev.pointerId);
+        this._status =
+          this._tool === "rect"
+            ? "Rectangle: drag to size (release was too short)"
+            : "Ellipse: drag to size (release was too short)";
+        this._syncStage();
+        return;
+      }
       this._guide =
         this._tool === "rect"
           ? rectToGuide(x0, y0, mx, my)
@@ -466,7 +483,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
     if (this._tool !== "select") return;
-    const pos = this._pointerModel();
+    const pos = this._pointerModel(ev);
     if (!pos) return;
     const [mx, my] = pos;
     if (this._hitVertex(mx, my) >= 0) return;
@@ -479,7 +496,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _onContextMenu = (ev: MouseEvent): void => {
     ev.preventDefault();
-    const pos = this._pointerModel();
+    const pos = this._pointerModel(ev);
     if (!pos) return;
     const hit = this._hitVertex(pos[0], pos[1]);
     if (hit < 0) return;
