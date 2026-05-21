@@ -1,11 +1,12 @@
 import { css, html } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import type { LiveFrameEvent } from "../api/live-stream.js";
 import { expandToFixture } from "../api/lv-frame-parser.js";
 
 /** Live strip preview — 2D canvas with optional bloom; WebGL path in Phase 1 uses 2D glow. */
-@customElement("wled-strip-preview")
+@safeCustomElement("wled-strip-preview")
 export class WledStripPreview extends BasePoweredElement {
   @property({ type: Number }) heightPx = 56;
   @property({ type: Number }) pixelCount = 210;
@@ -17,12 +18,13 @@ export class WledStripPreview extends BasePoweredElement {
   private _raf = 0;
 
   setFrame(frame: LiveFrameEvent | null): void {
-    if (!frame || !this.isPowered) {
-      return;
-    }
+    if (!frame) return;
     this._lastPixels = expandToFixture(frame, this.pixelCount);
     this._status = "live";
-    this._schedulePaint();
+    this.requestUpdate();
+    if (this.isPowered) {
+      this._schedulePaint();
+    }
   }
 
   setStatus(status: string): void {
@@ -31,7 +33,9 @@ export class WledStripPreview extends BasePoweredElement {
   }
 
   protected override onPoweredConnect(): void {
-    this._schedulePaint();
+    if (this._lastPixels) {
+      this._schedulePaint();
+    }
   }
 
   protected override onPoweredDisconnect(): void {

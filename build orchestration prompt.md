@@ -10,7 +10,11 @@ SUPPORTING RESEARCH (read sections as referenced by each phase):
 - CauldronOS/Stacks/WLED/WLED_Studio_Hardening_Report.md
 
 WORKING TREE:
-CauldronOS/Stacks/cauldron-wled-studio/ (create in Phase 0; private GitHub repo cauldron-wled-studio)
+CauldronOS/Stacks/cauldron-wled-studio/ (GitHub: https://github.com/cjam28/cauldron-wled-studio)
+
+DEPLOY / TEST ON CAULDRON HA:
+- Do NOT rsync to the Pi. Use HACS: push to GitHub → HACS Redownload → reload integration.
+- See docs/HACS_DEVELOPMENT.md and ./scripts/build.sh
 
 YOUR ROLE:
 You are the orchestrator. Follow the "Execution playbook" section of the plan exactly. For each phase:

@@ -35,19 +35,31 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     www_dir = integration_dir / "www"
     www_dir.mkdir(parents=True, exist_ok=True)
 
-    bundle = www_dir / "wled-studio-card.js"
-    if not bundle.is_file():
+    card_bundle = www_dir / "wled-studio-card.js"
+    panel_bundle = www_dir / "wled-studio-panel.js"
+    if not card_bundle.is_file() or not panel_bundle.is_file():
         _LOGGER.warning(
-            "WLED Studio bundle missing at %s — run: cd frontend && npm run build",
-            bundle,
+            "WLED Studio bundles missing in %s — run: cd frontend && npm run build",
+            www_dir,
         )
 
+    version = await _manifest_version(hass)
+    prev_version = hass.data.get(f"{DOMAIN}_frontend_version")
+    if prev_version != version:
+        hass.data.pop(f"{DOMAIN}_frontend_registered", None)
+
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(STATIC_URL_PREFIX, str(www_dir), cache_headers=True)]
+        [
+            StaticPathConfig(
+                STATIC_URL_PREFIX,
+                str(www_dir),
+                cache_headers=False,
+            )
+        ]
     )
 
-    version = await _manifest_version(hass)
-    module_url = f"{STATIC_URL_PREFIX}/wled-studio-card.js?v={version}"
+    card_url = f"{STATIC_URL_PREFIX}/wled-studio-card.js?v={version}"
+    panel_url = f"{STATIC_URL_PREFIX}/wled-studio-panel.js?v={version}"
 
     from homeassistant.components import frontend
 
@@ -60,7 +72,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         config={
             "_panel_custom": {
                 "name": PANEL_MODULE,
-                "module_url": module_url,
+                "module_url": panel_url,
                 "embed_iframe": False,
                 "require_admin": False,
             }
@@ -68,11 +80,16 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         require_admin=False,
     )
 
-    if hasattr(frontend, "add_extra_js_url"):
-        frontend.add_extra_js_url(hass, module_url)
+    # Do not use add_extra_js_url — loading the same card bundle twice causes
+    # duplicate customElements.define and breaks the Lovelace card editor.
 
     hass.data[f"{DOMAIN}_frontend_registered"] = True
-    _LOGGER.debug("WLED Studio frontend at %s", module_url)
+    hass.data[f"{DOMAIN}_frontend_version"] = version
+    _LOGGER.debug(
+        "WLED Studio frontend card=%s panel=%s",
+        card_url,
+        panel_url,
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -85,6 +102,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WLED Studio from a config entry."""
     await _async_register_frontend(hass)
+    async_register_ws_api(hass)
     coordinator = WledStudioCoordinator(hass, entry)
     await coordinator.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -99,4 +117,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coord = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
         if coord is not None:
             await coord.async_shutdown()
+        if not hass.data.get(DOMAIN):
+            from .ws_api import _WS_REGISTERED_KEY
+
+            hass.data.pop(_WS_REGISTERED_KEY, None)
     return unload_ok

@@ -1,32 +1,40 @@
 # WLED Studio
 
-Govee-grade WLED visual controller for Home Assistant — HACS card + companion integration with Layout Designer, Effect Builder, and Voice Assist config.
+Govee-grade WLED visual controller for Home Assistant — companion integration, Lovelace card, and sidebar panel. Attaches to the stock [WLED](https://www.home-assistant.io/integrations/wled/) integration (does not replace it).
 
-**Requires:** Home Assistant ≥ 2024.6.0 and the stock [WLED](https://www.home-assistant.io/integrations/wled/) integration. WLED Studio **attaches** to existing WLED config entries; it does not replace them.
+**Requires:** Home Assistant ≥ 2025.7 and an existing WLED config entry.
 
-## Highlights (v1)
+## Install (HACS)
 
-- Live pixel preview on your physical layout (not just a 1D strip)
-- Layout Designer — draw fixtures, pin LED indices, auto-segments
-- Geometry-aware paint via DDP (browser → HA → integration → WLED)
-- HA-side scenes with device-side crossfade and `scene.*` entities for Assist
-- Effect Builder, Voice config, schedules, multi-device groups
+1. **HACS → Integrations → ⋮ → Custom repositories**
+2. Add `https://github.com/cjam28/cauldron-wled-studio` (category: **Integration**)
+3. **HACS → Integrations → WLED Studio → Download**
+4. **Settings → Devices & services → Add integration → WLED Studio** → select your WLED device
+5. **Settings → Dashboards → Resources → Add resource**
+   - URL: `/wled_studio_static/wled-studio-card.js?v=**VERSION**`  
+     (replace `**VERSION**` with the value in `custom_components/wled_studio/manifest.json`, e.g. `0.2.8`)
+   - Type: **JavaScript module**
+6. Add card YAML, e.g.:
 
-If you want a native phone app device manager, [WLED+](https://github.com/pixel-heart/wledplus-releases) is excellent for that lane. WLED Studio is HA-native: dashboards, automations, and Assist.
-
-## Install
-
-1. Add this repo as a custom HACS repository (private until post-v1 decision).
-2. Install **WLED Studio** from HACS (Frontend + Integration).
-3. Configure **Settings → Devices & services → Add integration → WLED Studio** and pick an existing WLED device.
+```yaml
+type: custom:wled-studio-card
+controller: Cloud
+height: 56
+```
 
 ## Development
 
+**Do not rsync to the Pi.** Use the HACS redownload path like a real install.
+
 ```bash
-cd frontend && npm ci && npm run build
+./scripts/build.sh          # npm build → www/
+git add -A && git commit -m "..." && git push
+# On HA: HACS → WLED Studio → Redownload → Reload integration → bump resource ?v= → hard refresh
 ```
 
-Built assets land in `dist/` and are committed for HACS installs.
+Full workflow: **[docs/HACS_DEVELOPMENT.md](docs/HACS_DEVELOPMENT.md)**
+
+To remove an old manual copy from the server: `./scripts/purge-manual-install.sh`
 
 ## License
 

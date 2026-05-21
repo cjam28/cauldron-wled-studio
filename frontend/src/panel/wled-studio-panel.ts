@@ -1,5 +1,6 @@
 import { css, html } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { state } from "lit/decorators.js";
+import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 
 export const PANEL_TAG = "wled-studio-panel";
@@ -15,7 +16,7 @@ type StudioView =
   | "voice"
   | "settings";
 
-@customElement(PANEL_TAG)
+@safeCustomElement(PANEL_TAG)
 export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
 

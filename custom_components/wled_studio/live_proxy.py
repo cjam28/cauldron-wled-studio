@@ -19,7 +19,7 @@ from .const import (
     LIVE_RECONNECT_MAX_SEC,
     LIVE_TARGET_FPS,
 )
-from .lv_frame import parse_lv_message
+from .lv_frame import parse_lv_binary, parse_lv_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,14 +157,17 @@ class LiveProxy:
                     async for msg in ws:
                         if not self._running:
                             break
-                        if msg.type != aiohttp.WSMsgType.TEXT:
-                            if msg.type in (
-                                aiohttp.WSMsgType.CLOSED,
-                                aiohttp.WSMsgType.ERROR,
-                            ):
-                                break
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await self._handle_binary(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            await self._handle_text(msg.data)
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            break
+                        else:
                             continue
-                        await self._handle_text(msg.data)
                         if await self._maybe_probe_stale():
                             break
             except asyncio.CancelledError:
@@ -190,6 +193,12 @@ class LiveProxy:
             self._reconnect_attempt += 1
             await asyncio.sleep(delay)
 
+    async def _handle_binary(self, data: bytes) -> None:
+        frame = parse_lv_binary(data)
+        if frame is None:
+            return
+        self._ingest_frame(frame)
+
     async def _handle_text(self, data: str) -> None:
         try:
             raw = json.loads(data)
@@ -198,6 +207,9 @@ class LiveProxy:
         frame = parse_lv_message(raw)
         if frame is None:
             return
+        self._ingest_frame(frame)
+
+    def _ingest_frame(self, frame: dict[str, Any]) -> None:
         self._last_frame_at = asyncio.get_running_loop().time()
         frame["entry_id"] = self.entry_id
         frame["controller_id"] = self.entry_id

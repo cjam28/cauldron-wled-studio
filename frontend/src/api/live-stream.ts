@@ -66,12 +66,40 @@ export function subscribeLive(
   };
 }
 
+export async function waitForConnection(connection: Connection): Promise<void> {
+  if (connection.connected) return;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      connection.removeEventListener("ready", onReady);
+      reject(new Error("Home Assistant WebSocket not connected"));
+    }, 15000);
+    const onReady = () => {
+      if (!connection.connected) return;
+      window.clearTimeout(timeout);
+      connection.removeEventListener("ready", onReady);
+      resolve();
+    };
+    connection.addEventListener("ready", onReady);
+  });
+}
+
 export async function listControllers(
   connection: Connection
 ): Promise<Array<Record<string, unknown>>> {
-  const res = (await connection.sendMessagePromise({
-    type: "wled_studio/list_controllers",
-    schema_version: SCHEMA_VERSION,
-  })) as { controllers?: Array<Record<string, unknown>> };
-  return res.controllers ?? [];
+  await waitForConnection(connection);
+  try {
+    const res = (await connection.sendMessagePromise({
+      type: "wled_studio/list_controllers",
+      schema_version: SCHEMA_VERSION,
+    })) as { controllers?: Array<Record<string, unknown>> };
+    return res.controllers ?? [];
+  } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    const detail = e?.code
+      ? `${e.code}: ${e.message ?? "failed"}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    throw new Error(`wled_studio/list_controllers — ${detail}`);
+  }
 }

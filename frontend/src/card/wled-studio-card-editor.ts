@@ -1,25 +1,42 @@
 import { html, LitElement } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { safeCustomElement } from "../utils/safe-custom-element.js";
 import type { HomeAssistant } from "custom-card-helpers";
-import type { WledStudioCardConfig } from "./wled-studio-card.js";
+import { CARD_TAG, type WledStudioCardConfig } from "./wled-studio-card.js";
 
-@customElement("wled-studio-card-editor")
+const defaultConfig = (): WledStudioCardConfig => ({
+  type: `custom:${CARD_TAG}`,
+  controller: "Cloud",
+  height: 56,
+});
+
+@safeCustomElement("wled-studio-card-editor")
 export class WledStudioCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
-  @state() private _config!: WledStudioCardConfig;
+  @state() private _config: WledStudioCardConfig = defaultConfig();
 
   setConfig(config: WledStudioCardConfig): void {
-    this._config = { ...config };
+    this._config = {
+      ...defaultConfig(),
+      ...config,
+      type: config.type ?? `custom:${CARD_TAG}`,
+    };
   }
 
   protected override render() {
+    const cfg = this._config ?? defaultConfig();
     return html`
       <div class="editor">
-        <p>Configure WLED Studio card (Phase 0 scaffold).</p>
+        <p>WLED Studio card — pick the controller name (e.g. Cloud).</p>
         <ha-textfield
-          .label=${"Controller entity (optional)"}
-          .value=${this._config.controller ?? ""}
+          .label=${"Controller"}
+          .value=${cfg.controller ?? ""}
           @value-changed=${this._onController}
+        ></ha-textfield>
+        <ha-textfield
+          .label=${"Preview height (px)"}
+          .value=${String(cfg.height ?? 56)}
+          @value-changed=${this._onHeight}
         ></ha-textfield>
       </div>
     `;
@@ -27,7 +44,15 @@ export class WledStudioCardEditor extends LitElement {
 
   private _onController(ev: CustomEvent): void {
     const value = (ev.detail as { value: string }).value;
-    this._fire({ ...this._config, controller: value });
+    this._fire({ ...(this._config ?? defaultConfig()), controller: value });
+  }
+
+  private _onHeight(ev: CustomEvent): void {
+    const value = Number((ev.detail as { value: string }).value);
+    this._fire({
+      ...(this._config ?? defaultConfig()),
+      height: Number.isFinite(value) ? value : 56,
+    });
   }
 
   private _fire(config: WledStudioCardConfig): void {

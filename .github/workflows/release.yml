@@ -34,5 +34,3 @@ jobs:
             dist/wled-studio-card.js.map
             dist/wled-studio-panel.js
             dist/wled-studio-panel.js.map
-            dist/layout-designer.js
-            dist/layout-designer.js.map

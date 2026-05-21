@@ -1,7 +1,9 @@
 import { css, html, type PropertyValues } from "lit";
-import { customElement, property, query, state } from "lit/decorators.js";
+import { property, query, state } from "lit/decorators.js";
+import { safeCustomElement } from "../utils/safe-custom-element.js";
 import type { LovelaceCard } from "custom-card-helpers";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
 import type { WledStripPreview } from "../components/strip-preview.js";
 import "../components/strip-preview.js";
@@ -15,7 +17,7 @@ export interface WledStudioCardConfig {
   show_scenes?: boolean;
 }
 
-@customElement(CARD_TAG)
+@safeCustomElement(CARD_TAG)
 export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @property({ attribute: false }) public config?: WledStudioCardConfig;
 
@@ -24,10 +26,13 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @state() private _pixelCount = 210;
   @state() private _connected = false;
   @state() private _previewStatus = "connecting";
+  @state() private _hint = "";
 
   @query("wled-strip-preview") private _preview?: WledStripPreview;
 
   private _unsubLive?: () => void;
+  private _bootstrapGen = 0;
+  private _offConnReady?: () => void;
 
   public setConfig(config: WledStudioCardConfig): void {
     if (!config.type?.startsWith("custom:")) {
@@ -40,45 +45,120 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     return 5;
   }
 
+  public static getConfigElement(): HTMLElement {
+    const el = document.createElement(
+      "wled-studio-card-editor"
+    ) as import("./wled-studio-card-editor.js").WledStudioCardEditor;
+    el.setConfig(WledStudioCard.getStubConfig());
+    return el;
+  }
+
+  public static getStubConfig(): WledStudioCardConfig {
+    return { type: `custom:${CARD_TAG}`, controller: "Cloud", height: 56 };
+  }
+
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
     if (changed.has("hass") && this.hass) {
+      this._bindConnectionReady();
       void this._bootstrap();
     }
   }
 
   protected override onPoweredConnect(): void {
+    this._bindConnectionReady();
     void this._bootstrap();
   }
 
   protected override onPoweredDisconnect(): void {
+    this._bootstrapGen += 1;
+    this._offConnReady?.();
+    this._offConnReady = undefined;
     this._unsubLive?.();
     this._unsubLive = undefined;
   }
 
+  private _bindConnectionReady(): void {
+    if (!this.hass?.connection || this._offConnReady) return;
+    this._offConnReady = onHaConnectionReady(this.hass.connection, () => {
+      void this._bootstrap();
+    });
+    this.addUnsub(() => this._offConnReady?.());
+  }
+
+  private _pickController(
+    controllers: Array<Record<string, unknown>>
+  ): Record<string, unknown> | undefined {
+    const key = (this.config?.controller ?? "").trim();
+    if (!key) return controllers[0];
+    const lower = key.toLowerCase();
+    return (
+      controllers.find((c) => {
+        const title = String(c.title ?? "");
+        const entryId = String(c.entry_id ?? "");
+        return (
+          entryId === key ||
+          title === key ||
+          title.toLowerCase().includes(lower) ||
+          title.toLowerCase().endsWith(`— ${lower}`) ||
+          title.toLowerCase().endsWith(`- ${lower}`)
+        );
+      }) ?? controllers[0]
+    );
+  }
+
   private async _bootstrap(): Promise<void> {
-    if (!this.hass?.connection || !this.isConnected) return;
-    try {
-      const controllers = await listControllers(this.hass.connection);
-      const pick =
-        controllers.find(
-          (c) =>
-            c.title === this.config?.controller ||
-            c.entry_id === this.config?.controller
-        ) ?? controllers[0];
-      if (!pick?.entry_id) {
-        this._previewStatus = "no controller";
-        return;
+    if (!this.hass?.connection) return;
+    const gen = ++this._bootstrapGen;
+    this._hint = "Connecting to WLED Studio…";
+    this._connected = false;
+    this.requestUpdate();
+
+    const delays = [0, 400, 1200, 2500];
+    for (const delay of delays) {
+      if (gen !== this._bootstrapGen || !this.isConnected) return;
+      if (delay > 0) {
+        await new Promise((r) => setTimeout(r, delay));
       }
-      this._controllerId = String(pick.entry_id);
-      this._masterEntity = String(pick.master_entity_id ?? "");
-      this._pixelCount = Number(pick.pixel_count) || 210;
-      this._connected = true;
-      this._startLive();
-    } catch {
-      this._connected = false;
-      this._previewStatus = "offline";
+      try {
+        const controllers = await listControllers(this.hass.connection);
+        const pick = this._pickController(controllers);
+        if (!pick?.entry_id) {
+          if (gen === this._bootstrapGen) {
+            this._hint =
+              controllers.length === 0
+                ? "No WLED Studio controllers found. Add the integration under Settings → Devices & services."
+                : "Controller not found in list.";
+            this.requestUpdate();
+          }
+          continue;
+        }
+        if (gen !== this._bootstrapGen) return;
+
+        this._controllerId = String(pick.entry_id);
+        this._masterEntity = String(pick.master_entity_id ?? "");
+        this._pixelCount = Number(pick.pixel_count) || 210;
+        this._connected = true;
+        this._hint = "";
+        this._startLive();
+        this.requestUpdate();
+        return;
+      } catch (err) {
+        const lastErr =
+          err instanceof Error ? err.message : String(err ?? "unknown");
+        if (gen === this._bootstrapGen) {
+          this._hint = `Connecting… (${lastErr})`;
+          this.requestUpdate();
+        }
+      }
     }
+
+    if (gen !== this._bootstrapGen) return;
+    this._connected = false;
+    this._previewStatus = "offline";
+    this._preview?.setStatus(this._previewStatus);
+    this._hint =
+      "WLED Studio is not responding. In Settings → Devices & services, open WLED Studio — Cloud → Reload, then hard-refresh this page (Ctrl+Shift+R).";
     this.requestUpdate();
   }
 
@@ -160,8 +240,8 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         >
           Open Studio
         </button>
-        ${!this._connected
-          ? html`<p class="hint">Attach WLED Studio to a WLED device in Settings.</p>`
+        ${this._hint
+          ? html`<p class="hint">${this._hint}</p>`
           : null}
       </div>
     `;
