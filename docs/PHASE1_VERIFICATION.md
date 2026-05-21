@@ -27,19 +27,32 @@ What **should** work today vs what comes later (layout designer, paint, scenes).
 
 ### 1. Browser console (on the dashboard page)
 
+`window.hassConnection` does not exist. Use the HA root element or the card:
+
 ```javascript
 // Custom element registered
 customElements.get("wled-studio-card");
 
+// Get WebSocket connection (pick one that returns an object)
+const conn =
+  document.querySelector("home-assistant")?.hass?.connection ??
+  document.querySelector("wled-studio-card")?.hass?.connection;
+
 // Backend API
-await window.hassConnection.sendMessagePromise({
+await conn.sendMessagePromise({
   type: "wled_studio/list_controllers",
   schema_version: 1,
 });
 // Expect: { ok: true, controllers: [{ entry_id, master_entity_id: "light.cloud", pixel_count: 210, host: "192.168.20.71" }] }
 
-// Bundle loaded
-// Look for: [wled-studio] lovelace bundle loaded
+// Ping (optional)
+await conn.sendMessagePromise({
+  type: "wled_studio/ping",
+  schema_version: 1,
+});
+
+// Bundle loaded — Console filter: wled-studio
+// Expect: [wled-studio] lovelace bundle loaded
 ```
 
 ### 2. Live preview vs real strip
