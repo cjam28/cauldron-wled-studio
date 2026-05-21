@@ -209,7 +209,6 @@ def kitchen_island_fixture() -> Fixture:
             (100.0, 0.0),
             (110.0, 10.0),
             (200.0, 10.0),
-            (0.0, 0.0),
         ],
         anchors=[
             Anchor(0, 0),

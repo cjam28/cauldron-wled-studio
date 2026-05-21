@@ -47,8 +47,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _busy = false;
 
   private _canvas?: HTMLCanvasElement;
+  private _canvasWrap?: HTMLElement;
   private _ctx?: CanvasRenderingContext2D;
   private _drag: { idx: number; ox: number; oy: number } | null = null;
+  private _boundCanvas?: HTMLCanvasElement;
   private _viewOx = 0;
   private _viewOy = 0;
   private _viewScale = 1;
@@ -58,43 +60,67 @@ export class WledLayoutDesigner extends BasePoweredElement {
     void this._loadLayout();
   }
 
+  protected override firstUpdated(): void {
+    this._canvasWrap =
+      this.renderRoot.querySelector(".canvas-wrap") ?? undefined;
+    this._resizeObs = new ResizeObserver(() => this._onResize());
+    if (this._canvasWrap) {
+      this._resizeObs.observe(this._canvasWrap);
+    }
+    this._bindCanvas();
+    this._onResize();
+  }
+
   protected override updated(changed: import("lit").PropertyValues): void {
     super.updated(changed);
+    this._bindCanvas();
     if (changed.has("connection") || changed.has("layoutId") || changed.has("fixtureId")) {
       void this._loadLayout();
     }
   }
 
-  protected override firstUpdated(): void {
-    this._canvas = this.renderRoot.querySelector("canvas") ?? undefined;
-    if (this._canvas) {
-      this._ctx = this._canvas.getContext("2d", { alpha: true }) ?? undefined;
-      this._canvas.addEventListener("pointerdown", this._onPointerDown);
-      this._canvas.addEventListener("pointermove", this._onPointerMove);
-      this._canvas.addEventListener("pointerup", this._onPointerUp);
-      this._canvas.addEventListener("pointercancel", this._onPointerUp);
-      this._canvas.addEventListener("dblclick", this._onDblClick);
-      this._canvas.addEventListener("contextmenu", this._onContextMenu);
-      this.addUnsub(() => {
-        this._canvas?.removeEventListener("pointerdown", this._onPointerDown);
-        this._canvas?.removeEventListener("pointermove", this._onPointerMove);
-        this._canvas?.removeEventListener("pointerup", this._onPointerUp);
-        this._canvas?.removeEventListener("pointercancel", this._onPointerUp);
-        this._canvas?.removeEventListener("dblclick", this._onDblClick);
-        this._canvas?.removeEventListener("contextmenu", this._onContextMenu);
-      });
-    }
-    this._resizeObs = new ResizeObserver(() => this._onResize());
-    this._resizeObs.observe(this);
-    this._onResize();
+  /** Re-attach listeners when Lit recreates the canvas node. */
+  private _bindCanvas(): void {
+    const canvas = this.renderRoot.querySelector("canvas") ?? undefined;
+    if (!canvas || canvas === this._boundCanvas) return;
+    this._unbindCanvas();
+    this._canvas = canvas;
+    this._boundCanvas = canvas;
+    this._ctx = canvas.getContext("2d", { alpha: true }) ?? undefined;
+    canvas.addEventListener("pointerdown", this._onPointerDown);
+    canvas.addEventListener("pointermove", this._onPointerMove);
+    canvas.addEventListener("pointerup", this._onPointerUp);
+    canvas.addEventListener("pointercancel", this._onPointerUp);
+    canvas.addEventListener("dblclick", this._onDblClick);
+    canvas.addEventListener("contextmenu", this._onContextMenu);
+  }
+
+  private _unbindCanvas(): void {
+    const canvas = this._boundCanvas;
+    if (!canvas) return;
+    canvas.removeEventListener("pointerdown", this._onPointerDown);
+    canvas.removeEventListener("pointermove", this._onPointerMove);
+    canvas.removeEventListener("pointerup", this._onPointerUp);
+    canvas.removeEventListener("pointercancel", this._onPointerUp);
+    canvas.removeEventListener("dblclick", this._onDblClick);
+    canvas.removeEventListener("contextmenu", this._onContextMenu);
+    this._boundCanvas = undefined;
+  }
+
+  override disconnectedCallback(): void {
+    this._resizeObs?.disconnect();
+    this._unbindCanvas();
+    super.disconnectedCallback();
   }
 
   private _onResize(): void {
     const canvas = this._canvas;
-    if (!canvas) return;
-    const rect = this.getBoundingClientRect();
-    const w = Math.max(400, rect.width || 400);
-    const h = Math.max(300, rect.height || 300);
+    const wrap = this._canvasWrap;
+    if (!canvas || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(rect.width * dpr));
+    const h = Math.max(1, Math.floor(rect.height * dpr));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -146,18 +172,48 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ];
   }
 
+  /** Map pointer coords to canvas backing-store pixels (CSS size often differs). */
+  private _pointerCanvasXY(clientX: number, clientY: number): [number, number] {
+    const canvas = this._canvas!;
+    const rect = canvas.getBoundingClientRect();
+    const sx = rect.width > 0 ? canvas.width / rect.width : 1;
+    const sy = rect.height > 0 ? canvas.height / rect.height : 1;
+    return [(clientX - rect.left) * sx, (clientY - rect.top) * sy];
+  }
+
+  private _isClosingDuplicate(i: number): boolean {
+    if (i <= 0 || this._vertices.length < 3) return false;
+    const last = this._vertices.length - 1;
+    if (i !== last) return false;
+    const a = this._vertices[0];
+    const b = this._vertices[last];
+    return Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
+  }
+
   private _hitVertex(cx: number, cy: number): number {
-    for (let i = this._vertices.length - 1; i >= 0; i--) {
+    let best = -1;
+    let bestDist = HIT_R + 1;
+    for (let i = 0; i < this._vertices.length; i++) {
+      if (this._isClosingDuplicate(i)) continue;
       const [vx, vy] = this._vtxToCanvas(this._vertices[i]);
-      if (Math.hypot(cx - vx, cy - vy) <= HIT_R) return i;
+      const d = Math.hypot(cx - vx, cy - vy);
+      if (d > HIT_R) continue;
+      const anchored = this._vertices[i].anchorLed !== null;
+      const bestAnchored = best >= 0 && this._vertices[best].anchorLed !== null;
+      if (
+        best < 0 ||
+        d < bestDist - 0.5 ||
+        (Math.abs(d - bestDist) <= 1 && anchored && !bestAnchored)
+      ) {
+        best = i;
+        bestDist = d;
+      }
     }
-    return -1;
+    return best;
   }
 
   private _canvasXY(ev: PointerEvent): [number, number] {
-    const canvas = this._canvas!;
-    const rect = canvas.getBoundingClientRect();
-    return [ev.clientX - rect.left, ev.clientY - rect.top];
+    return this._pointerCanvasXY(ev.clientX, ev.clientY);
   }
 
   private _onPointerDown = (ev: PointerEvent): void => {
@@ -192,11 +248,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
   };
 
   private _onDblClick = (ev: MouseEvent): void => {
-    // Double-click on empty canvas → add vertex
-    const canvas = this._canvas!;
-    const rect = canvas.getBoundingClientRect();
-    const cx = ev.clientX - rect.left;
-    const cy = ev.clientY - rect.top;
+    const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
     const hit = this._hitVertex(cx, cy);
     if (hit >= 0) return;
     const [mx, my] = this._canvasToModel(cx, cy);
@@ -209,10 +261,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _onContextMenu = (ev: MouseEvent): void => {
     ev.preventDefault();
-    const canvas = this._canvas!;
-    const rect = canvas.getBoundingClientRect();
-    const cx = ev.clientX - rect.left;
-    const cy = ev.clientY - rect.top;
+    const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
     const hit = this._hitVertex(cx, cy);
     if (hit < 0) return;
     this._vertices = this._vertices.filter((_, i) => i !== hit);
@@ -252,17 +301,27 @@ export class WledLayoutDesigner extends BasePoweredElement {
       ctx.fill();
     }
 
-    // Draw polyline
-    if (verts.length >= 2) {
+    // Draw polyline (skip duplicate closing point for display)
+    const drawVerts =
+      verts.length >= 2 && this._isClosingDuplicate(verts.length - 1)
+        ? verts.slice(0, -1)
+        : verts;
+    if (drawVerts.length >= 2) {
       ctx.beginPath();
       ctx.strokeStyle = EDGE_COLOR;
       ctx.lineWidth = 2;
-      const [sx, sy] = this._vtxToCanvas(verts[0]);
+      const [sx, sy] = this._vtxToCanvas(drawVerts[0]);
       ctx.moveTo(sx, sy);
-      for (let i = 1; i < verts.length; i++) {
-        const [vx, vy] = this._vtxToCanvas(verts[i]);
+      for (let i = 1; i < drawVerts.length; i++) {
+        const [vx, vy] = this._vtxToCanvas(drawVerts[i]);
         ctx.lineTo(vx, vy);
       }
+      const closed =
+        verts.length >= 3 &&
+        (this._isClosingDuplicate(verts.length - 1) ||
+          Math.hypot(verts[0].x - verts[verts.length - 1].x, verts[0].y - verts[verts.length - 1].y) <
+            0.5);
+      if (closed) ctx.closePath();
       ctx.stroke();
     }
 
@@ -323,11 +382,19 @@ export class WledLayoutDesigner extends BasePoweredElement {
         (fixture.anchors as Array<{ led: number; vertex_index: number }>) ?? [];
 
       const anchorMap = new Map(anchors.map((a) => [a.vertex_index, a.led]));
-      this._vertices = pts.map((p, i) => ({
+      let vertices = pts.map((p, i) => ({
         x: p[0],
         y: p[1],
         anchorLed: anchorMap.get(i) ?? null,
       }));
+      if (vertices.length >= 2) {
+        const first = vertices[0];
+        const last = vertices[vertices.length - 1];
+        if (Math.hypot(first.x - last.x, first.y - last.y) < 0.5) {
+          vertices = vertices.slice(0, -1);
+        }
+      }
+      this._vertices = vertices;
 
       this._fitView();
       await this._refreshPositions();
@@ -529,7 +596,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
         border-radius: 8px;
         overflow: hidden;
         background: #111827;
-        min-height: 300px;
+        min-height: 320px;
+        height: min(55vh, 480px);
       }
       canvas {
         display: block;

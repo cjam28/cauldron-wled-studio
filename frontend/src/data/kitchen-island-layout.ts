@@ -17,7 +17,6 @@ export function kitchenIslandLayout(controllerId: string): LayoutRecord {
           [100, 0],
           [110, 10],
           [200, 10],
-          [0, 0],
         ],
         anchors: [
           { led: 0, vertex_index: 0 },
