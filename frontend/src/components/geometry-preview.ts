@@ -84,23 +84,34 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   protected override firstUpdated(): void {
     this._canvas = this.renderRoot.querySelector("canvas") ?? undefined;
-    if (this._canvas) {
+    const wrap = this.renderRoot.querySelector(".wrap");
+    if (this._canvas && wrap) {
       this._ctx = this._canvas.getContext("2d", { alpha: true }) ?? undefined;
       this._resizeObs = new ResizeObserver(() => this._onResize());
-      this._resizeObs.observe(this);
+      this._resizeObs.observe(wrap);
     }
     this._onResize();
   }
 
   private _onResize(): void {
     const canvas = this._canvas;
-    if (!canvas) return;
-    const rect = this.getBoundingClientRect();
-    const w = Math.max(320, rect.width || 320);
-    const h = Math.max(200, rect.height || 200);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    const wrap = this.renderRoot.querySelector(".wrap");
+    if (!canvas || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+    // Cap bitmap size — canvas width/height attrs affect layout in some browsers.
+    const cssW = Math.min(1200, Math.max(1, Math.floor(rect.width)));
+    const cssH = Math.min(600, Math.max(1, Math.floor(rect.height)));
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const bmpW = Math.floor(cssW * dpr);
+    const bmpH = Math.floor(cssH * dpr);
+    if (canvas.width !== bmpW || canvas.height !== bmpH) {
+      canvas.width = bmpW;
+      canvas.height = bmpH;
+      const ctx = this._ctx;
+      if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       this._schedPaint();
     }
   }
@@ -188,8 +199,9 @@ export class WledGeometryPreview extends BasePoweredElement {
     const canvas = this._canvas;
     if (!ctx || !canvas) return;
 
-    const w = canvas.width;
-    const h = canvas.height;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#0d0d0d";
     ctx.fillRect(0, 0, w, h);
@@ -330,13 +342,23 @@ export class WledGeometryPreview extends BasePoweredElement {
   static override styles = [
     ...sharedBaseStyles,
     css`
+      :host {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
       .preview-shell {
         display: flex;
         flex-direction: column;
         gap: 6px;
         width: 100%;
         height: 100%;
-        min-height: 200px;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
       .mode-toggle {
         display: flex;
@@ -358,12 +380,14 @@ export class WledGeometryPreview extends BasePoweredElement {
         background: #0d0d0d;
         width: 100%;
         flex: 1;
-        min-height: 180px;
+        min-height: 160px;
+        max-height: 100%;
       }
       canvas {
         display: block;
         width: 100%;
         height: 100%;
+        max-height: 100%;
       }
       .overlay {
         position: absolute;

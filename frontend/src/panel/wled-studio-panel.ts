@@ -179,6 +179,8 @@ export class WledStudioPanel extends BasePoweredElement {
         }
         .content {
           padding: 16px;
+          min-height: 0;
+          overflow: auto;
         }
       `,
   ];

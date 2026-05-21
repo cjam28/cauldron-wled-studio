@@ -1403,11 +1403,19 @@ export class WledLayoutDesigner extends BasePoweredElement {
   static override styles = [
     ...sharedBaseStyles,
     css`
+      :host {
+        display: block;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
       .designer {
         display: grid;
         grid-template-columns: 1fr;
         gap: 12px;
         height: 100%;
+        max-height: 100%;
+        min-height: 0;
       }
       @container wled-studio (min-width: 600px) {
         .designer {
@@ -1505,6 +1513,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
         flex-direction: column;
         gap: 12px;
         padding: 4px 0;
+        min-height: 0;
+        max-height: 100%;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
       .instructions {
         font-size: 0.78rem;
@@ -1652,7 +1664,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
       }
       .actions {
         margin-top: auto;
+        flex-shrink: 0;
+        position: sticky;
+        bottom: 0;
         padding-top: 8px;
+        background: var(--card-background-color, #111827);
+        border-top: 1px solid var(--divider-color, #374151);
       }
       .primary,
       .small {

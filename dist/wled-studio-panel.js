@@ -995,11 +995,19 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         @photo-error=${t=>{this._status=t.detail.message}}
       ></wled-layout-photo-editor>
     `}static{this.styles=[..._t,o`
+      :host {
+        display: block;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
       .designer {
         display: grid;
         grid-template-columns: 1fr;
         gap: 12px;
         height: 100%;
+        max-height: 100%;
+        min-height: 0;
       }
       @container wled-studio (min-width: 600px) {
         .designer {
@@ -1097,6 +1105,10 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         flex-direction: column;
         gap: 12px;
         padding: 4px 0;
+        min-height: 0;
+        max-height: 100%;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
       .instructions {
         font-size: 0.78rem;
@@ -1244,7 +1256,12 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
       }
       .actions {
         margin-top: auto;
+        flex-shrink: 0;
+        position: sticky;
+        bottom: 0;
         padding-top: 8px;
+        background: var(--card-background-color, #111827);
+        border-top: 1px solid var(--divider-color, #374151);
       }
       .primary,
       .small {
@@ -1266,7 +1283,7 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         opacity: 0.45;
         cursor: default;
       }
-    `]}};t([ct({attribute:!1})],jr.prototype,"connection",void 0),t([ct()],jr.prototype,"controllerId",void 0),t([ct()],jr.prototype,"layoutId",void 0),t([ct()],jr.prototype,"fixtureId",void 0),t([ct({type:Number})],jr.prototype,"pixelCount",void 0),t([dt()],jr.prototype,"_vertices",void 0),t([dt()],jr.prototype,"_ledPositions",void 0),t([dt()],jr.prototype,"_selectedVtx",void 0),t([dt()],jr.prototype,"_anchorInput",void 0),t([dt()],jr.prototype,"_status",void 0),t([dt()],jr.prototype,"_busy",void 0),t([dt()],jr.prototype,"_closed",void 0),t([dt()],jr.prototype,"_tool",void 0),t([dt()],jr.prototype,"_guide",void 0),t([dt()],jr.prototype,"_backgroundUrl",void 0),t([dt()],jr.prototype,"_bgLayer",void 0),t([dt()],jr.prototype,"_scalePxPerM",void 0),t([dt()],jr.prototype,"_calibActive",void 0),t([dt()],jr.prototype,"_calibMeters",void 0),t([dt()],jr.prototype,"_canUndo",void 0),t([dt()],jr.prototype,"_canRedo",void 0),t([dt()],jr.prototype,"_zoomSlider",void 0),t([dt()],jr.prototype,"_anchorScaleEnd",void 0),jr=t([ut("wled-layout-designer")],jr);let qr=class extends mt{constructor(){super(...arguments),this.controllerId="",this.layoutId="",this.fixtureId="",this.pixelCount=210,this.dotRadius=4,this._positions=[],this._status="waiting",this._showDots=!1,this._closed=!1,this._bgLayer=null,this._bgImage=null,this._raf=0}setFrame(t){t&&(this._pixels=function(t,e){const i=new Uint8ClampedArray(4*e);for(let n=0;n<e;n++){const e=Math.min(t.count-1,Math.max(0,Math.round(n/t.scale))),s=t.leds_hex[e]??"000000",r=4*n;8===s.length?(i[r]=parseInt(s.slice(0,2),16),i[r+1]=parseInt(s.slice(2,4),16),i[r+2]=parseInt(s.slice(4,6),16),i[r+3]=parseInt(s.slice(6,8),16)):(i[r]=parseInt(s.slice(0,2),16),i[r+1]=parseInt(s.slice(2,4),16),i[r+2]=parseInt(s.slice(4,6),16),i[r+3]=255)}return i}(t,this.pixelCount),this._status="live",this._schedPaint())}setStatus(t){this._status=t,this.requestUpdate()}async refresh(){await this._resolvePositions()}onPoweredConnect(){this._resolvePositions(),this._attachLiveStream()}onPoweredDisconnect(){this._raf&&cancelAnimationFrame(this._raf),this._raf=0,this._resizeObs?.disconnect()}updated(t){super.updated(t),(t.has("connection")||t.has("controllerId")||t.has("layoutId")||t.has("fixtureId"))&&(this._resolvePositions(),this._attachLiveStream())}firstUpdated(){this._canvas=this.renderRoot.querySelector("canvas")??void 0,this._canvas&&(this._ctx=this._canvas.getContext("2d",{alpha:!0})??void 0,this._resizeObs=new ResizeObserver(()=>this._onResize()),this._resizeObs.observe(this)),this._onResize()}_onResize(){const t=this._canvas;if(!t)return;const e=this.getBoundingClientRect(),i=Math.max(320,e.width||320),n=Math.max(200,e.height||200);t.width===i&&t.height===n||(t.width=i,t.height=n,this._schedPaint())}async _resolvePositions(){if(this.connection&&this.controllerId&&this.fixtureId)try{if(this.layoutId){const t=await ci(this.connection,this.controllerId,this.layoutId);if(t){this._bgLayer=Fi(t),this._loadBackgroundImage();const e=t.fixtures??[],i=this.fixtureId?e.find(t=>String(t.id??"")===this.fixtureId):e[0];this._closed=Boolean(i?.closed??!1)}}this._positions=await ui(this.connection,this.controllerId,this.fixtureId,this.layoutId||void 0),this._schedPaint()}catch{this._positions=[]}}_loadBackgroundImage(){const t=this._bgLayer?.url;t?en(t).then(t=>{this._bgImage=t,this._schedPaint()},()=>{this._bgImage=null}):this._bgImage=null}_attachLiveStream(){if(!this.connection||!this.controllerId)return;const t=vt(this.connection,this.controllerId,t=>{this.setFrame(t)});this.addUnsub(t)}_schedPaint(){this._raf||(this._raf=requestAnimationFrame(()=>{this._raf=0,this._paint()}))}_rgbForLed(t,e){if(!t)return[80,80,80];const i=4*e;return[t[i],t[i+1],t[i+2]]}_paint(){const t=this._ctx,e=this._canvas;if(!t||!e)return;const i=e.width,n=e.height;t.clearRect(0,0,i,n),t.fillStyle="#0d0d0d",t.fillRect(0,0,i,n),this._bgImage?.complete&&this._bgLayer&&Li(t,i,n,this._bgImage,this._bgLayer);const s=this._pixels,r=[...this._positions].sort((t,e)=>t.led-e.led),o=this.dotRadius;if(r.length>0){let e=1/0,a=-1/0,h=1/0,l=-1/0;for(const t of r)t.x<e&&(e=t.x),t.x>a&&(a=t.x),t.y<h&&(h=t.y),t.y>l&&(l=t.y);const c=3*o,d=(i-2*c)/(a-e||1),u=(n-2*c)/(l-h||1),p=Math.min(d,u),g=(t,i)=>[c+(t-e)*p,c+(i-h)*p],f=this.remote.state.disableBloom,_=Math.max(2.5,1.35*o);if(!this._showDots){t.lineCap="round",t.lineJoin="round",t.lineWidth=_;const e=(e,i)=>{const[n,r]=g(e.x,e.y),[o,a]=g(i.x,i.y),[h,l,c]=this._rgbForLed(s,e.led);!f&&(h>10||l>10||c>10)?(t.shadowColor=`rgba(${h},${l},${c},0.55)`,t.shadowBlur=1.5*_):t.shadowBlur=0,t.strokeStyle=`rgb(${h},${l},${c})`,t.beginPath(),t.moveTo(n,r),t.lineTo(o,a),t.stroke()};for(let t=0;t<r.length-1;t++)e(r[t],r[t+1]);this._closed&&r.length>=2&&e(r[r.length-1],r[0]),t.shadowBlur=0}if(this._showDots){for(const{x:e,y:i,led:n}of r){const[r,a]=g(e,i),[h,l,c]=this._rgbForLed(s,n);!f&&(h>10||l>10||c>10)?(t.shadowColor=`rgba(${h},${l},${c},0.7)`,t.shadowBlur=2.5*o):t.shadowBlur=0,t.beginPath(),t.arc(r,a,o,0,2*Math.PI),t.fillStyle=`rgb(${h},${l},${c})`,t.fill()}t.shadowBlur=0}}else{const e=this.pixelCount,r=(i-8)/e,a=n/2;for(let i=0;i<e;i++){let e=80,n=80,h=80;if(s){const t=4*i;e=s[t],n=s[t+1],h=s[t+2]}t.beginPath(),t.arc(4+i*r+r/2,a,o,0,2*Math.PI),t.fillStyle=`rgb(${e},${n},${h})`,t.fill()}}}render(){return V`
+    `]}};t([ct({attribute:!1})],jr.prototype,"connection",void 0),t([ct()],jr.prototype,"controllerId",void 0),t([ct()],jr.prototype,"layoutId",void 0),t([ct()],jr.prototype,"fixtureId",void 0),t([ct({type:Number})],jr.prototype,"pixelCount",void 0),t([dt()],jr.prototype,"_vertices",void 0),t([dt()],jr.prototype,"_ledPositions",void 0),t([dt()],jr.prototype,"_selectedVtx",void 0),t([dt()],jr.prototype,"_anchorInput",void 0),t([dt()],jr.prototype,"_status",void 0),t([dt()],jr.prototype,"_busy",void 0),t([dt()],jr.prototype,"_closed",void 0),t([dt()],jr.prototype,"_tool",void 0),t([dt()],jr.prototype,"_guide",void 0),t([dt()],jr.prototype,"_backgroundUrl",void 0),t([dt()],jr.prototype,"_bgLayer",void 0),t([dt()],jr.prototype,"_scalePxPerM",void 0),t([dt()],jr.prototype,"_calibActive",void 0),t([dt()],jr.prototype,"_calibMeters",void 0),t([dt()],jr.prototype,"_canUndo",void 0),t([dt()],jr.prototype,"_canRedo",void 0),t([dt()],jr.prototype,"_zoomSlider",void 0),t([dt()],jr.prototype,"_anchorScaleEnd",void 0),jr=t([ut("wled-layout-designer")],jr);let qr=class extends mt{constructor(){super(...arguments),this.controllerId="",this.layoutId="",this.fixtureId="",this.pixelCount=210,this.dotRadius=4,this._positions=[],this._status="waiting",this._showDots=!1,this._closed=!1,this._bgLayer=null,this._bgImage=null,this._raf=0}setFrame(t){t&&(this._pixels=function(t,e){const i=new Uint8ClampedArray(4*e);for(let n=0;n<e;n++){const e=Math.min(t.count-1,Math.max(0,Math.round(n/t.scale))),s=t.leds_hex[e]??"000000",r=4*n;8===s.length?(i[r]=parseInt(s.slice(0,2),16),i[r+1]=parseInt(s.slice(2,4),16),i[r+2]=parseInt(s.slice(4,6),16),i[r+3]=parseInt(s.slice(6,8),16)):(i[r]=parseInt(s.slice(0,2),16),i[r+1]=parseInt(s.slice(2,4),16),i[r+2]=parseInt(s.slice(4,6),16),i[r+3]=255)}return i}(t,this.pixelCount),this._status="live",this._schedPaint())}setStatus(t){this._status=t,this.requestUpdate()}async refresh(){await this._resolvePositions()}onPoweredConnect(){this._resolvePositions(),this._attachLiveStream()}onPoweredDisconnect(){this._raf&&cancelAnimationFrame(this._raf),this._raf=0,this._resizeObs?.disconnect()}updated(t){super.updated(t),(t.has("connection")||t.has("controllerId")||t.has("layoutId")||t.has("fixtureId"))&&(this._resolvePositions(),this._attachLiveStream())}firstUpdated(){this._canvas=this.renderRoot.querySelector("canvas")??void 0;const t=this.renderRoot.querySelector(".wrap");this._canvas&&t&&(this._ctx=this._canvas.getContext("2d",{alpha:!0})??void 0,this._resizeObs=new ResizeObserver(()=>this._onResize()),this._resizeObs.observe(t)),this._onResize()}_onResize(){const t=this._canvas,e=this.renderRoot.querySelector(".wrap");if(!t||!e)return;const i=e.getBoundingClientRect();if(i.width<2||i.height<2)return;const n=Math.min(1200,Math.max(1,Math.floor(i.width))),s=Math.min(600,Math.max(1,Math.floor(i.height))),r=Math.min(2,window.devicePixelRatio||1),o=Math.floor(n*r),a=Math.floor(s*r);if(t.width!==o||t.height!==a){t.width=o,t.height=a;const e=this._ctx;e&&e.setTransform(r,0,0,r,0,0),this._schedPaint()}}async _resolvePositions(){if(this.connection&&this.controllerId&&this.fixtureId)try{if(this.layoutId){const t=await ci(this.connection,this.controllerId,this.layoutId);if(t){this._bgLayer=Fi(t),this._loadBackgroundImage();const e=t.fixtures??[],i=this.fixtureId?e.find(t=>String(t.id??"")===this.fixtureId):e[0];this._closed=Boolean(i?.closed??!1)}}this._positions=await ui(this.connection,this.controllerId,this.fixtureId,this.layoutId||void 0),this._schedPaint()}catch{this._positions=[]}}_loadBackgroundImage(){const t=this._bgLayer?.url;t?en(t).then(t=>{this._bgImage=t,this._schedPaint()},()=>{this._bgImage=null}):this._bgImage=null}_attachLiveStream(){if(!this.connection||!this.controllerId)return;const t=vt(this.connection,this.controllerId,t=>{this.setFrame(t)});this.addUnsub(t)}_schedPaint(){this._raf||(this._raf=requestAnimationFrame(()=>{this._raf=0,this._paint()}))}_rgbForLed(t,e){if(!t)return[80,80,80];const i=4*e;return[t[i],t[i+1],t[i+2]]}_paint(){const t=this._ctx,e=this._canvas;if(!t||!e)return;const i=Math.min(2,window.devicePixelRatio||1),n=e.width/i,s=e.height/i;t.clearRect(0,0,n,s),t.fillStyle="#0d0d0d",t.fillRect(0,0,n,s),this._bgImage?.complete&&this._bgLayer&&Li(t,n,s,this._bgImage,this._bgLayer);const r=this._pixels,o=[...this._positions].sort((t,e)=>t.led-e.led),a=this.dotRadius;if(o.length>0){let e=1/0,i=-1/0,h=1/0,l=-1/0;for(const t of o)t.x<e&&(e=t.x),t.x>i&&(i=t.x),t.y<h&&(h=t.y),t.y>l&&(l=t.y);const c=3*a,d=(n-2*c)/(i-e||1),u=(s-2*c)/(l-h||1),p=Math.min(d,u),g=(t,i)=>[c+(t-e)*p,c+(i-h)*p],f=this.remote.state.disableBloom,_=Math.max(2.5,1.35*a);if(!this._showDots){t.lineCap="round",t.lineJoin="round",t.lineWidth=_;const e=(e,i)=>{const[n,s]=g(e.x,e.y),[o,a]=g(i.x,i.y),[h,l,c]=this._rgbForLed(r,e.led);!f&&(h>10||l>10||c>10)?(t.shadowColor=`rgba(${h},${l},${c},0.55)`,t.shadowBlur=1.5*_):t.shadowBlur=0,t.strokeStyle=`rgb(${h},${l},${c})`,t.beginPath(),t.moveTo(n,s),t.lineTo(o,a),t.stroke()};for(let t=0;t<o.length-1;t++)e(o[t],o[t+1]);this._closed&&o.length>=2&&e(o[o.length-1],o[0]),t.shadowBlur=0}if(this._showDots){for(const{x:e,y:i,led:n}of o){const[s,o]=g(e,i),[h,l,c]=this._rgbForLed(r,n);!f&&(h>10||l>10||c>10)?(t.shadowColor=`rgba(${h},${l},${c},0.7)`,t.shadowBlur=2.5*a):t.shadowBlur=0,t.beginPath(),t.arc(s,o,a,0,2*Math.PI),t.fillStyle=`rgb(${h},${l},${c})`,t.fill()}t.shadowBlur=0}}else{const e=this.pixelCount,i=(n-8)/e,o=s/2;for(let n=0;n<e;n++){let e=80,s=80,h=80;if(r){const t=4*n;e=r[t],s=r[t+1],h=r[t+2]}t.beginPath(),t.arc(4+n*i+i/2,o,a,0,2*Math.PI),t.fillStyle=`rgb(${e},${s},${h})`,t.fill()}}}render(){return V`
       <div class="preview-shell">
         <label class="mode-toggle">
           <input
@@ -1286,13 +1303,23 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         </div>
       </div>
     `}static{this.styles=[..._t,o`
+      :host {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
       .preview-shell {
         display: flex;
         flex-direction: column;
         gap: 6px;
         width: 100%;
         height: 100%;
-        min-height: 200px;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
       .mode-toggle {
         display: flex;
@@ -1314,12 +1341,14 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         background: #0d0d0d;
         width: 100%;
         flex: 1;
-        min-height: 180px;
+        min-height: 160px;
+        max-height: 100%;
       }
       canvas {
         display: block;
         width: 100%;
         height: 100%;
+        max-height: 100%;
       }
       .overlay {
         position: absolute;
@@ -1475,7 +1504,8 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         display: flex;
         flex-direction: column;
         gap: 10px;
-        height: 100%;
+        max-height: calc(100dvh - 8rem);
+        overflow: hidden;
       }
       .designer-header {
         display: flex;
@@ -1498,10 +1528,14 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         gap: 12px;
         flex: 1;
         min-height: 0;
+        height: min(55vh, 480px);
+        max-height: min(55vh, 480px);
+        overflow: hidden;
+        align-items: stretch;
       }
       @container wled-studio (min-width: 900px) {
         .designer-body {
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr minmax(280px, 1fr);
         }
       }
       .designer-col,
@@ -1509,16 +1543,21 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         display: flex;
         flex-direction: column;
         gap: 6px;
-        min-height: 400px;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
       .preview-label {
         font-size: 0.8rem;
         opacity: 0.65;
+        flex-shrink: 0;
       }
       wled-layout-designer,
       wled-geometry-preview {
         flex: 1;
         min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
 
       /* ── shared buttons ─────────────────────────────────── */
@@ -1659,6 +1698,8 @@ function t(t,e,i,n){var s,r=arguments.length,o=r<3?e:null===n?n=Object.getOwnPro
         }
         .content {
           padding: 16px;
+          min-height: 0;
+          overflow: auto;
         }
       `]}};t([dt()],Xr.prototype,"_view",void 0),t([dt()],Xr.prototype,"_controllerId",void 0),Xr=t([ut(Yr)],Xr),customElements.get(Yr)||customElements.define(Yr,Xr),console.info("[wled-studio] panel bundle loaded",{panel:Yr});export{Yr as PANEL_TAG,Xr as WledStudioPanel};
 //# sourceMappingURL=wled-studio-panel.js.map

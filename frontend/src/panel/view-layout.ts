@@ -298,7 +298,8 @@ export class WledViewLayout extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         gap: 10px;
-        height: 100%;
+        max-height: calc(100dvh - 8rem);
+        overflow: hidden;
       }
       .designer-header {
         display: flex;
@@ -321,10 +322,14 @@ export class WledViewLayout extends BasePoweredElement {
         gap: 12px;
         flex: 1;
         min-height: 0;
+        height: min(55vh, 480px);
+        max-height: min(55vh, 480px);
+        overflow: hidden;
+        align-items: stretch;
       }
       @container wled-studio (min-width: 900px) {
         .designer-body {
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr minmax(280px, 1fr);
         }
       }
       .designer-col,
@@ -332,16 +337,21 @@ export class WledViewLayout extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        min-height: 400px;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
       .preview-label {
         font-size: 0.8rem;
         opacity: 0.65;
+        flex-shrink: 0;
       }
       wled-layout-designer,
       wled-geometry-preview {
         flex: 1;
         min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
       }
 
       /* ── shared buttons ─────────────────────────────────── */
