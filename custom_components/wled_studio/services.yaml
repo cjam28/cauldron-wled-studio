@@ -1,1 +1,30 @@
-# Services expanded in later phases.
+notify:
+  name: Notify
+  description: Flash a WLED strip via DDP and optionally restore prior state.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: light
+    color:
+      default: "#ffffff"
+      example: "#ff6600"
+      selector:
+        text:
+    count:
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 20
+    duration_ms:
+      default: 400
+      selector:
+        number:
+          min: 50
+          max: 5000
+    restore:
+      default: true
+      selector:
+        boolean:

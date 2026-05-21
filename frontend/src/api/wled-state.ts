@@ -5,6 +5,8 @@ import { debounce } from "../utils/debounce.js";
 
 export interface WledSegment {
   id: number;
+  /** WLED segment display name from device state. */
+  n?: string;
   start?: number;
   stop?: number;
   len?: number;
@@ -41,6 +43,8 @@ export interface EffectMeta {
 
 export interface DeviceStateSnapshot {
   state: Record<string, unknown>;
+  info?: Record<string, unknown>;
+  fw_ver?: string;
   segments: WledSegment[];
   effects_by_name: Record<string, number>;
   palettes_by_name: Record<string, number>;
@@ -55,7 +59,6 @@ export interface DeviceStateSnapshot {
     wled_segment_id?: number;
     name: string;
   }>;
-  info: Record<string, unknown>;
 }
 
 export async function fetchDeviceState(

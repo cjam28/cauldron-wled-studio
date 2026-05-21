@@ -134,6 +134,7 @@ async def ws_get_state(
             "led_order": client.led_bus_order() if client else 0,
             "rgbwm": client.led_bus_rgbwm(bus_index) if client else 0,
             "segment_entities": coord._segment_entities,
+            "fw_ver": client.fw_ver if client else "",
         },
     )
 
@@ -600,7 +601,10 @@ async def ws_layout_to_segments(
     if fixture is None:
         connection.send_error(msg["id"], "not_found", "No fixture in layout")
         return
-    seg_payload = fixture_to_wled_segments(fixture, layout.pixel_count)
+    prefix = (fixture.name or "Side").strip() or "Side"
+    seg_payload = fixture_to_wled_segments(
+        fixture, layout.pixel_count, name_prefix=prefix
+    )
     try:
         result = await coord.client.apply_state(
             {"seg": seg_payload}, full_response=True
@@ -880,6 +884,173 @@ async def ws_scene_capture(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "wled_studio/paint_start",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_start(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    try:
+        session = coord.get_paint_session()
+        await session.start()
+        warn = session.wifi_sleep_warning()
+        info = coord.client.info if coord.client else {}
+        leds_raw = info.get("leds") if isinstance(info, dict) else {}
+        leds = leds_raw if isinstance(leds_raw, dict) else {}
+        pixel_count = int(leds.get("count") or 210)
+        rgbw = bool(leds.get("rgbw", True))
+    except Exception as err:
+        connection.send_error(msg["id"], "paint_error", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "wifi_sleep_warning": warn,
+            "pixel_count": pixel_count,
+            "rgbw": rgbw,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/paint_frame",
+        vol.Required("controller_id"): str,
+        vol.Required("data"): str,
+        vol.Optional("rgbw", default=True): bool,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_frame(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    try:
+        payload = base64.b64decode(msg["data"], validate=True)
+    except (binascii.Error, ValueError) as err:
+        connection.send_error(msg["id"], "invalid_payload", str(err))
+        return
+    try:
+        session = coord.get_paint_session()
+        await session.send_frame(payload, rgbw=bool(msg.get("rgbw", True)))
+    except Exception as err:
+        connection.send_error(msg["id"], "paint_error", str(err))
+        return
+    connection.send_result(
+        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/paint_stop",
+        vol.Required("controller_id"): str,
+        vol.Optional("commit", default=True): bool,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_stop(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    if coord.paint_session:
+        await coord.paint_session.stop(commit=bool(msg.get("commit", True)))
+    connection.send_result(
+        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/thumb_capture_start",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_thumb_capture_start(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    runner = coord.get_thumb_runner()
+    if runner.running:
+        connection.send_error(msg["id"], "busy", "Capture already running")
+        return
+    runner.start()
+    connection.send_result(
+        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/thumb_capture_cancel",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_thumb_capture_cancel(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    if coord.thumb_runner:
+        coord.thumb_runner.cancel()
+    connection.send_result(
+        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "wled_studio/register_lovelace_resource",
         vol.Optional("schema_version", default=SCHEMA_VERSION): int,
     }
@@ -930,6 +1101,11 @@ _WS_HANDLERS = (
     ws_scene_apply,
     ws_scene_capture,
     ws_apply_rgbwm,
+    ws_paint_start,
+    ws_paint_frame,
+    ws_paint_stop,
+    ws_thumb_capture_start,
+    ws_thumb_capture_cancel,
     ws_register_lovelace_resource,
 )
 

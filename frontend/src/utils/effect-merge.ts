@@ -100,7 +100,7 @@ export function clearSegmentLayoutSnapshot(controllerId: string): void {
 }
 
 export function segmentRestorePayload(seg: WledSegment): Record<string, unknown> {
-  const raw = seg as Record<string, unknown>;
+  const raw = seg as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = { id: seg.id };
   for (const key of RESTORE_KEYS) {
     const v = raw[key];

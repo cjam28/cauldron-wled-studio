@@ -21,7 +21,11 @@ export function labelForSegment(
       e.segment_index === eid ||
       e.entity_id.endsWith(`_segment_${eid}`)
   );
-  const name = ent?.name?.replace(/^.*\s—\s/, "") ?? `Seg ${eid + 1}`;
+  const wledName = typeof seg.n === "string" && seg.n.trim() ? seg.n.trim() : "";
+  const name =
+    wledName ||
+    ent?.name?.replace(/^.*\s—\s/, "") ||
+    `Seg ${eid + 1}`;
   const start = seg.start ?? "?";
   const stop = seg.stop ?? "?";
   return `${name} (${start}–${stop})`;

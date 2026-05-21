@@ -1,4 +1,4 @@
-/** Effect thumbnail URLs (capture runner not wired in Phase 4 scaffold). */
+/** Effect thumbnail URLs served via integration HTTP view (not /local/). */
 
 export type ThumbVariant = "strip" | "geom";
 
@@ -9,25 +9,34 @@ export function thumbApiUrl(controllerId: string, filename: string): string {
   return `/api/wled_studio/thumb/${cid}/${file}`;
 }
 
-/** Default on-disk basename for one effect (strip variant, palette 0). */
+function sanitizeFwVer(fwVer: string): string {
+  const safe = (fwVer || "").trim().replace(/[^\w.-]+/g, "_");
+  return safe || "unknown";
+}
+
+/** On-disk basename aligned with ``thumbnails.thumb_filename`` in Python. */
 export function thumbFilenameForFx(
   fxId: number,
-  variant: ThumbVariant = "strip"
+  variant: ThumbVariant = "strip",
+  fwVer?: string,
+  paletteId = 0
 ): string {
-  return `${fxId}_${variant}.webp`;
+  let base = String(fxId);
+  if (paletteId) base = `${base}_p${paletteId}`;
+  if (fwVer?.trim()) base = `${base}_${sanitizeFwVer(fwVer)}`;
+  return `${base}_${variant}.webp`;
 }
 
 /**
- * Resolved thumbnail URL for an effect chip/tile.
- * Returns ``undefined`` until the capture runner has written files under www.
+ * Resolved thumbnail URL when a captured file exists (caller may probe via img onerror).
  */
 export function thumbUrlForFx(
   controllerId: string,
   fxId: number,
-  variant: ThumbVariant = "strip"
+  variant: ThumbVariant = "strip",
+  fwVer?: string
 ): string | undefined {
-  if (!controllerId) return undefined;
-  void fxId;
-  void variant;
-  return undefined;
+  if (!controllerId || fxId < 0) return undefined;
+  const file = thumbFilenameForFx(fxId, variant, fwVer);
+  return thumbApiUrl(controllerId, file);
 }

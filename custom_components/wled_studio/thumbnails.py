@@ -1,4 +1,4 @@
-"""Effect thumbnail paths and cache helpers (capture runner stubbed for Phase 4)."""
+"""Effect thumbnail paths and cache helpers for captured WebP loops."""
 
 from __future__ import annotations
 
