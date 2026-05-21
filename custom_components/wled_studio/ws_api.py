@@ -14,7 +14,8 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, SCHEMA_VERSION
+from .const import DOMAIN, INTEGRATION_VERSION, SCHEMA_VERSION
+from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
@@ -113,7 +114,7 @@ async def ws_get_state(
         return
     client = coord.client
     if client:
-        await client.get_cfg()
+        await client.get_cfg(refresh=True)
         await client.get_state(refresh=True)
     state = client.state if client else {}
     seg = state.get("seg") if isinstance(state.get("seg"), list) else []
@@ -776,6 +777,7 @@ async def ws_scene_delete(
         vol.Required("controller_id"): str,
         vol.Required("scene_id"): str,
         vol.Optional("transition_ms"): int,
+        vol.Optional("segment_ids"): [int],
         vol.Optional("schema_version", default=SCHEMA_VERSION): int,
     }
 )
@@ -796,10 +798,14 @@ async def ws_scene_apply(
     if scene is None:
         connection.send_error(msg["id"], "not_found", "Scene not found")
         return
+    segment_ids = msg.get("segment_ids")
+    if segment_ids is not None:
+        segment_ids = [int(i) for i in segment_ids]
     try:
         state = await coord.async_apply_scene(
             msg["scene_id"],
             transition_ms=msg.get("transition_ms"),
+            segment_ids=segment_ids,
         )
     except ValueError as err:
         connection.send_error(msg["id"], "not_found", str(err))
@@ -872,6 +878,37 @@ async def ws_scene_capture(
     )
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/register_lovelace_resource",
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_register_lovelace_resource(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Retry registering the Lovelace card JS resource (storage dashboards)."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    try:
+        await async_register_lovelace_resources(hass, INTEGRATION_VERSION)
+    except Exception as err:
+        connection.send_error(msg["id"], "register_failed", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "url": card_resource_url(INTEGRATION_VERSION),
+        },
+    )
+
+
 _WS_HANDLERS = (
     ws_ping,
     ws_list_controllers,
@@ -893,6 +930,7 @@ _WS_HANDLERS = (
     ws_scene_apply,
     ws_scene_capture,
     ws_apply_rgbwm,
+    ws_register_lovelace_resource,
 )
 
 

@@ -7,7 +7,8 @@ import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-eleme
 import {
   applyRgbwm,
   applyState,
-  buildSegmentPatch,
+  buildSegmentPatchForIds,
+  buildSegmentSelPatch,
   entityForWledSegment,
   fetchDeviceState,
   fetchEffectMeta,
@@ -17,6 +18,7 @@ import {
   type EffectMeta,
   type WledSegment,
 } from "../api/wled-state.js";
+import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
 import { createOptimisticApply } from "../api/state-writer.js";
 import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
@@ -48,6 +50,7 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _loading = true;
   @state() private _error = "";
   @state() private _segId = 0;
+  @state() private _editIds: number[] = [];
   @state() private _segments: WledSegment[] = [];
   @state() private _snapshot?: DeviceStateSnapshot;
   @state() private _meta?: EffectMeta;
@@ -87,12 +90,18 @@ export class WledSegmentControls extends BasePoweredElement {
     this._optimistic = undefined;
   }
 
-  /** Called from parent when strip preview selects a segment. */
+  /** Called from parent when strip preview selects a segment (focus + ensure editing). */
   selectSegment(id: number): void {
-    this._selectSeg(id);
+    if (!this._editIds.includes(id)) {
+      this._editIds = [...this._editIds, id].sort((a, b) => a - b);
+    }
+    this._segId = id;
+    this._colorSlot = 0;
+    void this._refreshMeta();
+    void this._syncSelToDevice();
     this.dispatchEvent(
       new CustomEvent("segment-change", {
-        detail: { segmentId: id },
+        detail: { segmentId: id, editIds: [...this._editIds] },
         bubbles: true,
         composed: true,
       })
@@ -112,6 +121,8 @@ export class WledSegmentControls extends BasePoweredElement {
         if (!ids.includes(this._segId)) {
           this._segId = this._segments[0].id;
         }
+        const validEdit = this._editIds.filter((id) => ids.includes(id));
+        this._editIds = validEdit.length ? validEdit : [this._segId];
       }
       await this._refreshMeta();
       await this._loadPresets();
@@ -215,48 +226,66 @@ export class WledSegmentControls extends BasePoweredElement {
     }
   }
 
+  private _targetIds(): number[] {
+    return this._editIds.length ? this._editIds : [this._segId];
+  }
+
   private _patchSeg(patch: Partial<WledSegment>): void {
-    const seg = this._activeSeg();
-    if (!seg || !this._optimistic) return;
-    const merged: WledSegment = {
-      ...seg,
-      ...patch,
-      id: seg.id,
-      sel: true,
-      on: patch.on !== undefined ? patch.on : seg.on !== false,
-    };
-    const idx = this._segments.findIndex((s) => s.id === seg.id);
-    if (idx >= 0) {
-      const next = [...this._segments];
-      next[idx] = merged;
-      this._segments = next;
+    const targets = this._targetIds();
+    if (!targets.length || !this._optimistic) return;
+    const next = [...this._segments];
+    for (const tid of targets) {
+      const idx = next.findIndex((s) => s.id === tid);
+      if (idx < 0) continue;
+      const seg = next[idx];
+      next[idx] = {
+        ...seg,
+        ...patch,
+        id: tid,
+        sel: true,
+        on: patch.on !== undefined ? patch.on : seg.on !== false,
+      };
+      void this._syncHaSegment(seg, patch);
     }
-    void this._syncHaSegment(seg, patch);
+    this._segments = next;
+    const focus = this._activeSeg();
     this._optimistic.push(
-      buildSegmentPatch(seg.id, patch, this._segments),
-      merged
+      buildSegmentPatchForIds(targets, patch, this._segments),
+      focus ?? ({ id: targets[0] } as WledSegment)
     );
   }
 
-  private _selectSeg(id: number): void {
+  private async _syncSelToDevice(): Promise<void> {
+    if (!this.connection || !this.controllerId || !this._segments.length) return;
+    const ids = this._targetIds();
+    await applyState(
+      this.connection,
+      this.controllerId,
+      buildSegmentSelPatch(ids, this._segments)
+    );
+    this._segments = this._segments.map((s) => ({
+      ...s,
+      sel: ids.includes(s.id),
+    }));
+  }
+
+  private _toggleSegEdit(id: number): void {
+    let next = toggleEditId(this._editIds, id);
+    if (!next.length) {
+      next = [id];
+    }
+    this._editIds = next;
     this._segId = id;
     this._colorSlot = 0;
     void this._refreshMeta();
-    if (this.connection && this.controllerId) {
-      void applyState(
-        this.connection,
-        this.controllerId,
-        buildSegmentPatch(id, { sel: true }, this._segments)
-      );
-    }
-    const idx = this._segments.findIndex((s) => s.id === id);
-    if (idx >= 0) {
-      const next = this._segments.map((s) => ({
-        ...s,
-        sel: s.id === id,
-      }));
-      this._segments = next;
-    }
+    void this._syncSelToDevice();
+    this.dispatchEvent(
+      new CustomEvent("segment-change", {
+        detail: { segmentId: id, editIds: [...this._editIds] },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   private async _onEffectSelect(ev: CustomEvent<{ effectId: number }>): Promise<void> {
@@ -296,7 +325,7 @@ export class WledSegmentControls extends BasePoweredElement {
       if (this._snapshot) {
         this._snapshot = { ...this._snapshot, rgbwm: persisted };
       }
-      this._patchSeg({ awm: rgbwm });
+      this.requestUpdate();
     } catch (err) {
       this._toast = err instanceof Error ? err.message : String(err);
       this.requestUpdate();
@@ -338,16 +367,16 @@ export class WledSegmentControls extends BasePoweredElement {
         ${this._toast
           ? html`<p class="toast" role="status">${this._toast}</p>`
           : null}
-        <div class="seg-bar" role="tablist" aria-label="Segments">
+        <p class="seg-hint">Tap segments to toggle editing — changes apply to all highlighted segments.</p>
+        <div class="seg-bar" role="group" aria-label="Segments">
           ${this._segments.map(
             (s) => html`
               <button
-                class="seg-tab ${s.id === this._segId ? "active" : ""}"
-                role="tab"
-                aria-selected=${s.id === this._segId}
-                @click=${() => this.selectSegment(s.id)}
+                class="seg-tab ${this._editIds.includes(s.id) ? "editing" : ""} ${s.id === this._segId ? "focus" : ""}"
+                aria-pressed=${this._editIds.includes(s.id)}
+                @click=${() => this._toggleSegEdit(s.id)}
               >
-                ${this._labelForSeg(s)}
+                ${labelForSegment(s, this._snapshot?.segment_entities ?? [])}
               </button>
             `
           )}
@@ -448,17 +477,6 @@ export class WledSegmentControls extends BasePoweredElement {
     `;
   }
 
-  private _labelForSeg(seg: WledSegment): string {
-    const entities = this._snapshot?.segment_entities ?? [];
-    const ent =
-      entities.find((e) => entityForWledSegment(seg.id, [e]) === e.entity_id) ??
-      entities.find((e) => e.segment_index === seg.id);
-    const name = ent?.name?.replace(/^.*\s—\s/, "") ?? `Seg ${seg.id + 1}`;
-    const start = seg.start ?? "?";
-    const stop = seg.stop ?? "?";
-    return `${name} (${start}–${stop})`;
-  }
-
   get segments(): WledSegment[] {
     return this._segments;
   }
@@ -485,9 +503,18 @@ export class WledSegmentControls extends BasePoweredElement {
         cursor: pointer;
         font-size: 0.8rem;
       }
-      .seg-tab.active {
-        background: var(--primary-color);
-        color: var(--text-primary-color, #fff);
+      .seg-hint {
+        margin: 0;
+        font-size: 0.75rem;
+        opacity: 0.72;
+      }
+      .seg-tab.editing {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+      }
+      .seg-tab.focus {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 1px;
       }
       .ql-row {
         display: flex;

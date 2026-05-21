@@ -220,15 +220,25 @@ export function buildSegmentPatch(
   patch: Partial<WledSegment>,
   allSegments: WledSegment[]
 ): Record<string, unknown> {
+  return buildSegmentPatchForIds([targetId], patch, allSegments);
+}
+
+/** Apply patch to multiple segments; sets sel:true on all targets. */
+export function buildSegmentPatchForIds(
+  targetIds: number[],
+  patch: Partial<WledSegment>,
+  allSegments: WledSegment[]
+): Record<string, unknown> {
+  const idSet = new Set(targetIds);
   const list = allSegments.length
     ? allSegments
-    : [{ id: targetId } as WledSegment];
+    : targetIds.map((id) => ({ id } as WledSegment));
 
   const segPayload = list.map((s) => {
-    if (s.id === targetId) {
+    if (idSet.has(s.id)) {
       return {
         ...patch,
-        id: targetId,
+        id: s.id,
         sel: true,
         on: patch.on !== undefined ? patch.on : s.on !== false ? s.on : true,
       };
@@ -237,4 +247,18 @@ export function buildSegmentPatch(
   });
 
   return { seg: segPayload };
+}
+
+/** Sync WLED sel flags to match Studio edit selection (no color/fx change). */
+export function buildSegmentSelPatch(
+  targetIds: number[],
+  allSegments: WledSegment[]
+): Record<string, unknown> {
+  const idSet = new Set(targetIds);
+  return {
+    seg: allSegments.map((s) => ({
+      id: s.id,
+      sel: idSet.has(s.id),
+    })),
+  };
 }

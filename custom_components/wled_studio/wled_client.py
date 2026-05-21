@@ -163,10 +163,11 @@ class WledClient:
                 self.state = data
         return self.state
 
-    async def get_cfg(self) -> dict[str, Any]:
-        data = await self._request("GET", "/json/cfg")
-        if isinstance(data, dict):
-            self.cfg = data
+    async def get_cfg(self, *, refresh: bool = False) -> dict[str, Any]:
+        if refresh or not self.cfg:
+            data = await self._request("GET", "/json/cfg")
+            if isinstance(data, dict):
+                self.cfg = data
         return self.cfg
 
     async def get_presets(self) -> dict[str, Any]:
@@ -217,27 +218,34 @@ class WledClient:
         only a per-request override and is often omitted when unset.
         """
         try:
-            led = self.cfg.get("hw", {}).get("led", {})
+            hw = self.cfg.get("hw")
+            if not isinstance(hw, dict):
+                return 0
+            led = hw.get("led")
             if not isinstance(led, dict):
                 return 0
-            global_rgbwm = int(led.get("rgbwm", 255))
+            global_raw = led.get("rgbwm", 255)
+            global_rgbwm = int(global_raw) if global_raw is not None else 255
             ins = led.get("ins", [])
             if not isinstance(ins, list) or not ins:
-                return max(0, min(4, global_rgbwm)) if global_rgbwm != 255 else 0
+                if global_rgbwm != 255:
+                    return max(0, min(4, global_rgbwm))
+                return 0
             idx = max(0, min(bus_index, len(ins) - 1))
             bus = ins[idx]
             if not isinstance(bus, dict):
                 return 0
             if global_rgbwm != 255:
                 return max(0, min(4, global_rgbwm))
-            return max(0, min(4, int(bus.get("rgbwm", 0))))
+            bus_raw = bus.get("rgbwm", 0)
+            return max(0, min(4, int(bus_raw)))
         except (TypeError, ValueError):
             return 0
 
     async def apply_cfg(self, patch: dict[str, Any]) -> dict[str, Any]:
         """POST /json/cfg and refresh cached config."""
         await self._request("POST", "/json/cfg", json=patch)
-        return await self.get_cfg()
+        return await self.get_cfg(refresh=True)
 
     async def bootstrap(self) -> None:
         await self.get_info()

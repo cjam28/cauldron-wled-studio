@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .scene_expand import build_starter_segment_template
 from .scene_store import SceneRecord
 from .wled_client import WledClient
 
@@ -88,48 +89,21 @@ def _resolve_fx(client: WledClient, name: str | None, *, sound: bool = False) ->
     return client.effects_by_name.get("Solid", 0)
 
 
-def _segment_payload(
-    client: WledClient,
-    *,
-    fx: int,
-    bri: int,
-    col: list[list[int]] | None,
-    off: bool = False,
-) -> dict[str, Any]:
-    seg: dict[str, Any] = {
-        "id": 0,
-        "sel": True,
-        "on": not off,
-        "bri": 255 if not off else 0,
-        "fx": fx,
-    }
-    if col is not None:
-        seg["col"] = col
-    state: dict[str, Any] = {
-        "on": not off,
-        "bri": bri,
-        "seg": [seg],
-    }
-    return state
-
-
 def build_starter_scenes(controller_id: str, client: WledClient) -> list[SceneRecord]:
     """Build starter SceneRecords resolved against this controller's catalog."""
     out: list[SceneRecord] = []
     for spec in _STARTER_DEFS:
         if spec.get("off"):
-            wled_state = _segment_payload(
-                client, fx=0, bri=0, col=None, off=True
+            wled_state = build_starter_segment_template(
+                fx=0, bri=0, col=None, off=True
             )
-            wled_state["on"] = False
         else:
             fx = _resolve_fx(
                 client,
                 spec.get("effect"),
                 sound=bool(spec.get("sound")),
             )
-            wled_state = _segment_payload(
-                client,
+            wled_state = build_starter_segment_template(
                 fx=fx,
                 bri=int(spec.get("bri", 128)),
                 col=spec.get("col"),

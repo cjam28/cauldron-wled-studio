@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildSegmentPatch } from "../src/api/wled-state.js";
+import {
+  buildSegmentPatch,
+  buildSegmentPatchForIds,
+} from "../src/api/wled-state.js";
 import type { WledSegment } from "../src/api/wled-state.js";
 
 describe("buildSegmentPatch", () => {
@@ -18,5 +21,18 @@ describe("buildSegmentPatch", () => {
     expect(seg.find((s) => s.id === 0)?.sel).toBe(false);
     expect(seg.find((s) => s.id === 1)?.sel).toBe(false);
     expect(seg.find((s) => s.id === 3)?.sel).toBe(false);
+  });
+
+  it("applies patch to multiple targets with sel true", () => {
+    const payload = buildSegmentPatchForIds(
+      [0, 2],
+      { fx: 5 },
+      four
+    );
+    const seg = payload.seg as Array<{ id: number; sel: boolean; fx?: number }>;
+    expect(seg.find((s) => s.id === 0)?.sel).toBe(true);
+    expect(seg.find((s) => s.id === 2)?.sel).toBe(true);
+    expect(seg.find((s) => s.id === 0)?.fx).toBe(5);
+    expect(seg.find((s) => s.id === 1)?.sel).toBe(false);
   });
 });

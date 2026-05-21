@@ -12,7 +12,8 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import device_registry as dr
 
 from .attach import get_wled_entries
-from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN
+from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN, INTEGRATION_VERSION
+from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 
 WLED_DOMAIN = "wled"
 
@@ -93,10 +94,25 @@ class WledStudioConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class WledStudioOptionsFlowHandler(config_entries.OptionsFlow):
-    """Options flow stub for future settings."""
+    """Integration options — Lovelace card resource registration."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """No options in Phase 0."""
-        return self.async_create_entry(title="", data={})
+        """Register dashboard card JS or show manual URL."""
+        url = card_resource_url(INTEGRATION_VERSION)
+        if user_input is not None:
+            if user_input.get("register_lovelace"):
+                await async_register_lovelace_resources(self.hass, INTEGRATION_VERSION)
+            return self.async_create_entry(title="", data={})
+
+        schema = vol.Schema(
+            {
+                vol.Optional("register_lovelace", default=True): bool,
+            }
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+            description_placeholders={"url": url},
+        )

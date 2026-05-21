@@ -112,15 +112,21 @@ export async function sceneApply(
   connection: Connection,
   controllerId: string,
   sceneId: string,
-  options?: { transitionMs?: number; signal?: AbortSignal }
+  options?: {
+    transitionMs?: number;
+    signal?: AbortSignal;
+    segmentIds?: number[];
+  }
 ): Promise<Record<string, unknown>> {
   await waitForConnection(connection);
   const payload = {
-    type: "wled_studio/scene_apply",
+    type: "wled_studio/scene_apply" as const,
     schema_version: SCHEMA_VERSION,
     controller_id: controllerId,
     scene_id: sceneId,
     transition_ms: options?.transitionMs,
+    segment_ids:
+      options?.segmentIds?.length ? options.segmentIds : undefined,
   };
   if (options?.signal) {
     return new Promise((resolve, reject) => {

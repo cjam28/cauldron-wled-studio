@@ -18,6 +18,7 @@ from .attach import resolve_wled_entry
 from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN
 from .layout_store import LayoutStore
 from .live_proxy import LiveProxy, get_live_proxy, shutdown_live_proxy
+from .scene_expand import expand_scene_state
 from .scene_seed import build_starter_scenes
 from .scene_store import SceneRecord, SceneStore
 from .wled_client import WledClient
@@ -176,6 +177,7 @@ class WledStudioCoordinator:
         scene_id: str,
         *,
         transition_ms: int | None = None,
+        segment_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         """Apply stored state with device-side crossfade (tt)."""
         if self.client is None:
@@ -187,7 +189,15 @@ class WledStudioCoordinator:
         if self._apply_abort and not self._apply_abort.done():
             self._apply_abort.cancel()
 
-        patch = dict(scene.wled_state)
+        await self.client.get_state(refresh=True)
+        live_segs = self.client.state.get("seg")
+        if not isinstance(live_segs, list):
+            live_segs = []
+        patch = expand_scene_state(
+            scene.wled_state,
+            live_segs,
+            target_ids=segment_ids,
+        )
         patch["tt"] = self.transition_tt(transition_ms, scene)
 
         async def _run() -> dict[str, Any]:

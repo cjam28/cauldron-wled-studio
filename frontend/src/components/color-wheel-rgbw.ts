@@ -109,6 +109,11 @@ export class WledColorWheelRgbw extends BasePoweredElement {
               <option value="4" ?selected=${this.awm === 4}>Max</option>
             </select>
           </label>
+          <p class="w-hint">
+            Auto-calculate W is saved in WLED LED settings (device-wide). The W slider sets
+            manual white in the segment color — full control in Manual; in Accurate, WLED still
+            derives white from RGB and the slider can add extra W.
+          </p>
         </div>
       </div>
     `;
@@ -141,6 +146,13 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         padding: 4px 8px;
         background: var(--card-background-color);
         color: inherit;
+      }
+      .w-hint {
+        margin: 0;
+        font-size: 0.7rem;
+        opacity: 0.72;
+        line-height: 1.35;
+        max-width: 18rem;
       }
     `,
   ];

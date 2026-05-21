@@ -4,6 +4,7 @@ import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { listControllers } from "../api/live-stream.js";
+import { registerLovelaceResource } from "../api/lovelace.js";
 
 export const VIEW_DEVICES_TAG = "wled-view-devices";
 
@@ -22,6 +23,8 @@ export class WledViewDevices extends BasePoweredElement {
 
   @state() private _controllers: ControllerInfo[] = [];
   @state() private _status = "Loading…";
+  @state() private _cardUrl = "";
+  @state() private _cardToast = "";
 
   protected override onPoweredConnect(): void {
     void this._load();
@@ -72,8 +75,45 @@ export class WledViewDevices extends BasePoweredElement {
             `
           )}
         </ul>
+
+        <section class="card-section">
+          <h3>Lovelace card</h3>
+          <p class="hint">
+            The dashboard card is registered automatically on startup. If it is missing from
+            <strong>Settings → Dashboards → Resources</strong>, register it here or open
+            <strong>Settings → Devices & services → WLED Studio → Configure</strong>.
+          </p>
+          ${this._cardUrl
+            ? html`<code class="resource-url">${this._cardUrl}</code>`
+            : null}
+          <button
+            type="button"
+            class="primary"
+            ?disabled=${!this.connection}
+            @click=${() => this._registerCard()}
+          >
+            Register card resource
+          </button>
+          ${this._cardToast
+            ? html`<p class="toast" role="status">${this._cardToast}</p>`
+            : null}
+        </section>
       </div>
     `;
+  }
+
+  private async _registerCard(): Promise<void> {
+    if (!this.connection) return;
+    this._cardToast = "";
+    try {
+      const { url } = await registerLovelaceResource(this.connection);
+      this._cardUrl = url;
+      this._cardToast = url
+        ? "Card resource registered. Hard-refresh dashboards (Ctrl+F5)."
+        : "Registration sent — check HA logs if the card still does not appear.";
+    } catch (err) {
+      this._cardToast = err instanceof Error ? err.message : String(err);
+    }
   }
 
   static override styles = [
@@ -96,6 +136,34 @@ export class WledViewDevices extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         gap: 10px;
+      }
+      .card-section {
+        margin-top: 24px;
+        padding-top: 16px;
+        border-top: 1px solid var(--divider-color);
+      }
+      .card-section h3 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+      }
+      .resource-url {
+        display: block;
+        margin: 8px 0;
+        font-size: 0.75rem;
+        word-break: break-all;
+      }
+      .primary {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: none;
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        cursor: pointer;
+      }
+      .toast {
+        font-size: 0.85rem;
+        color: var(--primary-color);
+        margin-top: 8px;
       }
       .card {
         display: flex;

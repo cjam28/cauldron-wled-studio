@@ -24,6 +24,7 @@ from .lovelace_resources import (
     async_remove_lovelace_resources,
     card_resource_url,
     resource_hacstag,
+    schedule_lovelace_resource_retries,
 )
 from .views import async_register_views
 from .ws_api import async_register_ws_api
@@ -95,11 +96,13 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     hass.data[f"{DOMAIN}_frontend_version"] = version
     try:
         await async_register_lovelace_resources(hass, version)
+        schedule_lovelace_resource_retries(hass, version)
     except Exception:  # noqa: BLE001
         _LOGGER.exception(
             "Lovelace resource registration failed; card JS is still at %s",
             STATIC_URL_PREFIX,
         )
+        schedule_lovelace_resource_retries(hass, version)
     _LOGGER.debug(
         "WLED Studio frontend card=%s panel=%s",
         card_url,
@@ -125,6 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     entry.async_on_unload(coordinator.async_shutdown)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    schedule_lovelace_resource_retries(hass, INTEGRATION_VERSION)
     return True
 
 

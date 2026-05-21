@@ -12,6 +12,12 @@ import {
   SceneConflictError,
   type SceneRecord,
 } from "../api/scenes.js";
+import {
+  fetchDeviceState,
+  type DeviceStateSnapshot,
+  type WledSegment,
+} from "../api/wled-state.js";
+import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
 
 export const VIEW_SCENES_TAG = "wled-view-scenes";
 
@@ -26,11 +32,26 @@ export class WledViewScenes extends BasePoweredElement {
   @state() private _toast = "";
   @state() private _conflict?: SceneRecord;
   @state() private _captureName = "";
+  @state() private _segments: WledSegment[] = [];
+  @state() private _applySegIds: number[] = [];
+  @state() private _snapshot?: DeviceStateSnapshot;
 
   private _applyAbort?: AbortController;
 
   protected override onPoweredConnect(): void {
     void this._load();
+  }
+
+  protected override willUpdate(
+    changed: import("lit").PropertyValues
+  ): void {
+    if (
+      (changed.has("connection") || changed.has("controllerId")) &&
+      this.connection &&
+      this.controllerId
+    ) {
+      void this._load();
+    }
   }
 
   protected override onPoweredDisconnect(): void {
@@ -42,7 +63,22 @@ export class WledViewScenes extends BasePoweredElement {
     if (!this.connection || !this.controllerId) return;
     this._status = "Loading scenes…";
     try {
-      this._scenes = await sceneList(this.connection, this.controllerId);
+      const [scenes, snap] = await Promise.all([
+        sceneList(this.connection, this.controllerId),
+        fetchDeviceState(this.connection, this.controllerId),
+      ]);
+      this._scenes = scenes;
+      this._snapshot = snap;
+      this._segments = [...(snap.segments ?? [])].sort((a, b) => a.id - b.id);
+      if (this._segments.length && !this._applySegIds.length) {
+        this._applySegIds = this._segments.map((s) => s.id);
+      } else {
+        const valid = new Set(this._segments.map((s) => s.id));
+        this._applySegIds = this._applySegIds.filter((id) => valid.has(id));
+        if (!this._applySegIds.length && this._segments.length) {
+          this._applySegIds = this._segments.map((s) => s.id);
+        }
+      }
       this._status =
         this._scenes.length === 0
           ? "No scenes yet — capture the current look or use starter scenes after reload."
@@ -50,6 +86,14 @@ export class WledViewScenes extends BasePoweredElement {
     } catch {
       this._status = "Could not load scenes.";
     }
+  }
+
+  private _toggleApplySeg(id: number): void {
+    let next = toggleEditId(this._applySegIds, id);
+    if (!next.length) {
+      next = [id];
+    }
+    this._applySegIds = next;
   }
 
   protected override render() {
@@ -89,6 +133,28 @@ export class WledViewScenes extends BasePoweredElement {
           : null}
         ${this._toast
           ? html`<p class="toast" role="status">${this._toast}</p>`
+          : null}
+
+        ${this._segments.length
+          ? html`
+              <div class="seg-block">
+                <p class="seg-label">Apply to segments (tap to toggle)</p>
+                <div class="seg-bar" role="group">
+                  ${this._segments.map(
+                    (s) => html`
+                      <button
+                        type="button"
+                        class="seg-btn ${this._applySegIds.includes(s.id) ? "on" : ""}"
+                        aria-pressed=${this._applySegIds.includes(s.id)}
+                        @click=${() => this._toggleApplySeg(s.id)}
+                      >
+                        ${labelForSegment(s, this._snapshot?.segment_entities ?? [])}
+                      </button>
+                    `
+                  )}
+                </div>
+              </div>
+            `
           : null}
 
         ${this._conflict
@@ -162,8 +228,12 @@ export class WledViewScenes extends BasePoweredElement {
     this._applyAbort?.abort();
     this._applyAbort = new AbortController();
     try {
+      const allSelected =
+        this._segments.length > 0 &&
+        this._applySegIds.length === this._segments.length;
       await sceneApply(this.connection, this.controllerId, scene.id, {
         signal: this._applyAbort.signal,
+        segmentIds: allSelected ? undefined : [...this._applySegIds],
       });
       this._toast = `Applied ${scene.name}`;
     } catch (err) {
@@ -288,6 +358,32 @@ export class WledViewScenes extends BasePoweredElement {
       }
       .toast {
         color: var(--primary-color);
+      }
+      .seg-block {
+        margin-bottom: 16px;
+      }
+      .seg-label {
+        margin: 0 0 8px;
+        font-size: 0.8rem;
+        opacity: 0.75;
+      }
+      .seg-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .seg-btn {
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.8rem;
+      }
+      .seg-btn.on {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
       }
       .conflict {
         padding: 12px;
