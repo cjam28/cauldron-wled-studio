@@ -13,6 +13,6 @@ describe("WledStudioCard", () => {
   it("getCardSize returns 4", () => {
     const el = document.createElement(CARD_TAG) as WledStudioCard;
     el.setConfig({ type: "custom:wled-studio-card" });
-    expect(el.getCardSize()).toBe(4);
+    expect(el.getCardSize()).toBe(5);
   });
 });

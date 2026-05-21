@@ -1,0 +1,77 @@
+import type { Connection } from "home-assistant-js-websocket";
+import { SCHEMA_VERSION } from "./types.js";
+import { onHaConnectionReady } from "./reconnect.js";
+import type { LvFrame } from "./lv-frame-parser.js";
+import { parseLvFrame } from "./lv-frame-parser.js";
+
+export interface LiveFrameEvent extends LvFrame {
+  entry_id?: string;
+  controller_id?: string;
+  fps?: number;
+}
+
+type LiveWsEvent = {
+  type?: string;
+  event?: { type?: string; data?: Record<string, unknown> };
+  data?: Record<string, unknown>;
+};
+
+export function subscribeLive(
+  connection: Connection,
+  controllerId: string,
+  onFrame: (frame: LiveFrameEvent) => void,
+  options?: { remote?: boolean }
+): () => void {
+  let unsub: (() => void) | undefined;
+  let cancelled = false;
+
+  const attach = async () => {
+    unsub?.();
+    unsub = undefined;
+    if (cancelled) return;
+    unsub = await connection.subscribeMessage<LiveWsEvent>(
+      (msg) => {
+        const data =
+          msg.event?.data ??
+          (msg.type === "wled_studio_live_frame" ? msg.data : undefined);
+        if (!data) return;
+        const parsed = parseLvFrame(data);
+        if (!parsed) return;
+        onFrame({
+          ...parsed,
+          entry_id: data.entry_id as string | undefined,
+          controller_id: data.controller_id as string | undefined,
+          fps: data.fps as number | undefined,
+        });
+      },
+      {
+        type: "wled_studio/subscribe_live",
+        schema_version: SCHEMA_VERSION,
+        controller_id: controllerId,
+        remote: options?.remote ?? false,
+      }
+    );
+  };
+
+  void attach();
+  const offReady = onHaConnectionReady(connection, () => {
+    void attach();
+  });
+
+  return () => {
+    cancelled = true;
+    offReady();
+    unsub?.();
+    unsub = undefined;
+  };
+}
+
+export async function listControllers(
+  connection: Connection
+): Promise<Array<Record<string, unknown>>> {
+  const res = (await connection.sendMessagePromise({
+    type: "wled_studio/list_controllers",
+    schema_version: SCHEMA_VERSION,
+  })) as { controllers?: Array<Record<string, unknown>> };
+  return res.controllers ?? [];
+}

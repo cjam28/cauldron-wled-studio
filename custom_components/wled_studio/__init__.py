@@ -68,7 +68,6 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         require_admin=False,
     )
 
-    # Lovelace resource (HACS also registers via hacs.json filename)
     if hasattr(frontend, "add_extra_js_url"):
         frontend.add_extra_js_url(hass, module_url)
 
@@ -79,6 +78,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up WLED Studio domain."""
     await _async_register_frontend(hass)
+    async_register_ws_api(hass)
     return True
 
 
@@ -86,8 +86,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WLED Studio from a config entry."""
     await _async_register_frontend(hass)
     coordinator = WledStudioCoordinator(hass, entry)
+    await coordinator.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-    async_register_ws_api(hass)
+    entry.async_on_unload(coordinator.async_shutdown)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -95,5 +96,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        coord = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        if coord is not None:
+            await coord.async_shutdown()
     return unload_ok

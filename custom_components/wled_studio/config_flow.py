@@ -12,7 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import device_registry as dr
 
 from .attach import get_wled_entries
-from .const import CONF_DEVICE_ID, CONF_WLED_CONFIG_ENTRY, DOMAIN
+from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN
 
 WLED_DOMAIN = "wled"
 
@@ -58,6 +58,7 @@ class WledStudioConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_WLED_CONFIG_ENTRY: wled_entry_id,
                         CONF_DEVICE_ID: device_id,
+                        CONF_HOST: wled_entry.data.get("host", ""),
                     },
                 )
 
@@ -87,8 +88,8 @@ class WledStudioConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
-        """Options flow placeholder."""
-        return WledStudioOptionsFlowHandler(config_entry)
+        """Options flow placeholder (HA 2026+ injects config_entry on the handler)."""
+        return WledStudioOptionsFlowHandler()
 
 
 class WledStudioOptionsFlowHandler(config_entries.OptionsFlow):
