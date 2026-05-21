@@ -17,7 +17,8 @@ import {
   type DeviceStateSnapshot,
   type WledSegment,
 } from "../api/wled-state.js";
-import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
+import { toggleEditId } from "../utils/segment-edit.js";
+import "../components/segment-bar.js";
 
 export const VIEW_SCENES_TAG = "wled-view-scenes";
 
@@ -88,6 +89,11 @@ export class WledViewScenes extends BasePoweredElement {
     }
   }
 
+  /** Strip preview tap — toggle segment in scene apply set. */
+  selectSegmentFromPreview(id: number): void {
+    this._toggleApplySeg(id);
+  }
+
   private _toggleApplySeg(id: number): void {
     let next = toggleEditId(this._applySegIds, id);
     if (!next.length) {
@@ -137,23 +143,14 @@ export class WledViewScenes extends BasePoweredElement {
 
         ${this._segments.length
           ? html`
-              <div class="seg-block">
-                <p class="seg-label">Apply to segments (tap to toggle)</p>
-                <div class="seg-bar" role="group">
-                  ${this._segments.map(
-                    (s) => html`
-                      <button
-                        type="button"
-                        class="seg-btn ${this._applySegIds.includes(s.id) ? "on" : ""}"
-                        aria-pressed=${this._applySegIds.includes(s.id)}
-                        @click=${() => this._toggleApplySeg(s.id)}
-                      >
-                        ${labelForSegment(s, this._snapshot?.segment_entities ?? [])}
-                      </button>
-                    `
-                  )}
-                </div>
-              </div>
+              <wled-segment-bar
+                .segments=${this._segments}
+                .selectedIds=${this._applySegIds}
+                .segmentEntities=${this._snapshot?.segment_entities ?? []}
+                hint="Apply scenes to highlighted segments"
+                @segment-toggle=${(e: CustomEvent<{ id: number }>) =>
+                  this._toggleApplySeg(e.detail.id)}
+              ></wled-segment-bar>
             `
           : null}
 
@@ -235,10 +232,18 @@ export class WledViewScenes extends BasePoweredElement {
         signal: this._applyAbort.signal,
         segmentIds: allSelected ? undefined : [...this._applySegIds],
       });
+      await this._load();
       this._toast = `Applied ${scene.name}`;
+      this.dispatchEvent(
+        new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })
+      );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        this._toast = `Apply failed: ${(err as Error).message || "error"}`;
+        const msg =
+          (err as { message?: string }).message ||
+          (err as Error).message ||
+          "error";
+        this._toast = `Apply failed: ${msg}`;
       }
     } finally {
       this._busy = false;
@@ -358,32 +363,6 @@ export class WledViewScenes extends BasePoweredElement {
       }
       .toast {
         color: var(--primary-color);
-      }
-      .seg-block {
-        margin-bottom: 16px;
-      }
-      .seg-label {
-        margin: 0 0 8px;
-        font-size: 0.8rem;
-        opacity: 0.75;
-      }
-      .seg-bar {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .seg-btn {
-        border: 1px solid var(--divider-color);
-        border-radius: 8px;
-        padding: 6px 10px;
-        background: transparent;
-        color: inherit;
-        cursor: pointer;
-        font-size: 0.8rem;
-      }
-      .seg-btn.on {
-        border-color: var(--primary-color);
-        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
       }
       .conflict {
         padding: 12px;

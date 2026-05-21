@@ -18,9 +18,24 @@ def test_expand_scene_all_segments() -> None:
     assert segs[0]["start"] == 0
     assert segs[0]["stop"] == 85
     assert segs[0]["fx"] == 0
+    assert segs[0]["col"] == [[255, 0, 0, 0]]
     assert segs[1]["id"] == 1
     assert segs[1]["start"] == 85
     assert segs[1]["fx"] == 0
+    assert segs[1]["col"] == [[255, 0, 0, 0]]
+
+
+def test_scene_template_overrides_live_fx() -> None:
+    scene = build_starter_segment_template(
+        fx=7, bri=200, col=[[0, 0, 255, 0]]
+    )
+    live = [{"id": 0, "start": 0, "stop": 100, "fx": 99, "col": [[1, 2, 3, 0]]}]
+    out = expand_scene_state(scene, live)
+    seg = out["seg"][0]
+    assert seg["fx"] == 7
+    assert seg["col"] == [[0, 0, 255, 0]]
+    assert seg["start"] == 0
+    assert seg["stop"] == 100
 
 
 def test_expand_scene_subset() -> None:

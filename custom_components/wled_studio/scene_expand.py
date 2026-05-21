@@ -36,10 +36,12 @@ def expand_scene_state(
     new_segs: list[dict[str, Any]] = []
     for sid in ids:
         base = dict(live_by_id.get(sid, {"id": sid}))
-        merged = {**template, **base, "id": sid}
+        # Live layout first, then scene template overwrites fx/col/bri (not start/stop).
+        merged = {**base, **template, "id": sid}
         for key in _PRESERVE_KEYS:
             if key in base:
                 merged[key] = base[key]
+        merged["id"] = sid
         new_segs.append(merged)
 
     out["seg"] = new_segs

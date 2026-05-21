@@ -3,6 +3,11 @@ import { state } from "lit/decorators.js";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import "../components/segment-controls.js";
+import "../components/studio-live-preview.js";
+import type { WledStudioLivePreview } from "../components/studio-live-preview.js";
+import type { WledViewEffects } from "./view-effects.js";
+import type { WledViewScenes } from "./view-scenes.js";
+import type { WledSegmentControls } from "../components/segment-controls.js";
 import "./view-layout.js";
 import "./view-scenes.js";
 import "./view-devices.js";
@@ -27,6 +32,7 @@ export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
   @state() private _controllerId = "";
   @state() private _drawerOpen = false;
+  @state() private _previewSegId = -1;
 
   protected override onPoweredConnect(): void {
     void this._loadController();
@@ -98,7 +104,12 @@ export class WledStudioPanel extends BasePoweredElement {
               ? html`<span class="remote-pill">Remote preview</span>`
               : null}
           </header>
-          <section class="content" aria-live="polite">
+          <section
+            class="content"
+            aria-live="polite"
+            @wled-preview-refresh=${() => this.refreshLivePreview()}
+          >
+            ${this._renderPreview()}
             ${this._renderView()}
           </section>
         </main>
@@ -118,6 +129,59 @@ export class WledStudioPanel extends BasePoweredElement {
         <span>${label}</span>
       </button>
     `;
+  }
+
+  private _viewsWithStripPreview(): boolean {
+    return (
+      this._view === "scenes" ||
+      this._view === "effects" ||
+      this._view === "segments"
+    );
+  }
+
+  private _renderPreview() {
+    const conn = this.hass?.connection;
+    const id = this._controllerId;
+    if (!conn || !id || !this._viewsWithStripPreview()) return null;
+    return html`
+      <wled-studio-live-preview
+        .connection=${conn}
+        .controllerId=${id}
+        .selectedSegId=${this._previewSegId}
+        @segment-select=${this._onPreviewSegmentSelect}
+      ></wled-studio-live-preview>
+    `;
+  }
+
+  private _onPreviewSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
+    const id = ev.detail.segmentId;
+    this._previewSegId = id;
+    if (this._view === "segments") {
+      this.renderRoot
+        .querySelector<WledSegmentControls>("wled-segment-controls")
+        ?.selectSegment(id);
+    } else if (this._view === "effects") {
+      this.renderRoot
+        .querySelector<WledViewEffects>("wled-view-effects")
+        ?.selectSegmentFromPreview(id);
+    } else if (this._view === "scenes") {
+      this.renderRoot
+        .querySelector<WledViewScenes>("wled-view-scenes")
+        ?.selectSegmentFromPreview(id);
+    }
+  }
+
+  private _livePreview(): WledStudioLivePreview | null {
+    return (
+      this.renderRoot.querySelector<WledStudioLivePreview>(
+        "wled-studio-live-preview"
+      ) ?? null
+    );
+  }
+
+  /** Call after scene/effect apply so segment dividers stay in sync. */
+  refreshLivePreview(): void {
+    void this._livePreview()?.refreshSegments();
   }
 
   private _renderView() {

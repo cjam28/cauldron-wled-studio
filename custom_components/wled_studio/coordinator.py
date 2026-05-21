@@ -186,9 +186,6 @@ class WledStudioCoordinator:
         if scene is None:
             raise ValueError(f"Unknown scene {scene_id}")
 
-        if self._apply_abort and not self._apply_abort.done():
-            self._apply_abort.cancel()
-
         await self.client.get_state(refresh=True)
         live_segs = self.client.state.get("seg")
         if not isinstance(live_segs, list):
