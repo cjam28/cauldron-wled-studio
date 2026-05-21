@@ -1,5 +1,15 @@
 """Constants for WLED Studio."""
 
+import json
+from pathlib import Path
+from typing import Final
+
+_INTEGRATION_ROOT = Path(__file__).parent
+with (_INTEGRATION_ROOT / "manifest.json").open(encoding="utf-8") as _manifest_fp:
+    INTEGRATION_VERSION: Final[str] = str(
+        json.load(_manifest_fp).get("version", "0.0.0")
+    )
+
 DOMAIN = "wled_studio"
 SCHEMA_VERSION = 1
 

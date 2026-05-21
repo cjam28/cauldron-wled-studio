@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -12,7 +11,13 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, PANEL_MODULE, PANEL_URL_PATH, STATIC_URL_PREFIX
+from .const import (
+    DOMAIN,
+    INTEGRATION_VERSION,
+    PANEL_MODULE,
+    PANEL_URL_PATH,
+    STATIC_URL_PREFIX,
+)
 from .coordinator import WledStudioCoordinator
 from .lovelace_resources import (
     async_register_lovelace_resources,
@@ -25,13 +30,6 @@ from .ws_api import async_register_ws_api
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = []
-
-
-def _manifest_version() -> str:
-    """Read version from manifest.json (always str; avoids AwesomeVersion compare bugs)."""
-    manifest_path = Path(__file__).parent / "manifest.json"
-    with manifest_path.open(encoding="utf-8") as fp:
-        return str(json.load(fp).get("version", "0.0.0"))
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
@@ -51,7 +49,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             www_dir,
         )
 
-    version = _manifest_version()
+    version = INTEGRATION_VERSION
     prev_version = hass.data.get(f"{DOMAIN}_frontend_version")
     if str(prev_version or "") != version:
         hass.data.pop(f"{DOMAIN}_frontend_registered", None)
@@ -94,7 +92,13 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 
     hass.data[f"{DOMAIN}_frontend_registered"] = True
     hass.data[f"{DOMAIN}_frontend_version"] = version
-    await async_register_lovelace_resources(hass, version)
+    try:
+        await async_register_lovelace_resources(hass, version)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception(
+            "Lovelace resource registration failed; card JS is still at %s",
+            STATIC_URL_PREFIX,
+        )
     _LOGGER.debug(
         "WLED Studio frontend card=%s panel=%s",
         card_url,

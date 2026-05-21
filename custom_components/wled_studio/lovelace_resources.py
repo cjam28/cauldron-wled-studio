@@ -26,6 +26,15 @@ def card_resource_url(version: str) -> str:
     return f"{RESOURCE_PATH}?hacstag={resource_hacstag(version)}"
 
 
+def _lovelace_resource_mode(lovelace: object) -> str | None:
+    """HA 2026.2+ uses resource_mode; older builds used mode."""
+    mode = getattr(lovelace, "resource_mode", None)
+    if mode is not None:
+        return str(mode)
+    legacy = getattr(lovelace, "mode", None)
+    return str(legacy) if legacy is not None else None
+
+
 def _lovelace_resources(hass: HomeAssistant):
     """Return ResourceStorageCollection when Lovelace uses storage mode."""
     lovelace_data = hass.data.get("lovelace")
@@ -52,9 +61,10 @@ async def async_register_lovelace_resources(hass: HomeAssistant, version: str) -
         _LOGGER.debug("Lovelace not ready; card resource registration deferred")
         return
 
-    if lovelace.mode != "storage":
+    resource_mode = _lovelace_resource_mode(lovelace)
+    if resource_mode == "yaml":
         _LOGGER.info(
-            "Lovelace YAML mode: add this resource manually: %s",
+            "Lovelace resource_mode=yaml: add this resource manually: %s",
             card_resource_url(version),
         )
         return
