@@ -210,19 +210,16 @@ export class WledViewLayout extends BasePoweredElement {
           </button>
         </div>
 
-        <div class="designer-body">
-          <div class="designer-col">
-            <wled-layout-designer
-              .connection=${this.connection}
-              controllerId=${this.controllerId}
-              layoutId=${this._activeLayoutId}
-              fixtureId=${this._activeFixtureId}
-              pixelCount=${this._activePixelCount}
-              @layout-saved=${this._onDesignerSave}
-            ></wled-layout-designer>
-          </div>
-
-          <div class="preview-col">
+        <wled-layout-designer
+          class="designer-main"
+          .connection=${this.connection}
+          controllerId=${this.controllerId}
+          layoutId=${this._activeLayoutId}
+          fixtureId=${this._activeFixtureId}
+          pixelCount=${this._activePixelCount}
+          @layout-saved=${this._onDesignerSave}
+        >
+          <div slot="preview" class="preview-slot">
             <div class="preview-label">Live geometry preview</div>
             <wled-geometry-preview
               .connection=${this.connection}
@@ -232,7 +229,7 @@ export class WledViewLayout extends BasePoweredElement {
               pixelCount=${this._activePixelCount}
             ></wled-geometry-preview>
           </div>
-        </div>
+        </wled-layout-designer>
 
         ${this._status
           ? html`<p class="status-line">${this._status}</p>`
@@ -316,42 +313,27 @@ export class WledViewLayout extends BasePoweredElement {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .designer-body {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 12px;
+      .designer-main {
         flex: 1;
         min-height: min(78vh, calc(100dvh - 9rem));
-        height: min(78vh, calc(100dvh - 9rem));
         max-height: min(78vh, calc(100dvh - 9rem));
         overflow: hidden;
-        align-items: stretch;
       }
-      @container wled-studio (min-width: 900px) {
-        .designer-body {
-          grid-template-columns: 1fr minmax(280px, 1fr);
-        }
-      }
-      .designer-col,
-      .preview-col {
+      .preview-slot {
         display: flex;
         flex-direction: column;
         gap: 6px;
+        height: 100%;
         min-height: 0;
-        max-height: 100%;
-        overflow: hidden;
       }
       .preview-label {
         font-size: 0.8rem;
         opacity: 0.65;
         flex-shrink: 0;
       }
-      wled-layout-designer,
-      wled-geometry-preview {
+      .preview-slot wled-geometry-preview {
         flex: 1;
         min-height: 0;
-        max-height: 100%;
-        overflow: hidden;
       }
 
       /* ── shared buttons ─────────────────────────────────── */

@@ -1004,74 +1004,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const zoomCaption =
       this._tool === "photo" && this._bgLayer ? "Photo" : "View";
     return html`
-      <div class="designer" tabindex="0" @keydown=${this._onKeyDown}>
-        <div class="stage-column">
-          <aside class="zoom-rail" aria-label="Zoom">
-            <button
-              type="button"
-              class="zoom-btn"
-              title="Zoom in"
-              @click=${() => this._nudgeZoom(1.2)}
-            >
-              +
-            </button>
-            <input
-              type="range"
-              class="zoom-slider"
-              min="0"
-              max="100"
-              .value=${String(this._zoomSlider)}
-              @input=${this._onZoomSlider}
-              aria-label="${zoomCaption} zoom"
-            />
-            <button
-              type="button"
-              class="zoom-btn"
-              title="Zoom out"
-              @click=${() => this._nudgeZoom(1 / 1.2)}
-            >
-              −
-            </button>
-            <span class="zoom-pct">${this._zoomLabel()}</span>
-            <span class="zoom-cap">${zoomCaption}</span>
-          </aside>
-          <div class="canvas-wrap">
-            <div class="stage-toolbar">
-              <button
-                type="button"
-                class="secondary small"
-                ?disabled=${!this._canUndo}
-                title="Undo (Ctrl+Z)"
-                @click=${() => this._undo()}
-              >
-                Undo
-              </button>
-              <button
-                type="button"
-                class="secondary small"
-                ?disabled=${!this._canRedo}
-                title="Redo (Ctrl+Shift+Z)"
-                @click=${() => this._redo()}
-              >
-                Redo
-              </button>
-              <button
-                type="button"
-                class="secondary small"
-                @click=${() => {
-                  this._fitView();
-                  this._syncStage();
-                }}
-              >
-                Fit view
-              </button>
-            </div>
-            <div class="stage-mount"></div>
-          </div>
-        </div>
-        <div class="sidebar">
-          <div class="tool-group">
-            <span class="tool-label">Edit</span>
+      <div class="designer-root" tabindex="0" @keydown=${this._onKeyDown}>
+        <header class="edit-toolbar">
+          <div class="toolbar-cluster">
+            <span class="cluster-label">Edit</span>
             <div class="tool-row">
               <button
                 class=${this._tool === "select" ? "tool active" : "tool"}
@@ -1102,8 +1038,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
               </button>
             </div>
           </div>
-          <div class="tool-group">
-            <span class="tool-label">Draw shape (guide)</span>
+
+          <div class="toolbar-divider" aria-hidden="true"></div>
+
+          <div class="toolbar-cluster">
+            <span class="cluster-label">Draw</span>
             <div class="tool-row wrap">
               <button
                 class=${this._tool === "pen" ? "tool active" : "tool"}
@@ -1128,7 +1067,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
                   this._tool = "rect";
                 }}
               >
-                Rectangle
+                Rect
               </button>
               <button
                 class=${this._tool === "ellipse" ? "tool active" : "tool"}
@@ -1150,7 +1089,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
             </div>
           </div>
 
-          <label class="check-row">
+          <label class="check-row compact">
             <input
               type="checkbox"
               .checked=${this._closed}
@@ -1161,35 +1100,50 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 void this._refreshPositions();
               }}
             />
-            Close path (wrap last LED → first)
+            Close path
           </label>
 
-          <div class="instructions">
-            <strong>Workflow</strong>
-            <ol>
-              <li>Draw a <em>purple guide</em> (shape tools)</li>
-              <li><strong>Place ●</strong> — click the guide to drop corners (suggests LED #)</li>
-              <li>Set anchor LEDs → Save → Apply segments</li>
-            </ol>
-            <strong>Place ●</strong>
-            <ul>
-              <li>Clicks snap to the guide; LED index from position along strip</li>
-            </ul>
-            <strong>Shapes</strong>
-            <ul>
-              <li>Line: two clicks</li>
-              <li>Rect / Oval: drag</li>
-              <li>Polyline: clicks, double-click to finish</li>
-              <li>Freehand: smooth stroke (not hundreds of vertices)</li>
-            </ul>
+          <div class="toolbar-divider" aria-hidden="true"></div>
+
+          <div class="toolbar-cluster stage-actions">
+            <button
+              type="button"
+              class="secondary small"
+              ?disabled=${!this._canUndo}
+              title="Undo (Ctrl+Z)"
+              @click=${() => this._undo()}
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              class="secondary small"
+              ?disabled=${!this._canRedo}
+              title="Redo (Ctrl+Shift+Z)"
+              @click=${() => this._redo()}
+            >
+              Redo
+            </button>
+            <button
+              type="button"
+              class="secondary small"
+              @click=${() => {
+                this._fitView();
+                this._syncStage();
+              }}
+            >
+              Fit view
+            </button>
           </div>
 
-          <div class="action-stack">
-            <button class="secondary" ?disabled=${this._busy} @click=${() => this._importFromWled()}>
-              Import segments from WLED
+          <div class="toolbar-divider" aria-hidden="true"></div>
+
+          <div class="toolbar-cluster file-actions">
+            <button class="secondary small" ?disabled=${this._busy} @click=${() => this._importFromWled()}>
+              Import WLED
             </button>
-            <label class="file-btn secondary">
-              Add room photo…
+            <label class="file-btn secondary small">
+              Photo…
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/heic,.heic"
@@ -1198,8 +1152,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 @change=${this._onBackgroundFile}
               />
             </label>
-            <label class="file-btn secondary">
-              Import SVG guide
+            <label class="file-btn secondary small">
+              SVG…
               <input
                 type="file"
                 accept="image/svg+xml,.svg"
@@ -1207,97 +1161,18 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 @change=${this._onSvgFile}
               />
             </label>
-            <button class="secondary" @click=${() => this._clearGuide()}>
-              Clear shape guide
+            <button class="secondary small" @click=${() => this._clearGuide()}>
+              Clear guide
             </button>
             ${this._tool === "polyline" && this._polylinePts.length >= 2
               ? html`
-                  <button class="secondary" @click=${() => this._finishPolyline()}>
-                    Finish polyline
+                  <button class="secondary small" @click=${() => this._finishPolyline()}>
+                    Finish poly
                   </button>
                 `
               : null}
-            ${this._bgLayer
-              ? html`
-                  <div class="photo-tune">
-                    <label
-                      >Opacity
-                      <input
-                        type="range"
-                        min="0.1"
-                        max="1"
-                        step="0.05"
-                        .value=${String(this._bgLayer.opacity ?? 0.55)}
-                        @input=${(e: Event) =>
-                          this._updateBgLayer({
-                            opacity: parseFloat((e.target as HTMLInputElement).value),
-                          })}
-                      />
-                    </label>
-                    <label
-                      >Brightness
-                      <input
-                        type="range"
-                        min="0.4"
-                        max="1.8"
-                        step="0.05"
-                        .value=${String(this._bgLayer.brightness ?? 1)}
-                        @input=${(e: Event) =>
-                          this._updateBgLayer({
-                            brightness: parseFloat((e.target as HTMLInputElement).value),
-                          })}
-                      />
-                    </label>
-                    <label
-                      >Saturation
-                      <input
-                        type="range"
-                        min="0"
-                        max="2"
-                        step="0.05"
-                        .value=${String(this._bgLayer.saturation ?? 1)}
-                        @input=${(e: Event) =>
-                          this._updateBgLayer({
-                            saturation: parseFloat((e.target as HTMLInputElement).value),
-                          })}
-                      />
-                    </label>
-                    <label
-                      >Rotation (°)
-                      <input
-                        type="range"
-                        min="-180"
-                        max="180"
-                        step="1"
-                        .value=${String(this._bgLayer.rotation ?? 0)}
-                        @input=${(e: Event) =>
-                          this._updateBgLayer({
-                            rotation: parseFloat((e.target as HTMLInputElement).value),
-                          })}
-                      />
-                    </label>
-                    <label
-                      >Zoom
-                      <input
-                        type="range"
-                        min="0.25"
-                        max="4"
-                        step="0.05"
-                        .value=${String(this._bgLayer.scale ?? 1)}
-                        @input=${(e: Event) =>
-                          this._updateBgLayer({
-                            scale: parseFloat((e.target as HTMLInputElement).value),
-                          })}
-                      />
-                    </label>
-                    <button class="secondary" @click=${() => this._clearPhoto()}>
-                      Remove photo
-                    </button>
-                  </div>
-                `
-              : null}
             <button
-              class="secondary"
+              class="secondary small"
               ?disabled=${this._busy}
               @click=${() => {
                 this._calibActive = true;
@@ -1305,34 +1180,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 this._status = "Click two points on the floorplan, then enter real distance (m)";
               }}
             >
-              Calibrate scale
+              Calibrate
             </button>
-            ${this._calibActive
-              ? html`
-                  <label>
-                    Distance between points (m)
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      .value=${this._calibMeters}
-                      @input=${(e: Event) => {
-                        this._calibMeters = (e.target as HTMLInputElement).value;
-                      }}
-                    />
-                  </label>
-                `
-              : null}
-            ${this._scalePxPerM
-              ? html`<p class="meta">Scale: ${this._scalePxPerM.toFixed(1)} layout px per meter</p>`
-              : null}
           </div>
 
           ${sel !== undefined
             ? html`
-                <div class="anchor-panel">
+                <div class="toolbar-cluster anchor-inline">
                   <label>
-                    LED index for v${this._selectedVtx}
+                    v${this._selectedVtx} LED
                     <input
                       type="number"
                       min="0"
@@ -1342,25 +1198,18 @@ export class WledLayoutDesigner extends BasePoweredElement {
                         this._anchorInput = (e.target as HTMLInputElement).value;
                       }}
                       @change=${() => this._setAnchorLed()}
-                      placeholder="unanchored"
                     />
                   </label>
-                  <button
-                    class="small"
-                    @click=${() => this._setAnchorLed()}
-                  >Set anchor</button>
+                  <button class="secondary small" @click=${() => this._setAnchorLed()}>
+                    Set
+                  </button>
                 </div>
               `
             : null}
 
-          <div class="scale-anchors-panel">
-            <span class="panel-title">Scale all anchors</span>
-            <p class="panel-hint">
-              Keeps the same relative spacing between pinned anchors, but fits them
-              into LEDs 0 through the value below (not a canvas mirror).
-            </p>
-            <label>
-              End at LED ${this._anchorScaleSliderValue()}
+          <div class="toolbar-cluster scale-inline">
+            <label title="Rescale all pinned anchors to LEDs 0…N (spacing preserved)">
+              Scale anchors →
               <input
                 type="range"
                 min="0"
@@ -1368,22 +1217,170 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 .value=${String(this._anchorScaleSliderValue())}
                 @change=${this._onAnchorScaleSlider}
               />
+              <span class="scale-val">${this._anchorScaleSliderValue()}</span>
             </label>
           </div>
 
-          ${this._status
-            ? html`<p class="status">${this._status}</p>`
-            : null}
+          <div class="toolbar-spacer"></div>
 
-          <div class="actions">
+          <details class="help-details">
+            <summary>Help</summary>
+            <p>Draw a purple guide → <strong>Place ●</strong> drops corners (LED 0, 1, 2…) → set anchors → Save.</p>
+          </details>
+
+          <button
+            class="primary save-btn"
+            ?disabled=${this._busy || this._vertices.length < 2}
+            @click=${() => this._save()}
+          >
+            Save layout
+          </button>
+        </header>
+
+        ${this._calibActive
+          ? html`
+              <div class="context-bar">
+                <label>
+                  Distance (m)
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    .value=${this._calibMeters}
+                    @input=${(e: Event) => {
+                      this._calibMeters = (e.target as HTMLInputElement).value;
+                    }}
+                  />
+                </label>
+              </div>
+            `
+          : null}
+        ${this._bgLayer && this._tool === "photo"
+          ? html`
+              <div class="context-bar photo-tune">
+                <label
+                  >Opacity
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.05"
+                    .value=${String(this._bgLayer.opacity ?? 0.55)}
+                    @input=${(e: Event) =>
+                      this._updateBgLayer({
+                        opacity: parseFloat((e.target as HTMLInputElement).value),
+                      })}
+                  />
+                </label>
+                <label
+                  >Brightness
+                  <input
+                    type="range"
+                    min="0.4"
+                    max="1.8"
+                    step="0.05"
+                    .value=${String(this._bgLayer.brightness ?? 1)}
+                    @input=${(e: Event) =>
+                      this._updateBgLayer({
+                        brightness: parseFloat((e.target as HTMLInputElement).value),
+                      })}
+                  />
+                </label>
+                <label
+                  >Saturation
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    .value=${String(this._bgLayer.saturation ?? 1)}
+                    @input=${(e: Event) =>
+                      this._updateBgLayer({
+                        saturation: parseFloat((e.target as HTMLInputElement).value),
+                      })}
+                  />
+                </label>
+                <label
+                  >Rotation
+                  <input
+                    type="range"
+                    min="-180"
+                    max="180"
+                    step="1"
+                    .value=${String(this._bgLayer.rotation ?? 0)}
+                    @input=${(e: Event) =>
+                      this._updateBgLayer({
+                        rotation: parseFloat((e.target as HTMLInputElement).value),
+                      })}
+                  />
+                </label>
+                <label
+                  >Zoom
+                  <input
+                    type="range"
+                    min="0.25"
+                    max="4"
+                    step="0.05"
+                    .value=${String(this._bgLayer.scale ?? 1)}
+                    @input=${(e: Event) =>
+                      this._updateBgLayer({
+                        scale: parseFloat((e.target as HTMLInputElement).value),
+                      })}
+                  />
+                </label>
+                <button class="secondary small" @click=${() => this._clearPhoto()}>
+                  Remove photo
+                </button>
+              </div>
+            `
+          : null}
+
+        ${this._status
+          ? html`<p class="status-bar">${this._status}</p>`
+          : null}
+        ${this._scalePxPerM
+          ? html`<p class="status-bar meta">Scale: ${this._scalePxPerM.toFixed(1)} px/m</p>`
+          : null}
+
+        <div class="split-body">
+        <div class="workspace">
+          <aside class="zoom-rail" aria-label="Zoom">
             <button
-              class="primary"
-              ?disabled=${this._busy || this._vertices.length < 2}
-              @click=${() => this._save()}
+              type="button"
+              class="zoom-btn"
+              title="Zoom in"
+              @click=${() => this._nudgeZoom(1.2)}
             >
-              Save layout
+              +
             </button>
+            <input
+              type="range"
+              class="zoom-slider"
+              min="0"
+              max="100"
+              .value=${String(this._zoomSlider)}
+              @input=${this._onZoomSlider}
+              aria-label="${zoomCaption} zoom"
+            />
+            <button
+              type="button"
+              class="zoom-btn"
+              title="Zoom out"
+              @click=${() => this._nudgeZoom(1 / 1.2)}
+            >
+              −
+            </button>
+            <span class="zoom-pct">${this._zoomLabel()}</span>
+            <span class="zoom-cap">${zoomCaption}</span>
+          </aside>
+          <div class="canvas-wrap">
+            <div class="stage-mount"></div>
           </div>
+        </div>
+
+        <div class="preview-pane">
+          <slot name="preview"></slot>
+        </div>
         </div>
       </div>
       <wled-layout-photo-editor
@@ -1404,34 +1401,126 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ...sharedBaseStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
         min-height: 0;
+        height: 100%;
         max-height: 100%;
         overflow: hidden;
       }
-      .designer {
+      .designer-root {
         display: grid;
         grid-template-columns: 1fr;
-        gap: 12px;
+        grid-template-rows: auto auto auto 1fr;
+        gap: 10px;
         height: 100%;
-        max-height: 100%;
         min-height: 0;
-        align-items: stretch;
-      }
-      @container wled-studio (min-width: 600px) {
-        .designer {
-          grid-template-columns: 1fr minmax(248px, 280px);
-        }
-      }
-      .designer:focus {
         outline: none;
       }
-      .stage-column {
-        display: flex;
-        flex-direction: row;
-        gap: 0;
+      .split-body {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
         min-height: 0;
         height: 100%;
+        overflow: hidden;
+      }
+      .edit-toolbar {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: var(--card-background-color, #1f2937);
+        border: 1px solid var(--divider-color, #374151);
+      }
+      .toolbar-cluster {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .cluster-label {
+        font-size: 0.68rem;
+        opacity: 0.55;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        flex-shrink: 0;
+      }
+      .toolbar-divider {
+        width: 1px;
+        align-self: stretch;
+        min-height: 28px;
+        background: var(--divider-color, #374151);
+        flex-shrink: 0;
+      }
+      .toolbar-spacer {
+        flex: 1;
+        min-width: 8px;
+      }
+      .context-bar {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 14px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid var(--divider-color, #374151);
+      }
+      .context-bar label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.78rem;
+      }
+      .context-bar input[type="range"] {
+        width: 88px;
+      }
+      .photo-tune {
+        gap: 12px;
+      }
+      .status-bar {
+        grid-column: 1 / -1;
+        margin: 0;
+        font-size: 0.78rem;
+        opacity: 0.85;
+        padding: 0 4px;
+      }
+      .status-bar.meta {
+        opacity: 0.65;
+        margin-top: -6px;
+      }
+      .workspace {
+        display: flex;
+        flex-direction: row;
+        min-height: 0;
+        height: 100%;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid var(--divider-color, #374151);
+      }
+      .preview-pane {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
+        border-radius: 10px;
+        border: 1px solid var(--divider-color, #374151);
+        background: var(--card-background-color, #111827);
+        padding: 8px;
+        box-sizing: border-box;
+      }
+      .preview-pane ::slotted(*) {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
       }
       .zoom-rail {
         display: flex;
@@ -1482,26 +1571,16 @@ export class WledLayoutDesigner extends BasePoweredElement {
       .canvas-wrap {
         position: relative;
         flex: 1;
-        border-radius: 0 8px 8px 0;
         overflow: hidden;
         background: #111827;
         min-height: 0;
         display: flex;
         flex-direction: column;
       }
-      .stage-toolbar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 8px;
-        background: rgba(0, 0, 0, 0.35);
-        font-size: 0.75rem;
-        flex-wrap: wrap;
-      }
       .stage-mount {
         flex: 1;
         width: 100%;
-        min-height: 280px;
+        min-height: 200px;
         cursor: crosshair;
         touch-action: none;
       }
@@ -1509,187 +1588,126 @@ export class WledLayoutDesigner extends BasePoweredElement {
         width: 100% !important;
         height: 100% !important;
       }
-      .sidebar {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 4px 0;
-        min-height: 0;
-        height: 100%;
-        overflow: visible;
-      }
-      .instructions {
-        font-size: 0.78rem;
-        opacity: 0.75;
-        line-height: 1.5;
-      }
-      .instructions ul {
-        margin: 4px 0 0;
-        padding-left: 1.1rem;
-      }
-      .tool-group {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .tool-label {
-        font-size: 0.72rem;
-        opacity: 0.65;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
       .tool-row {
         display: flex;
-        gap: 6px;
-      }
-      .tool-row.wrap {
+        gap: 4px;
         flex-wrap: wrap;
       }
       .tool {
-        flex: 1;
-        padding: 6px 8px;
+        padding: 5px 10px;
         border-radius: 6px;
         border: 1px solid var(--divider-color, #374151);
         background: transparent;
         color: inherit;
         cursor: pointer;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
+        white-space: nowrap;
       }
       .tool.active {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         border-color: transparent;
       }
-      .check-row {
+      .check-row.compact {
         display: flex;
         align-items: center;
-        gap: 8px;
-        font-size: 0.82rem;
-      }
-      .check-row input[type="range"] {
-        flex: 1;
-      }
-      .action-stack {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
+        gap: 6px;
+        font-size: 0.78rem;
+        white-space: nowrap;
+        margin: 0;
       }
       .secondary,
       .file-btn {
-        padding: 8px 10px;
-        border-radius: 8px;
+        padding: 5px 10px;
+        border-radius: 6px;
         border: 1px solid var(--divider-color, #374151);
-        background: var(--card-background-color, #1f2937);
+        background: rgba(255, 255, 255, 0.04);
         color: inherit;
         cursor: pointer;
-        font-size: 0.8rem;
-        text-align: center;
+        font-size: 0.78rem;
+        white-space: nowrap;
       }
       .file-btn input {
         display: none;
       }
-      .meta {
-        margin: 0;
-        font-size: 0.75rem;
-        opacity: 0.7;
-      }
-      .photo-tune {
+      .anchor-inline {
         display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 8px;
-        border-radius: 8px;
-        background: rgba(0, 0, 0, 0.2);
-      }
-      .photo-tune label {
-        font-size: 0.78rem;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .anchor-panel {
-        display: flex;
-        flex-direction: column;
+        align-items: center;
         gap: 6px;
-        padding: 10px;
-        border-radius: 8px;
-        background: var(--card-background-color, #1f2937);
       }
-      .anchor-panel label {
-        font-size: 0.82rem;
+      .anchor-inline label {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.78rem;
+        margin: 0;
       }
-      .anchor-panel input {
-        padding: 6px 8px;
+      .anchor-inline input[type="number"] {
+        width: 4.5rem;
+        padding: 4px 6px;
         border-radius: 6px;
         border: 1px solid var(--divider-color, #374151);
         background: var(--primary-background-color, #111827);
-        color: var(--primary-text-color, #f9fafb);
-        font-size: 0.9rem;
-        width: 100%;
-        box-sizing: border-box;
+        color: inherit;
+        font-size: 0.85rem;
       }
-      .scale-anchors-panel {
-        font-size: 0.82rem;
+      .scale-inline label {
         display: flex;
-        flex-direction: column;
+        align-items: center;
         gap: 6px;
-      }
-      .scale-anchors-panel .panel-title {
-        font-size: 0.72rem;
-        opacity: 0.65;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-      .scale-anchors-panel .panel-hint {
-        margin: 0;
         font-size: 0.75rem;
-        opacity: 0.7;
+        margin: 0;
+        white-space: nowrap;
+      }
+      .scale-inline input[type="range"] {
+        width: 100px;
+      }
+      .scale-val {
+        font-variant-numeric: tabular-nums;
+        min-width: 2ch;
+      }
+      .help-details {
+        font-size: 0.75rem;
+        opacity: 0.85;
+      }
+      .help-details summary {
+        cursor: pointer;
+        list-style: none;
+      }
+      .help-details p {
+        margin: 6px 0 0;
+        max-width: 280px;
         line-height: 1.4;
       }
-      .scale-anchors-panel label {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .scale-anchors-panel input[type="range"] {
-        width: 100%;
-      }
-      .status {
-        font-size: 0.8rem;
-        opacity: 0.8;
-        margin: 0;
-      }
-      .actions {
-        margin-top: auto;
+      .save-btn {
         flex-shrink: 0;
-        position: sticky;
-        bottom: 0;
-        padding-top: 8px;
-        background: var(--card-background-color, #111827);
-        border-top: 1px solid var(--divider-color, #374151);
       }
       .primary,
       .small {
-        padding: 8px 14px;
+        padding: 6px 12px;
         border: none;
         border-radius: 8px;
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         cursor: pointer;
-        font-size: 0.85rem;
-        width: 100%;
+        font-size: 0.82rem;
       }
       .small {
         padding: 5px 10px;
-        font-size: 0.78rem;
-        width: auto;
+        font-size: 0.76rem;
       }
       .primary:disabled {
         opacity: 0.45;
         cursor: default;
+      }
+      @container wled-studio (max-width: 720px) {
+        .split-body {
+          grid-template-columns: 1fr;
+          grid-template-rows: 1fr minmax(200px, 36vh);
+        }
+        .workspace {
+          min-height: min(42vh, 360px);
+        }
       }
     `,
   ];
