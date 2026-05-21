@@ -10,10 +10,12 @@ Repo: **https://github.com/cjam28/cauldron-wled-studio** (private is fine).
 
 ### 2. HACS custom repository (Cauldron HA)
 
+Repository is **public**: `https://github.com/cjam28/cauldron-wled-studio`
+
 1. **HACS → Integrations → ⋮ → Custom repositories**
 2. Repository: `https://github.com/cjam28/cauldron-wled-studio`
-3. Category: **Integration**
-4. Add, then **HACS → Integrations → WLED Studio → Download**
+3. Category: **Integration** → Add
+4. **HACS → Integrations → WLED Studio → Download**
 
 ### 3. Home Assistant
 

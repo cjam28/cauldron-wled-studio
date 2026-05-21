@@ -6,6 +6,8 @@ Govee-grade WLED visual controller for Home Assistant — companion integration,
 
 ## Install (HACS)
 
+Repository: `https://github.com/cjam28/cauldron-wled-studio` (**public**).
+
 1. **HACS → Integrations → ⋮ → Custom repositories**
 2. Add `https://github.com/cjam28/cauldron-wled-studio` (category: **Integration**)
 3. **HACS → Integrations → WLED Studio → Download**
