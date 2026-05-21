@@ -23,6 +23,7 @@ type StudioView =
 export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
   @state() private _controllerId = "";
+  @state() private _drawerOpen = false;
 
   protected override onPoweredConnect(): void {
     void this._loadController();
@@ -46,18 +47,41 @@ export class WledStudioPanel extends BasePoweredElement {
 
     return html`
       <div class="shell" role="application" aria-label="WLED Studio">
-        <aside class="rail cq-medium" aria-label="Navigation">
-          ${this._navItem("devices", "Devices", "mdi:devices")}
-          ${this._navItem("layout", "Layout", "mdi:vector-polygon")}
-          ${this._navItem("scenes", "Scenes", "mdi:palette-swatch")}
-          ${this._navItem("effects", "Effects", "mdi:auto-fix")}
-          ${this._navItem("segments", "Segments", "mdi:vector-line")}
+        <div
+          class="drawer-backdrop ${this._drawerOpen ? "visible" : ""}"
+          aria-hidden=${this._drawerOpen ? "false" : "true"}
+          @click=${() => this._closeDrawer()}
+        ></div>
+        <aside
+          class="rail ${this._drawerOpen ? "open" : ""}"
+          aria-label="Navigation"
+        >
+          <div class="rail-head">
+            <span class="rail-title">Sections</span>
+            <button
+              type="button"
+              class="drawer-close cq-compact"
+              aria-label="Close menu"
+              @click=${() => this._closeDrawer()}
+            >
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <nav class="rail-nav">
+            ${this._navItem("devices", "Devices", "mdi:devices")}
+            ${this._navItem("layout", "Layout", "mdi:vector-polygon")}
+            ${this._navItem("scenes", "Scenes", "mdi:palette-swatch")}
+            ${this._navItem("effects", "Effects", "mdi:auto-fix")}
+            ${this._navItem("segments", "Segments", "mdi:vector-line")}
+          </nav>
         </aside>
         <main class="stage">
           <header class="top">
             <button
+              type="button"
               class="hamburger cq-compact"
               aria-label="Open menu"
+              aria-expanded=${this._drawerOpen ? "true" : "false"}
               @click=${() => this._toggleDrawer()}
             >
               <ha-icon icon="mdi:menu"></ha-icon>
@@ -103,9 +127,7 @@ export class WledStudioPanel extends BasePoweredElement {
       <button
         class="nav ${active ? "active" : ""}"
         aria-current=${active ? "page" : "false"}
-        @click=${() => {
-          this._view = view;
-        }}
+        @click=${() => this._selectView(view)}
       >
         <ha-icon .icon=${icon}></ha-icon>
         <span>${label}</span>
@@ -113,8 +135,17 @@ export class WledStudioPanel extends BasePoweredElement {
     `;
   }
 
+  private _selectView(view: StudioView): void {
+    this._view = view;
+    this._closeDrawer();
+  }
+
   private _toggleDrawer(): void {
-    /* Phase 5: bottom-sheet drawer <600px */
+    this._drawerOpen = !this._drawerOpen;
+  }
+
+  private _closeDrawer(): void {
+    this._drawerOpen = false;
   }
 
   static override styles = [
@@ -123,17 +154,96 @@ export class WledStudioPanel extends BasePoweredElement {
         .shell {
           display: grid;
           grid-template-columns: 1fr;
+          grid-template-rows: 1fr;
           min-height: 100%;
           background: var(--primary-background-color);
+          position: relative;
         }
         @container wled-studio (min-width: 600px) {
           .shell {
             grid-template-columns: 200px 1fr;
           }
         }
+        .drawer-backdrop {
+          display: none;
+          position: fixed;
+          inset: 0;
+          z-index: 40;
+          background: rgba(0, 0, 0, 0.45);
+        }
+        .drawer-backdrop.visible {
+          display: block;
+        }
+        @container wled-studio (min-width: 600px) {
+          .drawer-backdrop {
+            display: none !important;
+          }
+        }
         .rail {
+          position: fixed;
+          top: 0;
+          left: 0;
+          z-index: 50;
+          width: min(280px, 86vw);
+          height: 100%;
+          max-height: 100dvh;
           padding: 8px;
+          box-sizing: border-box;
           border-right: 1px solid var(--divider-color);
+          background: var(--card-background-color, var(--primary-background-color));
+          box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+          transform: translateX(-105%);
+          transition: transform 0.2s ease;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        .rail.open {
+          transform: translateX(0);
+        }
+        @container wled-studio (min-width: 600px) {
+          .rail {
+            position: static;
+            z-index: auto;
+            width: auto;
+            height: auto;
+            max-height: none;
+            transform: none;
+            box-shadow: none;
+            transition: none;
+          }
+        }
+        .rail-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px 4px 12px;
+        }
+        .rail-title {
+          font-size: 0.72rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          opacity: 0.65;
+        }
+        .drawer-close {
+          border: none;
+          background: transparent;
+          color: inherit;
+          cursor: pointer;
+          padding: 6px;
+          border-radius: 8px;
+        }
+        @container wled-studio (min-width: 600px) {
+          .drawer-close {
+            display: none;
+          }
+          .rail-head {
+            display: none;
+          }
+        }
+        .rail-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
         }
         .nav {
           display: flex;
@@ -147,10 +257,17 @@ export class WledStudioPanel extends BasePoweredElement {
           cursor: pointer;
           border-radius: 8px;
           transition: background var(--m-view-transition) ease;
+          font-size: 0.95rem;
         }
         .nav.active,
         .nav:hover {
           background: var(--secondary-background-color);
+        }
+        .stage {
+          min-width: 0;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
         }
         .top {
           display: flex;
@@ -158,12 +275,21 @@ export class WledStudioPanel extends BasePoweredElement {
           gap: 12px;
           padding: 12px 16px;
           border-bottom: 1px solid var(--divider-color);
+          flex-shrink: 0;
+        }
+        .top h1 {
+          margin: 0;
+          font-size: 1.1rem;
+          font-weight: 600;
         }
         .hamburger {
           border: none;
           background: transparent;
           color: inherit;
           cursor: pointer;
+          padding: 6px;
+          border-radius: 8px;
+          flex-shrink: 0;
         }
         @container wled-studio (min-width: 600px) {
           .hamburger {
@@ -180,7 +306,9 @@ export class WledStudioPanel extends BasePoweredElement {
         .content {
           padding: 16px;
           min-height: 0;
+          flex: 1;
           overflow: auto;
+          -webkit-overflow-scrolling: touch;
         }
       `,
   ];
