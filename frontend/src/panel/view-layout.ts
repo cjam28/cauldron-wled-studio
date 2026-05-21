@@ -321,9 +321,9 @@ export class WledViewLayout extends BasePoweredElement {
         grid-template-columns: 1fr;
         gap: 12px;
         flex: 1;
-        min-height: 0;
-        height: min(55vh, 480px);
-        max-height: min(55vh, 480px);
+        min-height: min(78vh, calc(100dvh - 9rem));
+        height: min(78vh, calc(100dvh - 9rem));
+        max-height: min(78vh, calc(100dvh - 9rem));
         overflow: hidden;
         align-items: stretch;
       }

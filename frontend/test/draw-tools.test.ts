@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { penStrokeToGuide } from "../src/utils/draw-tools.js";
+import {
+  nextPlacementAnchorLed,
+  penStrokeToGuide,
+} from "../src/utils/draw-tools.js";
+
+describe("nextPlacementAnchorLed", () => {
+  it("starts at 0 and increments by placement order", () => {
+    expect(nextPlacementAnchorLed(0, 210)).toBe(0);
+    expect(nextPlacementAnchorLed(1, 210)).toBe(1);
+    expect(nextPlacementAnchorLed(3, 210)).toBe(3);
+  });
+
+  it("clamps to strip end", () => {
+    expect(nextPlacementAnchorLed(300, 210)).toBe(209);
+  });
+});
 
 describe("penStrokeToGuide", () => {
   it("uses stroke centerline (not brush outline)", () => {

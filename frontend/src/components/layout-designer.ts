@@ -20,7 +20,7 @@ import {
   type DrawTool,
   type GuidePath,
   ellipseToGuide,
-  ledIndexAlongGuide,
+  nextPlacementAnchorLed,
   lineToGuide,
   penStrokeToGuide,
   polylineToGuide,
@@ -365,7 +365,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
         return;
       }
     }
-    const led = ledIndexAlongGuide(snap.t, this.pixelCount);
+    const led = nextPlacementAnchorLed(this._vertices.length, this.pixelCount);
     this._recordUndo();
     this._vertices = [
       ...this._vertices,
@@ -1416,10 +1416,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
         height: 100%;
         max-height: 100%;
         min-height: 0;
+        align-items: stretch;
       }
       @container wled-studio (min-width: 600px) {
         .designer {
-          grid-template-columns: 1fr 220px;
+          grid-template-columns: 1fr minmax(248px, 280px);
         }
       }
       .designer:focus {
@@ -1429,8 +1430,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
         display: flex;
         flex-direction: row;
         gap: 0;
-        min-height: 320px;
-        height: min(55vh, 480px);
+        min-height: 0;
+        height: 100%;
       }
       .zoom-rail {
         display: flex;
@@ -1514,9 +1515,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
         gap: 12px;
         padding: 4px 0;
         min-height: 0;
-        max-height: 100%;
-        overflow-x: hidden;
-        overflow-y: auto;
+        height: 100%;
+        overflow: visible;
       }
       .instructions {
         font-size: 0.78rem;
