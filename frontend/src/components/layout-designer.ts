@@ -276,6 +276,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
     return this._pointerCanvasXY(ev.clientX, ev.clientY);
   }
 
+  /** New shape guide → drop old guide, corners, and LED overlay for a fresh layout. */
+  private _beginNewGuideDrawing(): void {
+    this._guide = null;
+    this._vertices = [];
+    this._ledPositions = [];
+    this._selectedVtx = -1;
+    this._anchorInput = "";
+  }
+
   private _placeVertexOnGuide(mx: number, my: number): void {
     if (!this._guide || this._guide.points.length < 2) {
       this._status = "Draw a shape first (pen, line, rect, …), then place vertices.";
@@ -341,6 +350,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
 
     if (this._tool === "pen") {
+      this._beginNewGuideDrawing();
       this._penStroke = [[cx, cy]];
       this._canvas?.setPointerCapture(ev.pointerId);
       this._paint();
@@ -349,6 +359,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
     if (this._tool === "line") {
       if (!this._lineStart) {
+        this._beginNewGuideDrawing();
         this._lineStart = [mx, my];
         this._status = "Line: click end point";
       } else {
@@ -361,12 +372,16 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
 
     if (this._tool === "rect" || this._tool === "ellipse") {
+      this._beginNewGuideDrawing();
       this._shapeStart = [mx, my];
       this._canvas?.setPointerCapture(ev.pointerId);
       return;
     }
 
     if (this._tool === "polyline") {
+      if (this._polylinePts.length === 0) {
+        this._beginNewGuideDrawing();
+      }
       this._polylinePts = [...this._polylinePts, [mx, my]];
       this._status = `Polyline: ${this._polylinePts.length} pts — double-click to finish`;
       this._paint();
@@ -784,6 +799,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     if (!file) return;
     try {
       const text = await file.text();
+      this._beginNewGuideDrawing();
       this._guide = parseSvgToGuide(text);
       this._status = "SVG guide loaded — Place vertices along the path";
       this._fitView();
@@ -797,6 +813,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._guide = null;
     this._polylinePts = [];
     this._lineStart = null;
+    this._beginNewGuideDrawing();
     this._paint();
   }
 
