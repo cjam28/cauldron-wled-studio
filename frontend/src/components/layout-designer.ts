@@ -33,6 +33,8 @@ import {
   strokeGuide,
 } from "../utils/draw-tools.js";
 import { parseSvgToGuide } from "../utils/svg-import.js";
+import { formatHaError } from "../utils/ha-error.js";
+import { loadHaImage } from "../utils/ha-image.js";
 
 /** Sparse corners / segment pins (user-placed). */
 interface Vertex {
@@ -817,22 +819,22 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._paint();
   }
 
-  private _loadBackgroundImage(): void {
+  private _loadBackgroundImage(bustCache = false): void {
     const url = this._backgroundUrl;
     if (!url) {
       this._bgImage = null;
       return;
     }
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      this._bgImage = img;
-      this._paint();
-    };
-    img.onerror = () => {
-      this._bgImage = null;
-    };
-    img.src = url;
+    void loadHaImage(url, bustCache)
+      .then((img) => {
+        this._bgImage = img;
+        this._paint();
+      })
+      .catch((err) => {
+        this._bgImage = null;
+        this._status = formatHaError(err);
+        this._paint();
+      });
   }
 
   private async _importFromWled(): Promise<void> {
@@ -898,10 +900,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
         cropW: 1,
         cropH: 1,
       };
-      this._loadBackgroundImage();
+      this._loadBackgroundImage(true);
       this._status = "Photo ready — align with Photo tool, then Save layout";
     } catch (err) {
-      this._status = err instanceof Error ? err.message : String(err);
+      this._status = formatHaError(err);
     } finally {
       this._busy = false;
     }
@@ -1290,7 +1292,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       <wled-layout-photo-editor
         @photo-apply=${(e: CustomEvent<{ file: File; layer: BackgroundLayer }>) => {
           void this._onPhotoApply(e).catch((err) => {
-            this._status = err instanceof Error ? err.message : String(err);
+            this._status = formatHaError(err);
             this._busy = false;
           });
         }}

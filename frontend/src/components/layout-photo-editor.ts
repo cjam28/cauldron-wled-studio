@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { loadImageElementFromFile } from "../api/layout-background.js";
+import { formatHaError } from "../utils/ha-error.js";
 import {
   drawBackgroundLayer,
   normalizeBackground,
@@ -51,13 +52,15 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
     this.open = true;
     await this.updateComplete;
     this._bindCanvas();
+    this.requestUpdate();
     try {
       const img = await loadImageElementFromFile(file);
       this._img = img;
       this._layer = normalizeBackground("local-preview", EDITOR_PREVIEW_DEFAULTS);
+      this._loadError = "";
       this._paint();
     } catch (err) {
-      this._loadError = err instanceof Error ? err.message : String(err);
+      this._loadError = formatHaError(err);
       this._paint();
       throw err;
     }

@@ -12,6 +12,7 @@ import {
   drawBackgroundLayer,
   type BackgroundLayer,
 } from "../utils/background-layer.js";
+import { loadHaImage } from "../utils/ha-image.js";
 
 /**
  * 2-D scatter preview: one circle per LED positioned from resolved geometry.
@@ -128,13 +129,15 @@ export class WledGeometryPreview extends BasePoweredElement {
       this._bgImage = null;
       return;
     }
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      this._bgImage = img;
-      this._schedPaint();
-    };
-    img.src = url;
+    void loadHaImage(url).then(
+      (img) => {
+        this._bgImage = img;
+        this._schedPaint();
+      },
+      () => {
+        this._bgImage = null;
+      }
+    );
   }
 
   private _attachLiveStream(): void {
