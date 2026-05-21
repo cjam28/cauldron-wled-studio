@@ -3,11 +3,11 @@
   "name": "WLED Studio",
   "codeowners": ["@cjam28"],
   "config_flow": true,
-  "dependencies": ["wled"],
+  "dependencies": ["frontend", "http", "wled"],
   "documentation": "https://github.com/cjam28/cauldron-wled-studio",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/cjam28/cauldron-wled-studio/issues",
   "requirements": ["aiohttp>=3.9"],
-  "version": "0.2.9"
+  "version": "0.3.0"
 }

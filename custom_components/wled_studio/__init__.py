@@ -14,6 +14,12 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, PANEL_MODULE, PANEL_URL_PATH, STATIC_URL_PREFIX
 from .coordinator import WledStudioCoordinator
+from .lovelace_resources import (
+    async_register_lovelace_resources,
+    async_remove_lovelace_resources,
+    card_resource_url,
+    resource_hacstag,
+)
 from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,8 +66,9 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         ]
     )
 
-    card_url = f"{STATIC_URL_PREFIX}/wled-studio-card.js?v={version}"
-    panel_url = f"{STATIC_URL_PREFIX}/wled-studio-panel.js?v={version}"
+    card_url = card_resource_url(version)
+    tag = resource_hacstag(version)
+    panel_url = f"{STATIC_URL_PREFIX}/wled-studio-panel.js?hacstag={tag}"
 
     from homeassistant.components import frontend
 
@@ -87,6 +94,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 
     hass.data[f"{DOMAIN}_frontend_registered"] = True
     hass.data[f"{DOMAIN}_frontend_version"] = version
+    await async_register_lovelace_resources(hass, version)
     _LOGGER.debug(
         "WLED Studio frontend card=%s panel=%s",
         card_url,
@@ -123,4 +131,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             from .ws_api import _WS_REGISTERED_KEY
 
             hass.data.pop(_WS_REGISTERED_KEY, None)
+            await async_remove_lovelace_resources(hass)
     return unload_ok

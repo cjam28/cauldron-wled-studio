@@ -11,12 +11,9 @@ Repository: `https://github.com/cjam28/cauldron-wled-studio` (**public**).
 1. **HACS → Integrations → ⋮ → Custom repositories**
 2. Add `https://github.com/cjam28/cauldron-wled-studio` (category: **Integration**)
 3. **HACS → Integrations → WLED Studio → Download**
-4. **Settings → Devices & services → Add integration → WLED Studio** → select your WLED device
-5. **Settings → Dashboards → Resources → Add resource**
-   - URL: `/wled_studio_static/wled-studio-card.js?v=**VERSION**`  
-     (replace `**VERSION**` with the value in `custom_components/wled_studio/manifest.json`, e.g. `0.2.8`)
-   - Type: **JavaScript module**
-6. Add card YAML, e.g.:
+4. **Settings → Devices & services → Add integration → WLED Studio** → select your WLED device  
+   The integration **automatically** adds the Lovelace resource (storage-mode dashboards), with a cache-busting `?hacstag=` URL like other HACS cards.
+5. Add card YAML, e.g.:
 
 ```yaml
 type: custom:wled-studio-card
