@@ -18,6 +18,9 @@ from .attach import resolve_wled_entry
 from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN
 from .layout_store import LayoutStore
 from .live_proxy import LiveProxy, get_live_proxy, shutdown_live_proxy
+from .paint import PaintSession
+from .thumb_capture import ThumbCaptureRunner
+from .audiosync import AudioSyncListener
 from .scene_expand import expand_scene_state
 from .scene_seed import build_starter_scenes
 from .scene_store import SceneRecord, SceneStore
@@ -48,6 +51,9 @@ class WledStudioCoordinator:
         self._scene_entities: dict[str, Any] = {}
         self._async_add_scenes: AddEntitiesCallback | None = None
         self._apply_abort: asyncio.Task[Any] | None = None
+        self.paint_session: PaintSession | None = None
+        self.thumb_runner: ThumbCaptureRunner | None = None
+        self.audio_listener: AudioSyncListener | None = None
 
     async def async_setup(self) -> None:
         wled_entry = await resolve_wled_entry(self.hass, self.wled_entry_id)
@@ -63,6 +69,15 @@ class WledStudioCoordinator:
         self._master_entity_id = self._resolve_master_entity()
         self._segment_entities = self._resolve_segment_entities()
         self.live_proxy = get_live_proxy(self.entry_id, self.host, self._session)
+        info = self.client.info if self.client else {}
+        has_ar = bool(
+            isinstance(info.get("u"), dict)
+            and "AudioReactive" in str(info.get("u"))
+        )
+        if has_ar and not self.hass.data.get(f"{DOMAIN}_audio_listener"):
+            self.audio_listener = AudioSyncListener(self.hass, self.entry_id)
+            await self.audio_listener.start()
+            self.hass.data[f"{DOMAIN}_audio_listener"] = self.audio_listener
         _LOGGER.info(
             "WLED Studio ready entry=%s host=%s master=%s",
             self.entry_id,
@@ -229,9 +244,29 @@ class WledStudioCoordinator:
             ),
         }
 
+    def get_paint_session(self) -> PaintSession:
+        if self.client is None:
+            raise RuntimeError("WLED client not ready")
+        if self.paint_session is None:
+            self.paint_session = PaintSession(self.host, self.client)
+        return self.paint_session
+
+    def get_thumb_runner(self) -> ThumbCaptureRunner:
+        if self.thumb_runner is None:
+            self.thumb_runner = ThumbCaptureRunner(self.hass, self)
+        return self.thumb_runner
+
     async def async_shutdown(self) -> None:
         if self._apply_abort and not self._apply_abort.done():
             self._apply_abort.cancel()
+        if self.thumb_runner and self.thumb_runner.running:
+            self.thumb_runner.cancel()
+        if self.paint_session:
+            await self.paint_session.stop()
+            self.paint_session = None
+        if self.audio_listener:
+            await self.audio_listener.stop()
+            self.audio_listener = None
         await self.scene_store.async_flush()
         await shutdown_live_proxy(self.entry_id)
         if self._session:

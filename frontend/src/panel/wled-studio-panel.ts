@@ -12,6 +12,10 @@ import "./view-layout.js";
 import "./view-scenes.js";
 import "./view-devices.js";
 import "./view-effects.js";
+import "./view-paint.js";
+import "./view-settings.js";
+import "./view-audio.js";
+import "./view-voice.js";
 import { listControllers } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
@@ -228,19 +232,25 @@ export class WledStudioPanel extends BasePoweredElement {
         ></wled-segment-controls>
       `;
     }
-    const phaseLabels: Partial<Record<StudioView, string>> = {
-      paint: "Geometry-aware paint (DDP) — Phase 6",
-      audio: "AudioReactive surface — Phase 7",
-      voice: "Voice Assist aliases — Phase 8",
-      settings: "Controller settings — Phase 11",
-    };
-    const label = phaseLabels[this._view] ?? this._view;
-    return html`
-      <p>
-        <strong>${label}</strong> is not built yet. Use Layout, Scenes, Effects, or Segments
-        today.
-      </p>
-    `;
+    if (this._view === "paint" && conn && id) {
+      return html`
+        <wled-view-paint .connection=${conn} .controllerId=${id}></wled-view-paint>
+      `;
+    }
+    if (this._view === "audio" && id) {
+      return html`<wled-view-audio .controllerId=${id}></wled-view-audio>`;
+    }
+    if (this._view === "voice" && conn && id) {
+      return html`
+        <wled-view-voice .connection=${conn} .controllerId=${id}></wled-view-voice>
+      `;
+    }
+    if (this._view === "settings" && conn && id) {
+      return html`
+        <wled-view-settings .connection=${conn} .controllerId=${id}></wled-view-settings>
+      `;
+    }
+    return html`<p>Select a section from the menu.</p>`;
   }
 
   private _selectView(view: StudioView): void {

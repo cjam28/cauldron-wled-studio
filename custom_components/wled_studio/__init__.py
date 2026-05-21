@@ -27,6 +27,7 @@ from .lovelace_resources import (
     schedule_lovelace_resource_retries,
 )
 from .views import async_register_views
+from .notify import async_setup_services, async_unload_services
 from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     await _async_register_frontend(hass)
     async_register_views(hass)
     async_register_ws_api(hass)
+    await async_setup_services(hass)
     return True
 
 
@@ -123,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_register_frontend(hass)
     async_register_views(hass)
     async_register_ws_api(hass)
+    await async_setup_services(hass)
     coordinator = WledStudioCoordinator(hass, entry)
     await coordinator.async_setup()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -142,5 +145,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             from .ws_api import _WS_REGISTERED_KEY
 
             hass.data.pop(_WS_REGISTERED_KEY, None)
+            await async_unload_services(hass)
             await async_remove_lovelace_resources(hass)
     return unload_ok
