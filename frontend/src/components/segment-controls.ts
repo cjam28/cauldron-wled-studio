@@ -401,6 +401,7 @@ export class WledSegmentControls extends BasePoweredElement {
           : null}
 
         <wled-effect-chips
+          .controllerId=${this.controllerId}
           .effectsByName=${this._snapshot?.effects_by_name ?? {}}
           .soundFlags=${this._snapshot?.sound_flags ?? []}
           .selectedFx=${seg.fx ?? 0}

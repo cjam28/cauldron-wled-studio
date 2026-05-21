@@ -18,6 +18,7 @@ CONF_DEVICE_ID = "device_id"
 CONF_HOST = "host"
 
 STATIC_URL_PREFIX = "/wled_studio_static"
+THUMB_API_URL = "/api/wled_studio/thumb/{controller_id}/{filename}"
 PANEL_URL_PATH = "wled-studio"
 PANEL_MODULE = "wled-studio-panel"
 

@@ -25,6 +25,7 @@ from .lovelace_resources import (
     card_resource_url,
     resource_hacstag,
 )
+from .views import async_register_views
 from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up WLED Studio domain."""
     await _async_register_frontend(hass)
+    async_register_views(hass)
     async_register_ws_api(hass)
     return True
 
@@ -116,6 +118,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up WLED Studio from a config entry."""
     await _async_register_frontend(hass)
+    async_register_views(hass)
     async_register_ws_api(hass)
     coordinator = WledStudioCoordinator(hass, entry)
     await coordinator.async_setup()
