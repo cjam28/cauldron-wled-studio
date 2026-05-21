@@ -27,7 +27,7 @@ import {
   rectToGuide,
   snapToGuide,
 } from "../utils/draw-tools.js";
-import { parseSvgToGuide } from "../utils/svg-import.js";
+import { MAX_SVG_BYTES, parseSvgToGuide } from "../utils/svg-import.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { loadHaImage } from "../utils/ha-image.js";
 import { LayoutDesignerKonvaStage } from "./layout-designer-konva.js";
@@ -791,16 +791,25 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const file = input.files?.[0];
     input.value = "";
     if (!file) return;
+    if (file.size > MAX_SVG_BYTES) {
+      this._status = `SVG too large (max ${MAX_SVG_BYTES / 1_000_000} MB)`;
+      return;
+    }
+    this._busy = true;
+    this._status = "Importing SVG…";
     try {
       const text = await file.text();
+      await new Promise<void>((r) => setTimeout(r, 0));
       this._recordUndo();
       this._beginNewGuideDrawing();
       this._guide = parseSvgToGuide(text);
-      this._status = "SVG guide loaded — Place vertices along the path";
+      this._status = `SVG guide loaded (${this._guide.points.length} pts) — Place vertices along the path`;
       this._fitView();
       this._syncStage();
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = false;
     }
   }
 
