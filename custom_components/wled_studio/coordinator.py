@@ -13,7 +13,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .attach import resolve_wled_entry
 from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY
-from .live_proxy import get_live_proxy, shutdown_live_proxy
+from .live_proxy import LiveProxy, get_live_proxy, shutdown_live_proxy
 from .wled_client import WledClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class WledStudioCoordinator:
         self.host: str = entry.data.get(CONF_HOST, "")
         self.title = entry.title or "WLED Studio"
         self.client: WledClient | None = None
+        self.live_proxy: LiveProxy | None = None
         self._session: aiohttp.ClientSession | None = None
         self._master_entity_id: str | None = None
 
@@ -47,7 +48,7 @@ class WledStudioCoordinator:
         self.client = WledClient(self.host, self._session)
         await self.client.bootstrap()
         self._master_entity_id = self._resolve_master_entity()
-        get_live_proxy(self.entry_id, self.host, self._session)
+        self.live_proxy = get_live_proxy(self.entry_id, self.host, self._session)
         _LOGGER.info(
             "WLED Studio ready entry=%s host=%s master=%s",
             self.entry_id,

@@ -13,6 +13,20 @@ const HEX = /^[0-9a-fA-F]+$/;
 export function parseLvFrame(raw: unknown): LvFrame | null {
   if (!raw || typeof raw !== "object") return null;
   const msg = raw as Record<string, unknown>;
+
+  if (Array.isArray(msg.leds_hex) && msg.leds_hex.length > 0) {
+    const leds_hex = msg.leds_hex.map((h) => String(h).toLowerCase());
+    const n = Number(msg.n) > 0 ? Number(msg.n) : leds_hex.length;
+    const channels = (msg.channels === 4 ? 4 : 3) as 3 | 4;
+    return {
+      leds_hex,
+      n,
+      channels,
+      scale: n / leds_hex.length,
+      count: leds_hex.length,
+    };
+  }
+
   const leds = msg.leds;
   if (!Array.isArray(leds) || leds.length === 0) return null;
 

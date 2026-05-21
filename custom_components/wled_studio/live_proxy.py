@@ -57,7 +57,7 @@ class LiveProxy:
         self._running = False
         self._lv_active = False
         self._reconnect_attempt = 0
-        self._last_frame_at: float = 0
+        self._last_frame_at: float | None = None
         self._last_good_frame: dict[str, Any] | None = None
         self._frame_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=3)
         self._broadcast_task: asyncio.Task[None] | None = None
@@ -215,6 +215,8 @@ class LiveProxy:
         if self._refcount == 0:
             return True
         loop = asyncio.get_running_loop()
+        if self._last_frame_at is None:
+            return False
         if loop.time() - self._last_frame_at < LIVE_NO_FRAME_PROBE_SEC:
             return False
         # Liveness: no frame for 5s — connection likely dead
@@ -235,7 +237,13 @@ class LiveProxy:
             await asyncio.sleep(interval)
             if not self._subs:
                 continue
-            frame = self._last_good_frame
+            loop = asyncio.get_running_loop()
+            if (
+                self._last_frame_at is None
+                or loop.time() - self._last_frame_at > LIVE_NO_FRAME_PROBE_SEC
+            ):
+                continue
+            frame = dict(self._last_good_frame) if self._last_good_frame else None
             if not frame:
                 continue
             any_remote = any(s.remote for s in self._subs.values())

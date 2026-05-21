@@ -36,6 +36,7 @@ class TokenBucket:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
+        wait = 0.0
         async with self._lock:
             now = time.monotonic()
             elapsed = now - self._last
@@ -43,10 +44,11 @@ class TokenBucket:
             self._tokens = min(self._burst, self._tokens + elapsed * self._rate)
             if self._tokens < 1:
                 wait = (1 - self._tokens) / self._rate
-                await asyncio.sleep(wait)
                 self._tokens = 0
             else:
                 self._tokens -= 1
+        if wait > 0:
+            await asyncio.sleep(wait)
         await self._sem.acquire()
 
     def release(self) -> None:
@@ -100,21 +102,16 @@ class WledClient:
             effect_count = self.info.get("fxcount", 0) or 0
 
         palettes: list[str] = []
+        pal_fallback = await self._request("GET", "/json/pal")
+        if isinstance(pal_fallback, list):
+            palettes.extend(pal_fallback)
         page = 0
-        while True:
+        while page < 64:
             chunk = await self._request("GET", f"/json/palx?page={page}")
-            if not isinstance(chunk, list) or not chunk:
+            if not isinstance(chunk, list) or len(chunk) == 0:
                 break
             palettes.extend(chunk)
-            if len(chunk) < 10:
-                break
             page += 1
-            if page > 50:
-                break
-        if not palettes:
-            pal_fallback = await self._request("GET", "/json/pal")
-            if isinstance(pal_fallback, list):
-                palettes = pal_fallback
         self.palettes_by_name = build_palette_name_map(palettes)
 
         self.fxdata = await self._request("GET", "/json/fxdata") or ""

@@ -10,7 +10,6 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, SCHEMA_VERSION
-from .live_proxy import get_live_proxy
 
 def _check_schema(msg: dict[str, Any]) -> bool:
     version = msg.get("schema_version", SCHEMA_VERSION)
@@ -19,8 +18,6 @@ def _check_schema(msg: dict[str, Any]) -> bool:
 
 def _get_coordinator(hass: HomeAssistant, entry_id: str):
     coord = hass.data.get(DOMAIN, {}).get(entry_id)
-    if coord is None:
-        raise websocket_api.err("not_found", f"Unknown controller {entry_id}")
     return coord
 
 
@@ -88,6 +85,11 @@ def async_register_ws_api(hass: HomeAssistant) -> None:
             connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
             return
         coord = _get_coordinator(hass, msg["controller_id"])
+        if coord is None:
+            connection.send_error(
+                msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
+            )
+            return
         client = coord.client
         connection.send_result(
             msg["id"],
@@ -119,11 +121,16 @@ def async_register_ws_api(hass: HomeAssistant) -> None:
             connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
             return
         coord = _get_coordinator(hass, msg["controller_id"])
-        proxy = get_live_proxy(coord.entry_id, coord.host, coord._session)
+        if coord is None:
+            connection.send_error(
+                msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
+            )
+            return
+        proxy = coord.live_proxy
 
         @callback
         def forward_frame(frame: dict[str, Any]) -> None:
-            connection.send_event(
+            connection.send_message(
                 {
                     "id": msg["id"],
                     "type": "event",
