@@ -33,6 +33,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   private _unsubLive?: () => void;
   private _bootstrapGen = 0;
   private _offConnReady?: () => void;
+  private _bootstrapControllerKey = "";
 
   public setConfig(config: WledStudioCardConfig): void {
     if (!config.type?.startsWith("custom:")) {
@@ -59,7 +60,13 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
-    if (changed.has("hass") && this.hass) {
+    // Lovelace passes hass on every state change — do not re-bootstrap each time.
+    if (changed.has("config")) {
+      this._bindConnectionReady();
+      void this._bootstrap(true);
+      return;
+    }
+    if (changed.has("hass") && this.hass && !this._controllerId) {
       this._bindConnectionReady();
       void this._bootstrap();
     }
@@ -107,12 +114,24 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     );
   }
 
-  private async _bootstrap(): Promise<void> {
+  private async _bootstrap(force = false): Promise<void> {
     if (!this.hass?.connection) return;
+    const controllerKey = (this.config?.controller ?? "").trim();
+    if (
+      !force &&
+      this._controllerId &&
+      this._unsubLive &&
+      this._bootstrapControllerKey === controllerKey
+    ) {
+      return;
+    }
+
     const gen = ++this._bootstrapGen;
-    this._hint = "Connecting to WLED Studio…";
-    this._connected = false;
-    this.requestUpdate();
+    if (!this._controllerId) {
+      this._hint = "Connecting to WLED Studio…";
+      this._connected = false;
+      this.requestUpdate();
+    }
 
     const delays = [0, 400, 1200, 2500];
     for (const delay of delays) {
@@ -138,6 +157,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         this._controllerId = String(pick.entry_id);
         this._masterEntity = String(pick.master_entity_id ?? "");
         this._pixelCount = Number(pick.pixel_count) || 210;
+        this._bootstrapControllerKey = controllerKey;
         this._connected = true;
         this._hint = "";
         this._startLive();
@@ -164,9 +184,12 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _startLive(): void {
     if (!this.hass?.connection || !this._controllerId) return;
+    const wasLive = this._previewStatus === "live";
     this._unsubLive?.();
-    this._previewStatus = "connecting";
-    this._preview?.setStatus(this._previewStatus);
+    if (!wasLive) {
+      this._previewStatus = "connecting";
+      this._preview?.setStatus(this._previewStatus);
+    }
     this._unsubLive = subscribeLive(
       this.hass.connection,
       this._controllerId,
