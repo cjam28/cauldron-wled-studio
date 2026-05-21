@@ -3,7 +3,8 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
-import { SCHEMA_VERSION } from "../api/types.js";
+import { layoutList, layoutSave, layoutToSegments, type LayoutRecord } from "../api/layout.js";
+import { kitchenIslandLayout } from "../data/kitchen-island-layout.js";
 
 export const VIEW_LAYOUT_TAG = "wled-view-layout";
 
@@ -12,8 +13,9 @@ export class WledViewLayout extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
 
-  @state() private _layouts: Array<Record<string, unknown>> = [];
+  @state() private _layouts: LayoutRecord[] = [];
   @state() private _status = "Loading layouts…";
+  @state() private _busy = false;
 
   protected override onPoweredConnect(): void {
     void this._load();
@@ -26,12 +28,7 @@ export class WledViewLayout extends BasePoweredElement {
   private async _load(): Promise<void> {
     if (!this.connection || !this.controllerId) return;
     try {
-      const res = (await this.connection.sendMessagePromise({
-        type: "wled_studio/layout_list",
-        schema_version: SCHEMA_VERSION,
-        controller_id: this.controllerId,
-      })) as { layouts?: Array<Record<string, unknown>> };
-      this._layouts = res.layouts ?? [];
+      this._layouts = await layoutList(this.connection, this.controllerId);
       this._status =
         this._layouts.length === 0
           ? "No layouts yet — Konva designer ships in the next Phase 3 increment."
@@ -43,60 +40,65 @@ export class WledViewLayout extends BasePoweredElement {
 
   private async _seedKitchenIsland(): Promise<void> {
     if (!this.connection || !this.controllerId) return;
-    const layout = {
-      id: "kitchen-island",
-      controller_id: this.controllerId,
-      name: "Kitchen island",
-      pixel_count: 210,
-      fixtures: [
-        {
-          id: "kitchen-island",
-          name: "Kitchen island",
-          kind: "polyline",
-          closed: true,
-          points: [
-            [0, 0],
-            [100, 0],
-            [110, 10],
-            [200, 10],
-            [0, 0],
-          ],
-          anchors: [
-            { led: 0, vertex_index: 0 },
-            { led: 85, vertex_index: 1 },
-            { led: 96, vertex_index: 2 },
-            { led: 186, vertex_index: 3 },
-            { led: 209, vertex_index: 4 },
-          ],
-        },
-      ],
-    };
-    await this.connection.sendMessagePromise({
-      type: "wled_studio/layout_save",
-      schema_version: SCHEMA_VERSION,
-      controller_id: this.controllerId,
-      layout,
-    });
-    await this._load();
+    this._busy = true;
+    try {
+      await layoutSave(
+        this.connection,
+        this.controllerId,
+        kitchenIslandLayout(this.controllerId)
+      );
+      await this._load();
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  private async _applySegments(layoutId: string): Promise<void> {
+    if (!this.connection || !this.controllerId) return;
+    this._busy = true;
+    try {
+      await layoutToSegments(this.connection, this.controllerId, layoutId);
+      this._status = "WLED segments updated from layout anchors";
+    } catch (err) {
+      this._status = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = false;
+    }
   }
 
   protected override render() {
     return html`
       <div class="layout-view">
         <p>${this._status}</p>
-        <button class="primary" @click=${() => this._seedKitchenIsland()}>
-          Add kitchen-island template
-        </button>
+        <div class="actions">
+          <button
+            class="primary"
+            ?disabled=${this._busy}
+            @click=${() => this._seedKitchenIsland()}
+          >
+            Add kitchen-island template
+          </button>
+        </div>
         <ul>
           ${this._layouts.map(
             (l) => html`
-              <li>${l.name ?? l.id} <span class="meta">${l.pixel_count} px</span></li>
+              <li>
+                <span>${l.name ?? l.id}</span>
+                <span class="meta">${l.pixel_count} px</span>
+                <button
+                  class="small"
+                  ?disabled=${this._busy}
+                  @click=${() => this._applySegments(String(l.id))}
+                >
+                  Apply segments to WLED
+                </button>
+              </li>
             `
           )}
         </ul>
         <p class="hint">
-          Phase 3 continues: Konva editor, background upload, geometry preview on live
-          frames.
+          Maps anchors to Face/Forward/Back/Rear-style segments (0–85, 85–96, 96–186,
+          186–210). Konva editor loads when the layout-designer component lands.
         </p>
       </div>
     `;
@@ -108,14 +110,28 @@ export class WledViewLayout extends BasePoweredElement {
       .layout-view {
         padding: 8px 0;
       }
-      .primary {
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .primary,
+      .small {
         padding: 10px 14px;
         border: none;
         border-radius: 8px;
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         cursor: pointer;
-        margin-bottom: 12px;
+      }
+      .small {
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        margin-left: 8px;
+      }
+      li {
+        margin-bottom: 8px;
       }
       ul {
         margin: 0;

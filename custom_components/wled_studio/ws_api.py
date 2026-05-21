@@ -11,7 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, SCHEMA_VERSION
-from .geometry import Layout, resolve_led_positions
+from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -408,6 +408,99 @@ async def ws_layout_resolve(
     )
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/layout_get",
+        vol.Required("controller_id"): str,
+        vol.Required("layout_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_get(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    layout = await coord.layout_store.async_get(
+        msg["controller_id"], msg["layout_id"]
+    )
+    if layout is None:
+        connection.send_error(msg["id"], "not_found", "Layout not found")
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "layout": layout.to_dict(),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/layout_to_segments",
+        vol.Required("controller_id"): str,
+        vol.Required("layout_id"): str,
+        vol.Optional("fixture_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_to_segments(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    layout = await coord.layout_store.async_get(
+        msg["controller_id"], msg["layout_id"]
+    )
+    if layout is None:
+        connection.send_error(msg["id"], "not_found", "Layout not found")
+        return
+    fixture_id = msg.get("fixture_id")
+    fixture = None
+    if fixture_id:
+        fixture = next((f for f in layout.fixtures if f.id == fixture_id), None)
+    if fixture is None and layout.fixtures:
+        fixture = layout.fixtures[0]
+    if fixture is None:
+        connection.send_error(msg["id"], "not_found", "No fixture in layout")
+        return
+    seg_payload = fixture_to_wled_segments(fixture, layout.pixel_count)
+    try:
+        result = await coord.client.apply_state(
+            {"seg": seg_payload}, full_response=True
+        )
+    except Exception as err:
+        connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "segments": seg_payload,
+            "state": result or coord.client.state,
+        },
+    )
+
+
 _WS_HANDLERS = (
     ws_ping,
     ws_list_controllers,
@@ -416,8 +509,10 @@ _WS_HANDLERS = (
     ws_get_presets,
     ws_effect_meta,
     ws_layout_list,
+    ws_layout_get,
     ws_layout_save,
     ws_layout_resolve,
+    ws_layout_to_segments,
     ws_subscribe_live,
 )
 

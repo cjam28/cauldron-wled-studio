@@ -171,6 +171,32 @@ def resolve_led_positions(
     return [(xy[0], xy[1], led) for led, xy in sorted(led_positions.items())]
 
 
+def fixture_to_wled_segments(
+    fixture: Fixture, pixel_count: int, name_prefix: str = "Side"
+) -> list[dict[str, Any]]:
+    """Build WLED /json/state seg entries from anchor pairs (stop is exclusive)."""
+    if not fixture.anchors:
+        return []
+    ordered = sorted(fixture.anchors, key=lambda a: a.led)
+    out: list[dict[str, Any]] = []
+    for i, anchor in enumerate(ordered):
+        start = max(0, min(anchor.led, pixel_count - 1))
+        if i + 1 < len(ordered):
+            stop = max(start + 1, min(ordered[i + 1].led, pixel_count))
+        else:
+            stop = pixel_count
+        out.append(
+            {
+                "id": i,
+                "start": start,
+                "stop": stop,
+                "n": f"{name_prefix} {i + 1}",
+                "on": True,
+            }
+        )
+    return out
+
+
 def kitchen_island_fixture() -> Fixture:
     """Reference fixture: sides 0→85→96→186→210 (v1 plan)."""
     return Fixture(
@@ -190,6 +216,5 @@ def kitchen_island_fixture() -> Fixture:
             Anchor(85, 1),
             Anchor(96, 2),
             Anchor(186, 3),
-            Anchor(209, 4),
         ],
     )
