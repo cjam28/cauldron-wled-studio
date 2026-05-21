@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -14,6 +15,7 @@ from .effects import (
     build_effect_name_map,
     build_palette_name_map,
     effect_meta_for_id,
+    normalize_fxdata_response,
     parse_fxdata_sound_flags,
 )
 from .state_writer import StateWriter
@@ -86,11 +88,42 @@ class WledClient:
                 method, url, timeout=aiohttp.ClientTimeout(total=10), **kwargs
             ) as resp:
                 resp.raise_for_status()
-                if resp.content_type == "application/json":
-                    return await resp.json()
+                if resp.content_type and "json" in resp.content_type:
+                    body = await resp.text()
+                    try:
+                        return json.loads(body)
+                    except json.JSONDecodeError:
+                        _LOGGER.debug(
+                            "JSON decode failed for %s (%d bytes), using raw text",
+                            path,
+                            len(body),
+                        )
+                        return body
                 return await resp.text()
         finally:
             self._bucket.release()
+
+    async def _get_text(self, path: str) -> str:
+        """GET endpoint as raw text (avoids fragile JSON decode on fxdata)."""
+        await self._bucket.acquire()
+        try:
+            url = f"{self._base}{path}"
+            async with self._session.get(
+                url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                resp.raise_for_status()
+                return await resp.text()
+        finally:
+            self._bucket.release()
+
+    async def _fetch_fxdata(self) -> str:
+        """Load /json/fxdata; WLED often returns invalid JSON despite content-type."""
+        try:
+            raw = await self._get_text("/json/fxdata")
+            return normalize_fxdata_response(raw)
+        except Exception:
+            _LOGGER.warning("Failed to load /json/fxdata from %s", self.host, exc_info=True)
+            return ""
 
     async def get_info(self) -> dict[str, Any]:
         self.info = await self._request("GET", "/json/info") or {}
@@ -120,9 +153,7 @@ class WledClient:
             page += 1
         self.palettes_by_name = build_palette_name_map(palettes)
 
-        self.fxdata = await self._request("GET", "/json/fxdata") or ""
-        if not isinstance(self.fxdata, str):
-            self.fxdata = ""
+        self.fxdata = await self._fetch_fxdata()
         self.sound_flags = parse_fxdata_sound_flags(self.fxdata, effect_count)
 
     async def get_state(self, *, refresh: bool = False) -> dict[str, Any]:

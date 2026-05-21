@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def build_effect_name_map(effects: list[str]) -> dict[str, int]:
@@ -30,6 +34,45 @@ def build_palette_name_map(palettes: list[str]) -> dict[str, int]:
 SLIDER_KEYS = ("sx", "ix", "c1", "c2", "c3", "o1", "o2", "o3")
 
 
+def normalize_fxdata_response(body: str) -> str:
+    """Turn WLED /json/fxdata body into newline-separated metadata rows.
+
+    WLED may label the response application/json while the payload is a fragile
+    JSON array, a quoted string, or raw semicolon-separated text. Never let a
+    JSONDecodeError block integration setup.
+    """
+    text = (body or "").strip()
+    if not text:
+        return ""
+    if text[0] not in ("[", '"', "{"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        _LOGGER.debug("fxdata is not valid JSON; using raw text (%d bytes)", len(text))
+        return text
+    if isinstance(parsed, str):
+        return parsed.strip()
+    if isinstance(parsed, list):
+        rows: list[str] = []
+        for item in parsed:
+            if item is None:
+                rows.append("")
+            elif isinstance(item, str):
+                rows.append(item.strip())
+            else:
+                rows.append(str(item).strip())
+        return "\n".join(rows)
+    if isinstance(parsed, dict):
+        for key in ("fxdata", "data", "value"):
+            val = parsed.get(key)
+            if isinstance(val, str):
+                return val.strip()
+            if isinstance(val, list):
+                return "\n".join(str(x).strip() for x in val)
+    return text
+
+
 def split_fxdata_rows(fxdata: str) -> list[str]:
     """One metadata row per effect (newline-separated)."""
     if not fxdata:
@@ -54,7 +97,7 @@ def parse_effect_meta_row(row: str) -> dict[str, Any]:
         sliders[key] = tok == "!" or bool(tok)
     colors_enabled = parts[1].strip() != ""
     palette_enabled = parts[2].strip() == "!"
-    flag = parts[3].strip()[:1] if parts[3] else None
+    flag = _extract_flag_char(parts)
     defaults: dict[str, Any] = {}
     if parts[4]:
         for pair in parts[4].split(","):
@@ -80,26 +123,51 @@ def effect_meta_for_id(fxdata: str, effect_id: int) -> dict[str, Any]:
     return parse_effect_meta_row("!,!;;!;")
 
 
+def _extract_flag_char(parts: list[str]) -> str | None:
+    """Section 4 may shift when optional sections are omitted (e.g. `!,!;;v;`)."""
+    while len(parts) < 5:
+        parts.append("")
+    for idx in (3, 2, 4):
+        ch = (parts[idx] or "").strip()[:1]
+        if ch in ("v", "f", "2"):
+            return ch
+    return (parts[3] or "").strip()[:1] or None
+
+
+def _flag_from_char(ch: str) -> str | None:
+    if ch == "v":
+        return "v"
+    if ch == "f":
+        return "f"
+    if ch == "2":
+        return "2"
+    return None
+
+
 def parse_fxdata_sound_flags(fxdata: str, effect_count: int) -> list[str | None]:
     """Section 4 char per effect: v=volume, f=freq, 2=2d-only, else None."""
     if not fxdata or effect_count < 1:
         return [None] * max(effect_count, 0)
+
+    rows = split_fxdata_rows(fxdata)
+    if len(rows) > 1:
+        flags: list[str | None] = []
+        for i in range(effect_count):
+            if i >= len(rows):
+                flags.append(None)
+                continue
+            meta = parse_effect_meta_row(rows[i])
+            flags.append(_flag_from_char(str(meta.get("flag") or "")))
+        return flags
+
     sections = fxdata.split(";")
     if len(sections) < 4:
         return [None] * effect_count
     flags_section = sections[3]
-    flags: list[str | None] = []
+    flags = []
     for i in range(effect_count):
         if i >= len(flags_section):
             flags.append(None)
             continue
-        ch = flags_section[i]
-        if ch == "v":
-            flags.append("v")
-        elif ch == "f":
-            flags.append("f")
-        elif ch == "2":
-            flags.append("2")
-        else:
-            flags.append(None)
+        flags.append(_flag_from_char(flags_section[i]))
     return flags

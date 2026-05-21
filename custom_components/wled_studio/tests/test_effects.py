@@ -1,8 +1,11 @@
 """Tests for fxdata parsing."""
 
+import json
+
 from wled_studio.effects import (
     build_effect_name_map,
     effect_meta_for_id,
+    normalize_fxdata_response,
     parse_effect_meta_row,
     parse_fxdata_sound_flags,
 )
@@ -23,6 +26,22 @@ def test_parse_aurora_meta() -> None:
     assert meta["sliders"]["c1"] is False
     assert meta["flag"] == "1"
     assert meta["defaults"]["sx"] == "24"
+
+
+def test_normalize_fxdata_json_array() -> None:
+    raw = json.dumps(["!,!;;!;1", ",,,,,,,,;;;"])
+    assert normalize_fxdata_response(raw).count("\n") == 1
+
+
+def test_normalize_fxdata_invalid_json() -> None:
+    raw = "!,!;;!;1\n,,,,,,,,,;;;"
+    assert normalize_fxdata_response(raw) == raw
+
+
+def test_sound_flags_per_row() -> None:
+    fxdata = "a;b;c;d;\ne;f;g;h;\n!,!;;v;\n"
+    flags = parse_fxdata_sound_flags(fxdata, 3)
+    assert flags[2] == "v"
 
 
 def test_sound_flags_volume() -> None:
