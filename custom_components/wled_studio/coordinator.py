@@ -94,14 +94,16 @@ class WledStudioCoordinator:
             eid = entity.entity_id
             if "_segment_" not in eid:
                 continue
+            suffix = eid.rsplit("_segment_", 1)[-1] if "_segment_" in eid else ""
             try:
-                seg_num = int(eid.rsplit("_segment_", 1)[-1])
+                seg_num = int(suffix)
             except ValueError:
                 seg_num = len(segments)
             segments.append(
                 {
                     "entity_id": eid,
                     "segment_index": seg_num,
+                    "wled_segment_id": seg_num,
                     "name": entity.name or entity.original_name or eid,
                 }
             )

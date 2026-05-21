@@ -1,11 +1,13 @@
 import { css, html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { HomeAssistant } from "custom-card-helpers";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import {
   applyState,
   buildSegmentPatch,
+  entityForWledSegment,
   fetchDeviceState,
   fetchEffectMeta,
   fetchPresets,
@@ -37,6 +39,7 @@ const SLIDER_LABELS: Record<string, string> = {
 @safeCustomElement(SEGMENT_CONTROLS_TAG)
 export class WledSegmentControls extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
+  @property({ attribute: false }) override hass?: HomeAssistant;
   @property() controllerId = "";
   @property({ type: Boolean }) compact = false;
   @property({ type: Number }) selectedSegId = -1;
@@ -172,6 +175,45 @@ export class WledSegmentControls extends BasePoweredElement {
     );
   }
 
+  private async _syncHaSegment(
+    seg: WledSegment,
+    patch: Partial<WledSegment>
+  ): Promise<void> {
+    if (!this.hass) return;
+    const entityId = entityForWledSegment(
+      seg.id,
+      this._snapshot?.segment_entities ?? []
+    );
+    if (!entityId) return;
+
+    const data: Record<string, unknown> = { entity_id: entityId };
+
+    if (patch.col?.length) {
+      const slot = parseColSlot(patch.col[0] as number[]);
+      if (slot[3] > 0) {
+        data.rgbw_color = [slot[0], slot[1], slot[2], slot[3]];
+      } else {
+        data.rgb_color = [slot[0], slot[1], slot[2]];
+      }
+    }
+    if (patch.bri !== undefined) {
+      data.brightness = patch.bri;
+    }
+    if (patch.fx !== undefined && this._snapshot?.effects_by_name) {
+      const name = Object.entries(this._snapshot.effects_by_name).find(
+        ([, id]) => id === patch.fx
+      )?.[0];
+      if (name) data.effect = name;
+    }
+    if (patch.on === false) {
+      await this.hass.callService("light", "turn_off", { entity_id: entityId });
+      return;
+    }
+    if (Object.keys(data).length > 1) {
+      await this.hass.callService("light", "turn_on", data);
+    }
+  }
+
   private _patchSeg(patch: Partial<WledSegment>): void {
     const seg = this._activeSeg();
     if (!seg || !this._optimistic) return;
@@ -188,7 +230,11 @@ export class WledSegmentControls extends BasePoweredElement {
       next[idx] = merged;
       this._segments = next;
     }
-    this._optimistic.push(buildSegmentPatch(seg.id, patch), merged);
+    void this._syncHaSegment(seg, patch);
+    this._optimistic.push(
+      buildSegmentPatch(seg.id, patch, this._segments),
+      merged
+    );
   }
 
   private _selectSeg(id: number): void {
@@ -199,7 +245,7 @@ export class WledSegmentControls extends BasePoweredElement {
       void applyState(
         this.connection,
         this.controllerId,
-        buildSegmentPatch(id, { sel: true })
+        buildSegmentPatch(id, { sel: true }, this._segments)
       );
     }
     const idx = this._segments.findIndex((s) => s.id === id);
@@ -385,11 +431,14 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _labelForSeg(seg: WledSegment): string {
-    const ent = this._snapshot?.segment_entities?.find(
-      (e) => e.segment_index === seg.id
-    );
-    if (ent?.name) return ent.name.replace(/^.*\s—\s/, "");
-    return `Seg ${seg.id + 1}`;
+    const entities = this._snapshot?.segment_entities ?? [];
+    const ent =
+      entities.find((e) => entityForWledSegment(seg.id, [e]) === e.entity_id) ??
+      entities.find((e) => e.segment_index === seg.id);
+    const name = ent?.name?.replace(/^.*\s—\s/, "") ?? `Seg ${seg.id + 1}`;
+    const start = seg.start ?? "?";
+    const stop = seg.stop ?? "?";
+    return `${name} (${start}–${stop})`;
   }
 
   get segments(): WledSegment[] {

@@ -296,6 +296,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           ? html`
               <wled-segment-controls
                 class="segment-block"
+                .hass=${this.hass}
                 .connection=${this.hass.connection}
                 .controllerId=${this._controllerId}
                 .selectedSegId=${this._selectedSegId}

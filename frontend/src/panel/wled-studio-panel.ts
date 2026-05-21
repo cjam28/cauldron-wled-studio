@@ -78,6 +78,7 @@ export class WledStudioPanel extends BasePoweredElement {
               : this._view === "segments" && this._controllerId && this.hass?.connection
                 ? html`
                     <wled-segment-controls
+                      .hass=${this.hass}
                       .connection=${this.hass.connection}
                       .controllerId=${this._controllerId}
                     ></wled-segment-controls>

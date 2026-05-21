@@ -50,6 +50,7 @@ export interface DeviceStateSnapshot {
   segment_entities: Array<{
     entity_id: string;
     segment_index: number;
+    wled_segment_id?: number;
     name: string;
   }>;
   info: Record<string, unknown>;
@@ -173,19 +174,47 @@ export function normalizeCols(col: unknown): number[][] {
   return out;
 }
 
+/** Parse WLED segment id from HA entity_id (e.g. light.cloud_segment_2 → 2). */
+export function wledSegmentIdFromEntity(entityId: string): number | undefined {
+  const m = entityId.match(/_segment_(\d+)$/);
+  return m ? Number(m[1]) : undefined;
+}
+
+export function entityForWledSegment(
+  segId: number,
+  entities: Array<{ entity_id: string; segment_index: number }>
+): string | undefined {
+  for (const e of entities) {
+    const fromEntity = wledSegmentIdFromEntity(e.entity_id);
+    if (fromEntity === segId) return e.entity_id;
+    if (e.segment_index === segId) return e.entity_id;
+  }
+  return undefined;
+}
+
 /**
- * Minimal WLED /json/state segment payload.
- * WLED 16.x applies color/fx to the selected segment — always set sel + on.
+ * WLED applies color/fx to every segment with sel:true. Clear sel on all others.
  */
 export function buildSegmentPatch(
   targetId: number,
-  patch: Partial<WledSegment>
+  patch: Partial<WledSegment>,
+  allSegments: WledSegment[]
 ): Record<string, unknown> {
-  const entry: Record<string, unknown> = {
-    ...patch,
-    id: targetId,
-    sel: true,
-    on: patch.on !== undefined ? patch.on : true,
-  };
-  return { seg: [entry] };
+  const list = allSegments.length
+    ? allSegments
+    : [{ id: targetId } as WledSegment];
+
+  const segPayload = list.map((s) => {
+    if (s.id === targetId) {
+      return {
+        ...patch,
+        id: targetId,
+        sel: true,
+        on: patch.on !== undefined ? patch.on : s.on !== false ? s.on : true,
+      };
+    }
+    return { id: s.id, sel: false };
+  });
+
+  return { seg: segPayload };
 }
