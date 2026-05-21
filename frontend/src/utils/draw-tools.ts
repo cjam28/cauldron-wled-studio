@@ -1,6 +1,5 @@
 /** Guide paths (smooth drawings) vs sparse layout vertices. */
 
-import { getStroke } from "perfect-freehand";
 import simplify from "simplify-js";
 
 export type DrawTool =
@@ -27,25 +26,22 @@ export interface LayoutVertex {
   anchorLed: number | null;
 }
 
-/** Smooth freehand → dense guide (not layout vertices). */
+/** Smooth freehand centerline → guide (not layout vertices). */
 export function penStrokeToGuide(
   strokeCanvas: Array<[number, number]>,
-  toModel: (cx: number, cy: number) => [number, number]
+  toModel: (cx: number, cy: number) => [number, number],
+  closed = false
 ): GuidePath {
   if (strokeCanvas.length < 2) {
     return { points: [], closed: false, kind: "freehand" };
   }
-  const outline = getStroke(
-    strokeCanvas.map(([x, y]) => [x, y, 0.5] as [number, number, number]),
-    { size: 12, thinning: 0.65, smoothing: 0.55, streamline: 0.35 }
-  );
   const simplified = simplify(
-    outline.map(([x, y]) => ({ x, y })),
+    strokeCanvas.map(([x, y]) => ({ x, y })),
     4,
-    false
+    true
   );
   const points = simplified.map((p) => toModel(p.x, p.y));
-  return { points, closed: false, kind: "freehand" };
+  return { points, closed, kind: "freehand" };
 }
 
 export function lineToGuide(

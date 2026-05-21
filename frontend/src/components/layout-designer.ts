@@ -473,7 +473,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _finishPenGuide(): void {
     const stroke = this._penStroke;
     this._penStroke = [];
-    this._guide = penStrokeToGuide(stroke, (cx, cy) => this._canvasToModel(cx, cy));
+    this._guide = penStrokeToGuide(
+      stroke,
+      (cx, cy) => this._canvasToModel(cx, cy),
+      this._closed
+    );
     this._status =
       this._guide.points.length >= 2
         ? "Smooth guide drawn — switch to Place vertices and click along the line"
