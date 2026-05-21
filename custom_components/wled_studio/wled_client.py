@@ -13,8 +13,10 @@ from .const import HTTP_BURST, HTTP_MAX_IN_FLIGHT, HTTP_RATE_PER_SEC
 from .effects import (
     build_effect_name_map,
     build_palette_name_map,
+    effect_meta_for_id,
     parse_fxdata_sound_flags,
 )
+from .state_writer import StateWriter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +70,11 @@ class WledClient:
         self.sound_flags: list[str | None] = []
         self.fxdata: str = ""
         self.info: dict[str, Any] = {}
+        self.state: dict[str, Any] = {}
+        self.cfg: dict[str, Any] = {}
+        self.presets: dict[str, Any] = {}
         self.fw_ver: str = ""
+        self._state_writer = StateWriter()
 
     async def _request(
         self, method: str, path: str, **kwargs: Any
@@ -119,6 +125,61 @@ class WledClient:
             self.fxdata = ""
         self.sound_flags = parse_fxdata_sound_flags(self.fxdata, effect_count)
 
+    async def get_state(self, *, refresh: bool = False) -> dict[str, Any]:
+        if refresh or not self.state:
+            data = await self._request("GET", "/json/state")
+            if isinstance(data, dict):
+                self.state = data
+        return self.state
+
+    async def get_cfg(self) -> dict[str, Any]:
+        data = await self._request("GET", "/json/cfg")
+        if isinstance(data, dict):
+            self.cfg = data
+        return self.cfg
+
+    async def get_presets(self) -> dict[str, Any]:
+        data = await self._request("GET", "/presets.json")
+        if isinstance(data, dict):
+            self.presets = data
+        return self.presets
+
+    async def _post_state_raw(
+        self, patch: dict[str, Any], *, full_response: bool = False
+    ) -> dict[str, Any]:
+        body = dict(patch)
+        if full_response:
+            body["v"] = True
+        result = await self._request("POST", "/json/state", json=body)
+        if isinstance(result, dict):
+            if full_response or "seg" in result:
+                self.state = result
+            return result
+        return {}
+
+    async def apply_state(
+        self, patch: dict[str, Any], *, full_response: bool = False
+    ) -> dict[str, Any] | None:
+        """Coalesced state write (queue depth 1)."""
+        return await self._state_writer.apply(
+            self._post_state_raw, patch, full_response=full_response
+        )
+
+    def effect_meta(self, effect_id: int) -> dict[str, Any]:
+        return effect_meta_for_id(self.fxdata, effect_id)
+
+    def led_bus_order(self) -> int:
+        """First LED bus `order` nibble (RGB + W-swap)."""
+        try:
+            ins = self.cfg.get("hw", {}).get("led", {}).get("ins", [])
+            if ins and isinstance(ins[0], dict):
+                return int(ins[0].get("order", 0))
+        except (TypeError, ValueError):
+            pass
+        return 0
+
     async def bootstrap(self) -> None:
         await self.get_info()
         await self.refresh_catalog()
+        await self.get_cfg()
+        await self.get_state(refresh=True)

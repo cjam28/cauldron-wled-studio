@@ -7,6 +7,7 @@ import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
 import type { WledStripPreview } from "../components/strip-preview.js";
 import "../components/strip-preview.js";
+import "../components/segment-controls.js";
 
 export const CARD_TAG = "wled-studio-card";
 
@@ -24,7 +25,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @state() private _controllerId = "";
   @state() private _masterEntity = "";
   @state() private _pixelCount = 210;
-  @state() private _connected = false;
   @state() private _previewStatus = "connecting";
   @state() private _hint = "";
 
@@ -129,7 +129,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     const gen = ++this._bootstrapGen;
     if (!this._controllerId) {
       this._hint = "Connecting to WLED Studio…";
-      this._connected = false;
       this.requestUpdate();
     }
 
@@ -158,7 +157,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         this._masterEntity = String(pick.master_entity_id ?? "");
         this._pixelCount = Number(pick.pixel_count) || 210;
         this._bootstrapControllerKey = controllerKey;
-        this._connected = true;
         this._hint = "";
         this._startLive();
         this.requestUpdate();
@@ -174,7 +172,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     }
 
     if (gen !== this._bootstrapGen) return;
-    this._connected = false;
     this._previewStatus = "offline";
     this._preview?.setStatus(this._previewStatus);
     this._hint =
@@ -256,6 +253,17 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           ></ha-slider>
         </div>
 
+        ${this._controllerId && this.hass?.connection
+          ? html`
+              <wled-segment-controls
+                class="segment-block"
+                .connection=${this.hass.connection}
+                .controllerId=${this._controllerId}
+                compact
+              ></wled-segment-controls>
+            `
+          : null}
+
         <button
           class="studio-link"
           @click=${this._openStudio}
@@ -309,6 +317,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       }
       .controls {
         margin: 10px 0;
+      }
+      .segment-block {
+        margin: 8px 0 4px;
+        border-top: 1px solid var(--divider-color, rgba(128, 128, 128, 0.3));
+        padding-top: 10px;
       }
       .studio-link {
         width: 100%;

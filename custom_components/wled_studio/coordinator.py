@@ -35,6 +35,7 @@ class WledStudioCoordinator:
         self.live_proxy: LiveProxy | None = None
         self._session: aiohttp.ClientSession | None = None
         self._master_entity_id: str | None = None
+        self._segment_entities: list[dict[str, Any]] = []
 
     async def async_setup(self) -> None:
         wled_entry = await resolve_wled_entry(self.hass, self.wled_entry_id)
@@ -48,6 +49,7 @@ class WledStudioCoordinator:
         self.client = WledClient(self.host, self._session)
         await self.client.bootstrap()
         self._master_entity_id = self._resolve_master_entity()
+        self._segment_entities = self._resolve_segment_entities()
         self.live_proxy = get_live_proxy(self.entry_id, self.host, self._session)
         _LOGGER.info(
             "WLED Studio ready entry=%s host=%s master=%s",
@@ -79,6 +81,31 @@ class WledStudioCoordinator:
                 return entity.entity_id
         return None
 
+    def _resolve_segment_entities(self) -> list[dict[str, Any]]:
+        ent_reg = er.async_get(self.hass)
+        segments: list[dict[str, Any]] = []
+        for entity in ent_reg.entities.values():
+            if entity.config_entry_id != self.wled_entry_id:
+                continue
+            if entity.domain != "light":
+                continue
+            eid = entity.entity_id
+            if "_segment_" not in eid:
+                continue
+            try:
+                seg_num = int(eid.rsplit("_segment_", 1)[-1])
+            except ValueError:
+                seg_num = len(segments)
+            segments.append(
+                {
+                    "entity_id": eid,
+                    "segment_index": seg_num,
+                    "name": entity.name or entity.original_name or eid,
+                }
+            )
+        segments.sort(key=lambda s: s["segment_index"])
+        return segments
+
     def controller_info(self) -> dict[str, Any]:
         info = self.client.info if self.client else {}
         leds = info.get("leds") or {}
@@ -93,6 +120,7 @@ class WledStudioCoordinator:
             "palcount": info.get("palcount", 0),
             "fw_ver": self.client.fw_ver if self.client else "",
             "master_entity_id": self._master_entity_id,
+            "segment_entities": self._segment_entities,
             "has_ar": bool(
                 isinstance(info.get("u"), dict)
                 and "AudioReactive" in str(info.get("u"))

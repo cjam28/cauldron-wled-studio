@@ -105,15 +105,133 @@ async def ws_get_state(
         )
         return
     client = coord.client
+    if client:
+        await client.get_state(refresh=True)
+    state = client.state if client else {}
+    seg = state.get("seg") if isinstance(state.get("seg"), list) else []
     connection.send_result(
         msg["id"],
         {
             "ok": True,
             "schema_version": SCHEMA_VERSION,
             "info": client.info if client else {},
+            "state": state,
+            "segments": seg,
             "effects_by_name": client.effects_by_name if client else {},
             "palettes_by_name": client.palettes_by_name if client else {},
             "sound_flags": client.sound_flags if client else [],
+            "fxdata": client.fxdata if client else "",
+            "led_order": client.led_bus_order() if client else 0,
+            "segment_entities": coord._segment_entities,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/apply_state",
+        vol.Required("controller_id"): str,
+        vol.Required("state"): dict,
+        vol.Optional("full_response", default=False): bool,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_apply_state(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(
+            msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
+        )
+        return
+    try:
+        result = await coord.client.apply_state(
+            msg["state"],
+            full_response=msg.get("full_response", False),
+        )
+    except Exception as err:
+        connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "state": result or coord.client.state,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/get_presets",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_get_presets(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(
+            msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
+        )
+        return
+    presets = await coord.client.get_presets()
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "presets": presets,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/effect_meta",
+        vol.Required("controller_id"): str,
+        vol.Required("effect_id"): int,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_effect_meta(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(
+            msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
+        )
+        return
+    meta = coord.client.effect_meta(msg["effect_id"])
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "meta": meta,
         },
     )
 
@@ -173,7 +291,15 @@ async def ws_subscribe_live(
     )
 
 
-_WS_HANDLERS = (ws_ping, ws_list_controllers, ws_get_state, ws_subscribe_live)
+_WS_HANDLERS = (
+    ws_ping,
+    ws_list_controllers,
+    ws_get_state,
+    ws_apply_state,
+    ws_get_presets,
+    ws_effect_meta,
+    ws_subscribe_live,
+)
 
 
 @callback

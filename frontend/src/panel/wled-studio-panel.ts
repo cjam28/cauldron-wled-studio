@@ -2,6 +2,8 @@ import { css, html } from "lit";
 import { state } from "lit/decorators.js";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import "../components/segment-controls.js";
+import { listControllers } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
 
@@ -19,6 +21,24 @@ type StudioView =
 @safeCustomElement(PANEL_TAG)
 export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
+  @state() private _controllerId = "";
+
+  protected override onPoweredConnect(): void {
+    void this._loadController();
+  }
+
+  private async _loadController(): Promise<void> {
+    if (!this.hass?.connection) return;
+    try {
+      const controllers = await listControllers(this.hass.connection);
+      const pick = controllers[0];
+      if (pick?.entry_id) {
+        this._controllerId = String(pick.entry_id);
+      }
+    } catch {
+      /* panel still usable */
+    }
+  }
 
   protected override render() {
     const remote = this.remote.state;
@@ -30,6 +50,7 @@ export class WledStudioPanel extends BasePoweredElement {
           ${this._navItem("layout", "Layout", "mdi:vector-polygon")}
           ${this._navItem("scenes", "Scenes", "mdi:palette-swatch")}
           ${this._navItem("effects", "Effects", "mdi:auto-fix")}
+          ${this._navItem("segments", "Segments", "mdi:vector-line")}
         </aside>
         <main class="stage">
           <header class="top">
@@ -46,7 +67,21 @@ export class WledStudioPanel extends BasePoweredElement {
               : null}
           </header>
           <section class="content" aria-live="polite">
-            <p>View: <strong>${this._view}</strong> — shell ready (Phase 5 expands).</p>
+            ${this._view === "segments" && this._controllerId && this.hass?.connection
+              ? html`
+                  <wled-segment-controls
+                    .connection=${this.hass.connection}
+                    .controllerId=${this._controllerId}
+                  ></wled-segment-controls>
+                `
+              : html`
+                  <p>
+                    View: <strong>${this._view}</strong>
+                    ${this._view === "segments"
+                      ? " — connect a WLED Studio controller first."
+                      : " — expanded in later phases."}
+                  </p>
+                `}
           </section>
         </main>
       </div>
