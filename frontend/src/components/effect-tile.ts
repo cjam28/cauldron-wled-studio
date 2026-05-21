@@ -47,6 +47,10 @@ export class WledEffectTile extends BasePoweredElement {
               alt=""
               loading="lazy"
               decoding="async"
+              @error=${(e: Event) => {
+                const img = e.target as HTMLImageElement;
+                img.style.display = "none";
+              }}
             />`
           : html`<span class="placeholder" aria-hidden="true"></span>`}
         <span class="label">${this.label}</span>

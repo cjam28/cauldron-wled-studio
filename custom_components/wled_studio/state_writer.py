@@ -58,13 +58,12 @@ class StateWriter:
             except Exception:
                 _LOGGER.exception("WLED state POST failed")
                 raise
-            finally:
-                async with self._lock:
-                    if self._in_flight is flight:
-                        self._in_flight = None
-                    if self._pending is not None:
-                        continue
-                    return last
+            async with self._lock:
+                if self._in_flight is flight:
+                    self._in_flight = None
+                more_pending = self._pending is not None
+            if not more_pending:
+                return last
 
 
 def _merge_state(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DOMAIN, INTEGRATION_VERSION, SCHEMA_VERSION
 from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
+from .thumbnails import list_thumbs
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
 
@@ -135,6 +136,7 @@ async def ws_get_state(
             "rgbwm": client.led_bus_rgbwm(bus_index) if client else 0,
             "segment_entities": coord._segment_entities,
             "fw_ver": client.fw_ver if client else "",
+            "thumb_basenames": list_thumbs(hass, coord.entry_id),
         },
     )
 

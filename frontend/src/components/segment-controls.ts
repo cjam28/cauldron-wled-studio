@@ -504,6 +504,7 @@ export class WledSegmentControls extends BasePoweredElement {
           .hass=${this.hass}
           .controllerId=${this.controllerId}
           .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
+          .thumbBasenames=${this._snapshot?.thumb_basenames ?? []}
           .effectsByName=${this._snapshot?.effects_by_name ?? {}}
           .soundFlags=${this._snapshot?.sound_flags ?? []}
           .selectedFx=${seg.fx ?? 0}

@@ -217,6 +217,7 @@ export class WledViewEffects extends BasePoweredElement {
                 .hass=${this.hass}
                 .controllerId=${this.controllerId}
                 .fwVer=${snap.fw_ver ?? (snap.info?.ver as string) ?? ""}
+                .thumbBasenames=${snap.thumb_basenames ?? []}
                 .effectsByName=${snap.effects_by_name ?? {}}
                 .soundFlags=${snap.sound_flags ?? []}
                 .selectedFx=${fx}

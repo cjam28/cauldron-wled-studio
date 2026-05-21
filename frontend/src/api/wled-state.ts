@@ -59,6 +59,8 @@ export interface DeviceStateSnapshot {
     wled_segment_id?: number;
     name: string;
   }>;
+  /** Basenames under ``/config/www/wled_studio/thumbs/{controller_id}/``. */
+  thumb_basenames?: string[];
 }
 
 export async function fetchDeviceState(

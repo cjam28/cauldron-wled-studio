@@ -7,6 +7,7 @@ import {
   thumbCaptureCancel,
   thumbCaptureStart,
 } from "../api/paint.js";
+import { formatHaError } from "../utils/ha-error.js";
 
 const ONBOARD_KEY = "wled_studio.onboarded";
 
@@ -32,7 +33,10 @@ export class WledViewSettings extends BasePoweredElement {
           this._thumbStatus = `${d.done}/${d.total}: ${d.name}`;
           this._capturing = true;
         } else if (st === "complete" || st === "cancelled") {
-          this._thumbStatus = st === "complete" ? "Thumbnails complete" : "Cancelled";
+          this._thumbStatus =
+            st === "complete"
+              ? "Thumbnails complete — open Effects to view tiles"
+              : "Cancelled";
           this._capturing = false;
         } else if (st === "error") {
           this._thumbStatus = String(d.message ?? "Error");
@@ -55,7 +59,7 @@ export class WledViewSettings extends BasePoweredElement {
       await thumbCaptureStart(this.connection, this.controllerId);
     } catch (err) {
       this._capturing = false;
-      this._thumbStatus = err instanceof Error ? err.message : String(err);
+      this._thumbStatus = formatHaError(err);
     }
   }
 

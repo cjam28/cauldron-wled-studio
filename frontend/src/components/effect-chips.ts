@@ -27,6 +27,7 @@ export class WledEffectChips extends BasePoweredElement {
   @property({ type: String }) filter = "";
   @property() controllerId = "";
   @property() fwVer = "";
+  @property({ type: Array }) thumbBasenames: string[] = [];
   @property({ type: Boolean }) toggleOff = true;
   @property({ type: Boolean }) showRecents = true;
 
@@ -160,7 +161,8 @@ export class WledEffectChips extends BasePoweredElement {
                   id,
                   "strip",
                   this.fwVer,
-                  this.hass
+                  this.hass,
+                  this.thumbBasenames
                 );
                 const tileLabel =
                   name +

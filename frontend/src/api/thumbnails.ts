@@ -40,16 +40,51 @@ export function thumbFilenameForFx(
 }
 
 /**
- * Resolved thumbnail URL when a captured file exists (caller may probe via img onerror).
+ * Pick an on-disk thumbnail basename for *fxId* from ``available`` (from get_state).
+ * Tries fw-qualified name first, then legacy ``{id}_strip.webp``, then any matching prefix.
+ */
+export function resolveThumbBasename(
+  fxId: number,
+  available: ReadonlySet<string> | readonly string[],
+  variant: ThumbVariant = "strip",
+  fwVer?: string
+): string | undefined {
+  const set =
+    available instanceof Set ? available : new Set(available);
+  if (!set.size) return undefined;
+
+  const candidates = [
+    thumbFilenameForFx(fxId, variant, fwVer),
+    thumbFilenameForFx(fxId, variant),
+  ];
+  for (const name of candidates) {
+    if (set.has(name)) return name;
+  }
+
+  const prefix = `${fxId}_`;
+  const suffix = `_${variant}.webp`;
+  for (const name of set) {
+    if (name.startsWith(prefix) && name.endsWith(suffix)) return name;
+  }
+  return undefined;
+}
+
+/**
+ * Resolved thumbnail URL only when a captured file exists on disk.
  */
 export function thumbUrlForFx(
   controllerId: string,
   fxId: number,
   variant: ThumbVariant = "strip",
   fwVer?: string,
-  hass?: HomeAssistant
+  hass?: HomeAssistant,
+  available?: ReadonlySet<string> | readonly string[]
 ): string | undefined {
   if (!controllerId || fxId < 0) return undefined;
-  const file = thumbFilenameForFx(fxId, variant, fwVer);
+  const file =
+    available !== undefined
+      ? resolveThumbBasename(fxId, available, variant, fwVer)
+      : thumbFilenameForFx(fxId, variant, fwVer);
+  if (!file) return undefined;
   return withHaAuth(thumbLocalUrl(controllerId, file), hass);
 }
