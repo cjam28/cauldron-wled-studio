@@ -988,7 +988,15 @@ async def ws_paint_stop(
         connection.send_error(msg["id"], "not_found", "Unknown controller")
         return
     if coord.paint_session:
-        await coord.paint_session.stop(commit=bool(msg.get("commit", True)))
+        try:
+            await coord.paint_session.stop(commit=bool(msg.get("commit", True)))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("paint_stop failed: %s", err, exc_info=True)
+            try:
+                if coord.client:
+                    await coord.client.apply_state({"live": False})
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning("paint_stop live clear failed", exc_info=True)
     connection.send_result(
         msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
     )

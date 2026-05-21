@@ -7,7 +7,7 @@ import { CARD_TAG, type WledStudioCardConfig } from "./wled-studio-card.js";
 const defaultConfig = (): WledStudioCardConfig => ({
   type: `custom:${CARD_TAG}`,
   controller: "Cloud",
-  height: 56,
+  height: 200,
 });
 
 @safeCustomElement("wled-studio-card-editor")
@@ -35,8 +35,13 @@ export class WledStudioCardEditor extends LitElement {
         ></ha-textfield>
         <ha-textfield
           .label=${"Preview height (px)"}
-          .value=${String(cfg.height ?? 56)}
+          .value=${String(cfg.height ?? 200)}
           @value-changed=${this._onHeight}
+        ></ha-textfield>
+        <ha-textfield
+          .label=${"Layout id (optional)"}
+          .value=${cfg.layout_id ?? ""}
+          @value-changed=${this._onLayoutId}
         ></ha-textfield>
       </div>
     `;
@@ -51,8 +56,16 @@ export class WledStudioCardEditor extends LitElement {
     const value = Number((ev.detail as { value: string }).value);
     this._fire({
       ...(this._config ?? defaultConfig()),
-      height: Number.isFinite(value) ? value : 56,
+      height: Number.isFinite(value) ? value : 200,
     });
+  }
+
+  private _onLayoutId(ev: CustomEvent): void {
+    const value = (ev.detail as { value: string }).value.trim();
+    const next = { ...(this._config ?? defaultConfig()) };
+    if (value) next.layout_id = value;
+    else delete next.layout_id;
+    this._fire(next);
   }
 
   private _fire(config: WledStudioCardConfig): void {

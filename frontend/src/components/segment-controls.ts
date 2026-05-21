@@ -497,6 +497,7 @@ export class WledSegmentControls extends BasePoweredElement {
         </label>
 
         <wled-color-wheel-rgbw
+          .controllerId=${this.controllerId}
           .rgb=${[col[0], col[1], col[2]] as [number, number, number]}
           .white=${col[3]}
           .awm=${busRgbwm}

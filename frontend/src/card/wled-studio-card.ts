@@ -6,8 +6,9 @@ import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-eleme
 import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
 import { fetchDeviceState } from "../api/wled-state.js";
-import type { WledStripPreview } from "../components/strip-preview.js";
-import "../components/strip-preview.js";
+import { layoutList, type LayoutRecord } from "../api/layout.js";
+import type { WledGeometryPreview } from "../components/geometry-preview.js";
+import "../components/geometry-preview.js";
 import "../components/segment-controls.js";
 
 export const CARD_TAG = "wled-studio-card";
@@ -15,7 +16,10 @@ export const CARD_TAG = "wled-studio-card";
 export interface WledStudioCardConfig {
   type: string;
   controller?: string;
+  /** Preview area min height (px); layout uses 16:9 aspect. */
   height?: number;
+  /** Saved layout id; defaults to first layout for the controller. */
+  layout_id?: string;
   show_scenes?: boolean;
 }
 
@@ -28,8 +32,10 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @state() private _pixelCount = 210;
   @state() private _previewStatus = "connecting";
   @state() private _hint = "";
+  @state() private _layoutId = "";
+  @state() private _fixtureId = "";
 
-  @query("wled-strip-preview") private _preview?: WledStripPreview;
+  @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
   @query("wled-segment-controls") private _segmentControls?: import("../components/segment-controls.js").WledSegmentControls;
 
   @state() private _selectedSegId = -1;
@@ -48,7 +54,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   public getCardSize(): number {
-    return 5;
+    return 6;
   }
 
   public static getConfigElement(): HTMLElement {
@@ -60,13 +66,12 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   public static getStubConfig(): WledStudioCardConfig {
-    return { type: `custom:${CARD_TAG}`, controller: "Cloud", height: 56 };
+    return { type: `custom:${CARD_TAG}`, controller: "Cloud", height: 200 };
   }
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
     this._syncSegmentsFromControls();
-    // Lovelace passes hass on every state change — do not re-bootstrap each time.
     if (changed.has("config")) {
       this._bindConnectionReady();
       void this._bootstrap(true);
@@ -120,6 +125,14 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     );
   }
 
+  private _pickLayout(layouts: LayoutRecord[]): LayoutRecord | undefined {
+    const key = (this.config?.layout_id ?? "").trim();
+    if (key) {
+      return layouts.find((l) => l.id === key || l.name === key);
+    }
+    return layouts[0];
+  }
+
   private async _bootstrap(force = false): Promise<void> {
     if (!this.hass?.connection) return;
     const controllerKey = (this.config?.controller ?? "").trim();
@@ -164,6 +177,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         this._pixelCount = Number(pick.pixel_count) || 210;
         this._bootstrapControllerKey = controllerKey;
         this._hint = "";
+        await this._loadLayout();
         this._startLive();
         void this._loadSegments();
         this.requestUpdate();
@@ -184,6 +198,27 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     this._hint =
       "WLED Studio is not responding. In Settings → Devices & services, open WLED Studio — Cloud → Reload, then hard-refresh this page (Ctrl+Shift+R).";
     this.requestUpdate();
+  }
+
+  private async _loadLayout(): Promise<void> {
+    if (!this.hass?.connection || !this._controllerId) return;
+    try {
+      const layouts = await layoutList(this.hass.connection, this._controllerId);
+      const layout = this._pickLayout(layouts);
+      if (!layout) {
+        this._layoutId = "";
+        this._fixtureId = "";
+        return;
+      }
+      this._layoutId = layout.id;
+      const first = layout.fixtures[0] as Record<string, unknown> | undefined;
+      this._fixtureId = first ? String(first.id ?? "fixture-0") : "fixture-0";
+      if (layout.pixel_count) this._pixelCount = layout.pixel_count;
+      await this._preview?.refresh();
+    } catch {
+      this._layoutId = "";
+      this._fixtureId = "";
+    }
   }
 
   private _startLive(): void {
@@ -226,7 +261,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       }
       this.requestUpdate();
     } catch {
-      /* strip tap-to-select degrades gracefully */
+      /* tap-to-select degrades gracefully */
     }
   }
 
@@ -250,8 +285,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   protected override render() {
-    const height = this.config?.height ?? 56;
+    const height = this.config?.height ?? 200;
     const remote = this.remote.state;
+    const previewStyle = `--wled-preview-height: ${height}px`;
 
     return html`
       <div class="card" role="region" aria-label="WLED Studio card">
@@ -271,14 +307,21 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           </button>
         </header>
 
-        <wled-strip-preview
+        <wled-geometry-preview
+          class="layout-preview"
+          style=${previewStyle}
+          compact
+          externalLive
           .heightPx=${height}
+          .connection=${this.hass?.connection}
+          .controllerId=${this._controllerId}
+          .layoutId=${this._layoutId}
+          .fixtureId=${this._fixtureId}
           .pixelCount=${this._pixelCount}
           .segments=${this._segments}
           .selectedSegId=${this._selectedSegId}
-          .hass=${this.hass}
           @segment-select=${this._onStripSegmentSelect}
-        ></wled-strip-preview>
+        ></wled-geometry-preview>
 
         <div class="controls">
           <label class="sr-only" for="brightness">Brightness</label>
@@ -315,6 +358,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         </button>
         ${this._hint
           ? html`<p class="hint">${this._hint}</p>`
+          : null}
+        ${!this._layoutId && this._controllerId
+          ? html`<p class="hint layout-hint">
+              No saved layout — create one in Studio → Layout to show your floorplan here.
+            </p>`
           : null}
       </div>
     `;
@@ -357,6 +405,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         cursor: pointer;
         padding: 4px;
       }
+      .layout-preview {
+        display: block;
+        width: 100%;
+        margin-bottom: 4px;
+      }
       .controls {
         margin: 10px 0;
       }
@@ -379,6 +432,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         opacity: 0.75;
         margin: 8px 0 0;
       }
+      .layout-hint {
+        font-style: italic;
+      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -397,5 +453,5 @@ declare global {
 }
 
 export function getStubConfig(): WledStudioCardConfig {
-  return { type: `custom:${CARD_TAG}`, controller: "", height: 56 };
+  return { type: `custom:${CARD_TAG}`, controller: "", height: 200 };
 }

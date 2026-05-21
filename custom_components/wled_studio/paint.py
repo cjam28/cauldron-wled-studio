@@ -55,22 +55,30 @@ class PaintSession:
             except asyncio.CancelledError:
                 pass
         self._keepalive_task = None
-        if was_active:
-            async with self._commit_lock:
-                if commit and self._last_payload and self._transport:
-                    packets = build_ddp_packets(
-                        self._last_payload,
-                        rgbw=self._last_rgbw,
-                        byte_offset=0,
-                        start_seq=self._seq,
+        try:
+            if was_active:
+                async with self._commit_lock:
+                    if commit and self._last_payload and self._transport:
+                        packets = build_ddp_packets(
+                            self._last_payload,
+                            rgbw=self._last_rgbw,
+                            byte_offset=0,
+                            start_seq=self._seq,
+                        )
+                        self._seq = (self._seq + len(packets)) & 0x0F or 1
+                        for pkt in packets:
+                            self._transport.sendto(pkt, (self._host, DDP_PORT))
+        finally:
+            if was_active:
+                try:
+                    await self._client.apply_state({"live": False})
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Failed to clear WLED live mode on %s", self._host, exc_info=True
                     )
-                    self._seq = (self._seq + len(packets)) & 0x0F or 1
-                    for pkt in packets:
-                        self._transport.sendto(pkt, (self._host, DDP_PORT))
-                await self._client.apply_state({"live": False})
-        if self._transport:
-            self._transport.close()
-            self._transport = None
+            if self._transport:
+                self._transport.close()
+                self._transport = None
 
     async def send_frame(self, payload: bytes, *, rgbw: bool = True) -> None:
         if not self._active or not self._transport:

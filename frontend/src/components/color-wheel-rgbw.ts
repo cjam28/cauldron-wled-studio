@@ -3,6 +3,7 @@ import { property, query } from "lit/decorators.js";
 import iro from "@jaames/iro";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import "./color-swatch-bar.js";
 
 export const COLOR_WHEEL_TAG = "wled-color-wheel-rgbw";
 
@@ -12,6 +13,8 @@ export class WledColorWheelRgbw extends BasePoweredElement {
   @property({ type: Number }) white = 0;
   @property({ type: Number }) awm = 0;
   @property({ type: Boolean }) showWhite = true;
+  /** When set, shows saved swatches persisted per controller. */
+  @property() controllerId = "";
 
   @query(".wheel-host") private _host?: HTMLDivElement;
 
@@ -80,9 +83,22 @@ export class WledColorWheelRgbw extends BasePoweredElement {
     );
   }
 
+  private _onSwatchSelect(
+    ev: CustomEvent<{ rgb: [number, number, number]; white: number }>
+  ): void {
+    this.dispatchEvent(
+      new CustomEvent("color-change", {
+        detail: ev.detail,
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   protected override render() {
     return html`
-      <div class="wrap">
+      <div class="picker">
+        <div class="wrap">
         <div class="wheel-host" aria-label="Color wheel"></div>
         <div class="extras">
           ${this.showWhite
@@ -115,6 +131,17 @@ export class WledColorWheelRgbw extends BasePoweredElement {
             derives white from RGB and the slider can add extra W.
           </p>
         </div>
+        </div>
+        ${this.controllerId
+          ? html`
+              <wled-color-swatch-bar
+                .controllerId=${this.controllerId}
+                .rgb=${this.rgb}
+                .white=${this.white}
+                @swatch-select=${this._onSwatchSelect}
+              ></wled-color-swatch-bar>
+            `
+          : null}
       </div>
     `;
   }
@@ -122,6 +149,11 @@ export class WledColorWheelRgbw extends BasePoweredElement {
   static override styles = [
     ...sharedBaseStyles,
     css`
+      .picker {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+      }
       .wrap {
         display: flex;
         gap: 12px;

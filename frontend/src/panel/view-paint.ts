@@ -5,6 +5,7 @@ import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { debounce } from "../utils/debounce.js";
 import { formatHaError } from "../utils/ha-error.js";
+import { fetchDeviceState } from "../api/wled-state.js";
 import { paintFrame, paintStart, paintStop } from "../api/paint.js";
 
 @safeCustomElement("wled-view-paint")
@@ -36,13 +37,12 @@ export class WledViewPaint extends BasePoweredElement {
   protected override async onPoweredConnect(): Promise<void> {
     if (!this.connection || !this.controllerId) return;
     try {
-      const res = await paintStart(this.connection, this.controllerId);
-      this._active = true;
-      this._warn = res.wifi_sleep_warning ?? "";
-      if (res.pixel_count) this._pixelCount = res.pixel_count;
-      if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
+      const snap = await fetchDeviceState(this.connection, this.controllerId);
+      const leds = snap.info?.leds as { count?: number; rgbw?: boolean } | undefined;
+      if (leds?.count) this._pixelCount = leds.count;
+      if (typeof leds?.rgbw === "boolean") this._rgbw = leds.rgbw;
       this._allocBuffer();
-      this._status = "Paint ready";
+      this._status = "Drag the strip to start live paint";
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -52,12 +52,29 @@ export class WledViewPaint extends BasePoweredElement {
     this._flushDebounced.cancel();
     if (this._active && this.connection && this.controllerId) {
       try {
-        await paintStop(this.connection, this.controllerId, true);
+        await paintStop(this.connection, this.controllerId, false);
       } catch {
         /* ignore */
       }
     }
     this._active = false;
+  }
+
+  private async _ensureSession(): Promise<boolean> {
+    if (this._active || !this.connection || !this.controllerId) return this._active;
+    try {
+      const res = await paintStart(this.connection, this.controllerId);
+      this._active = true;
+      this._warn = res.wifi_sleep_warning ?? "";
+      if (res.pixel_count) this._pixelCount = res.pixel_count;
+      if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
+      this._allocBuffer();
+      this._status = "Live paint";
+      return true;
+    } catch (err) {
+      this._status = formatHaError(err);
+      return false;
+    }
   }
 
   private _allocBuffer(): void {
@@ -124,8 +141,9 @@ export class WledViewPaint extends BasePoweredElement {
     }
   }
 
-  private _onPointer(ev: PointerEvent): void {
+  private async _onPointer(ev: PointerEvent): Promise<void> {
     if (!this._canvas) return;
+    if (!(await this._ensureSession())) return;
     const rect = this._canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const led = Math.min(
@@ -136,12 +154,28 @@ export class WledViewPaint extends BasePoweredElement {
   }
 
   private async _commit(): Promise<void> {
-    if (!this.connection) return;
+    if (!this.connection || !this._active) return;
     this._flushDebounced.cancel();
     await this._flushNow();
-    await paintStop(this.connection, this.controllerId, true);
+    try {
+      await paintStop(this.connection, this.controllerId, true);
+      this._status = "Committed";
+    } catch (err) {
+      this._status = formatHaError(err);
+    }
     this._active = false;
-    this._status = "Committed";
+  }
+
+  private async _cancel(): Promise<void> {
+    if (!this.connection || !this._active) return;
+    this._flushDebounced.cancel();
+    try {
+      await paintStop(this.connection, this.controllerId, false);
+      this._status = "Live mode released";
+    } catch (err) {
+      this._status = formatHaError(err);
+    }
+    this._active = false;
   }
 
   protected override render() {
@@ -176,7 +210,12 @@ export class WledViewPaint extends BasePoweredElement {
               }}
             />
           </label>
-          <button type="button" @click=${() => this._commit()}>End live &amp; commit</button>
+          <button type="button" ?disabled=${!this._active} @click=${() => this._commit()}>
+            End live &amp; commit
+          </button>
+          <button type="button" ?disabled=${!this._active} @click=${() => this._cancel()}>
+            Cancel live
+          </button>
         </div>
         <canvas
           class="strip"

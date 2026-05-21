@@ -7,6 +7,7 @@ import type { LiveFrameEvent } from "../api/live-stream.js";
 import { subscribeLive } from "../api/live-stream.js";
 import { expandToFixture } from "../api/lv-frame-parser.js";
 import { layoutGet, layoutResolvePositions, type LedPosition } from "../api/layout.js";
+import type { WledSegment } from "../api/wled-state.js";
 import {
   backgroundFromLayout,
   drawBackgroundLayer,
@@ -26,6 +27,13 @@ export class WledGeometryPreview extends BasePoweredElement {
   @property() fixtureId = "";
   @property({ type: Number }) pixelCount = 210;
   @property({ type: Number }) dotRadius = 4;
+  /** Card / compact embed: fixed preview height, no dots toggle, parent feeds live frames. */
+  @property({ type: Boolean, reflect: true }) compact = false;
+  @property({ type: Number }) heightPx = 200;
+  /** When true, do not subscribe to live WS (parent calls setFrame). */
+  @property({ type: Boolean }) externalLive = false;
+  @property({ type: Array }) segments: WledSegment[] = [];
+  @property({ type: Number }) selectedSegId = -1;
 
   @state() private _positions: LedPosition[] = [];
   @state() private _status = "waiting";
@@ -39,6 +47,7 @@ export class WledGeometryPreview extends BasePoweredElement {
   private _pixels?: Uint8ClampedArray;
   private _raf = 0;
   private _resizeObs?: ResizeObserver;
+  private _hoverLed = -1;
 
   /** Called externally (e.g. by view-layout) when a live frame arrives. */
   setFrame(frame: LiveFrameEvent | null): void {
@@ -60,7 +69,9 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   protected override onPoweredConnect(): void {
     void this._resolvePositions();
-    this._attachLiveStream();
+    if (!this.externalLive) {
+      this._attachLiveStream();
+    }
   }
 
   protected override onPoweredDisconnect(): void {
@@ -78,7 +89,12 @@ export class WledGeometryPreview extends BasePoweredElement {
       changed.has("fixtureId")
     ) {
       void this._resolvePositions();
-      this._attachLiveStream();
+      if (!this.externalLive) {
+        this._attachLiveStream();
+      }
+    }
+    if (changed.has("selectedSegId") || changed.has("segments")) {
+      this._schedPaint();
     }
   }
 
@@ -89,8 +105,140 @@ export class WledGeometryPreview extends BasePoweredElement {
       this._ctx = this._canvas.getContext("2d", { alpha: true }) ?? undefined;
       this._resizeObs = new ResizeObserver(() => this._onResize());
       this._resizeObs.observe(wrap);
+      if (this.compact || this.segments.length > 0) {
+        this._canvas.style.cursor = "pointer";
+        this._canvas.addEventListener("click", this._onCanvasClick);
+        this._canvas.addEventListener("mousemove", this._onCanvasMove);
+        this._canvas.addEventListener("mouseleave", this._onCanvasLeave);
+        this.addUnsub(() => {
+          this._canvas?.removeEventListener("click", this._onCanvasClick);
+          this._canvas?.removeEventListener("mousemove", this._onCanvasMove);
+          this._canvas?.removeEventListener("mouseleave", this._onCanvasLeave);
+        });
+      }
     }
     this._onResize();
+  }
+
+  private _onCanvasClick = (ev: MouseEvent): void => {
+    const led = this._ledAtEvent(ev);
+    if (led < 0) return;
+    const segId = this._segmentForLed(led);
+    if (segId < 0) return;
+    this.dispatchEvent(
+      new CustomEvent("segment-select", {
+        detail: { segmentId: segId, ledIndex: led },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  };
+
+  private _onCanvasMove = (ev: MouseEvent): void => {
+    const led = this._ledAtEvent(ev);
+    if (led !== this._hoverLed) {
+      this._hoverLed = led;
+      this._schedPaint();
+    }
+  };
+
+  private _onCanvasLeave = (): void => {
+    if (this._hoverLed >= 0) {
+      this._hoverLed = -1;
+      this._schedPaint();
+    }
+  };
+
+  private _segmentForLed(led: number): number {
+    for (const seg of this.segments) {
+      const start = seg.start ?? 0;
+      const stop = seg.stop ?? seg.len ?? this.pixelCount;
+      if (led >= start && led < stop) return seg.id;
+    }
+    if (this.segments.length === 1) return this.segments[0].id;
+    return -1;
+  }
+
+  private _ledInSegment(led: number, segId: number): boolean {
+    if (segId < 0) return false;
+    const seg = this.segments.find((s) => s.id === segId);
+    if (!seg) return false;
+    const start = seg.start ?? 0;
+    const stop = seg.stop ?? seg.len ?? this.pixelCount;
+    return led >= start && led < stop;
+  }
+
+  private _ledAtEvent(ev: MouseEvent): number {
+    const hit = this._hitTest(ev.clientX, ev.clientY);
+    return hit?.led ?? -1;
+  }
+
+  private _hitTest(clientX: number, clientY: number): LedPosition | null {
+    const canvas = this._canvas;
+    if (!canvas || this._positions.length === 0) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    const map = this._layoutMap(w, h);
+    if (!map) return null;
+    const { toCanvas, hitR } = map;
+    let best: LedPosition | null = null;
+    let bestD = hitR * hitR;
+    for (const p of this._positions) {
+      const [cx, cy] = toCanvas(p.x, p.y);
+      const dx = cx - x;
+      const dy = cy - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD) {
+        bestD = d2;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  private _layoutMap(
+    w: number,
+    h: number
+  ): {
+    toCanvas: (x: number, y: number) => [number, number];
+    hitR: number;
+    lineW: number;
+  } | null {
+    const positions = this._positions;
+    if (positions.length === 0) return null;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const p of positions) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const r = this.dotRadius;
+    const pad = r * 3;
+    const scaleX = (w - pad * 2) / rangeX;
+    const scaleY = (h - pad * 2) / rangeY;
+    const scale = Math.min(scaleX, scaleY);
+    const toCanvas = (x: number, y: number): [number, number] => [
+      pad + (x - minX) * scale,
+      pad + (y - minY) * scale,
+    ];
+    const lineW = Math.max(2.5, r * 1.35);
+    return { toCanvas, hitR: Math.max(10, lineW * 2.5), lineW };
+  }
+
+  private _accentStroke(): string {
+    const css = getComputedStyle(this);
+    const primary = css.getPropertyValue("--primary-color").trim();
+    return primary || "#18a0fb";
   }
 
   private _onResize(): void {
@@ -213,39 +361,18 @@ export class WledGeometryPreview extends BasePoweredElement {
     const pixels = this._pixels;
     const positions = [...this._positions].sort((a, b) => a.led - b.led);
     const r = this.dotRadius;
+    const map = this._layoutMap(w, h);
 
-    if (positions.length > 0) {
-      let minX = Infinity,
-        maxX = -Infinity,
-        minY = Infinity,
-        maxY = -Infinity;
-      for (const p of positions) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-      }
-      const rangeX = maxX - minX || 1;
-      const rangeY = maxY - minY || 1;
-      const pad = r * 3;
-      const scaleX = (w - pad * 2) / rangeX;
-      const scaleY = (h - pad * 2) / rangeY;
-      const scale = Math.min(scaleX, scaleY);
-
-      const toCanvas = (x: number, y: number): [number, number] => [
-        pad + (x - minX) * scale,
-        pad + (y - minY) * scale,
-      ];
-
+    if (positions.length > 0 && map) {
+      const { toCanvas, lineW } = map;
       const disableBloom = this.remote.state.disableBloom;
-      const lineW = Math.max(2.5, r * 1.35);
 
       if (!this._showDots) {
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.lineWidth = lineW;
 
-        const drawSegment = (from: LedPosition, to: LedPosition): void => {
+        const drawStripEdge = (from: LedPosition, to: LedPosition): void => {
           const [x0, y0] = toCanvas(from.x, from.y);
           const [x1, y1] = toCanvas(to.x, to.y);
           const [red, green, blue] = this._rgbForLed(pixels, from.led);
@@ -263,10 +390,10 @@ export class WledGeometryPreview extends BasePoweredElement {
         };
 
         for (let i = 0; i < positions.length - 1; i++) {
-          drawSegment(positions[i], positions[i + 1]);
+          drawStripEdge(positions[i], positions[i + 1]);
         }
         if (this._closed && positions.length >= 2) {
-          drawSegment(positions[positions.length - 1], positions[0]);
+          drawStripEdge(positions[positions.length - 1], positions[0]);
         }
         ctx.shadowBlur = 0;
       }
@@ -290,6 +417,8 @@ export class WledGeometryPreview extends BasePoweredElement {
         }
         ctx.shadowBlur = 0;
       }
+
+      this._paintSegmentSelection(ctx, positions, toCanvas, lineW);
     } else {
       // Linear fallback
       const n = this.pixelCount;
@@ -311,25 +440,80 @@ export class WledGeometryPreview extends BasePoweredElement {
     }
   }
 
+  /** Accent border along the selected segment path (no per-LED white overlay). */
+  private _paintSegmentSelection(
+    ctx: CanvasRenderingContext2D,
+    positions: LedPosition[],
+    toCanvas: (x: number, y: number) => [number, number],
+    lineW: number
+  ): void {
+    const highlightId =
+      this.selectedSegId >= 0
+        ? this.selectedSegId
+        : this._hoverLed >= 0
+          ? this._segmentForLed(this._hoverLed)
+          : -1;
+    if (highlightId < 0 || this.segments.length === 0) return;
+
+    const segPts = positions.filter((p) => this._ledInSegment(p.led, highlightId));
+    if (segPts.length < 2) return;
+
+    const accent = this._accentStroke();
+    const drawPath = (): void => {
+      const [x0, y0] = toCanvas(segPts[0].x, segPts[0].y);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      for (let i = 1; i < segPts.length; i++) {
+        const [xi, yi] = toCanvas(segPts[i].x, segPts[i].y);
+        ctx.lineTo(xi, yi);
+      }
+    };
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowBlur = 0;
+
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+    ctx.lineWidth = lineW + 6;
+    drawPath();
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = lineW + 3;
+    drawPath();
+    ctx.stroke();
+
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2;
+    drawPath();
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
   protected override render() {
+    const aria = this.compact
+      ? "Live layout preview — tap the strip to select a segment"
+      : "LED geometry preview — positions mapped from fixture layout";
     return html`
-      <div class="preview-shell">
-        <label class="mode-toggle">
-          <input
-            type="checkbox"
-            .checked=${this._showDots}
-            @change=${(e: Event) => {
-              this._showDots = (e.target as HTMLInputElement).checked;
-              this._schedPaint();
-            }}
-          />
-          LED dots
-        </label>
-        <div
-          class="wrap"
-          role="img"
-          aria-label="LED geometry preview — positions mapped from fixture layout"
-        >
+      <div class="preview-shell ${this.compact ? "compact" : ""}">
+        ${this.compact
+          ? null
+          : html`
+              <label class="mode-toggle">
+                <input
+                  type="checkbox"
+                  .checked=${this._showDots}
+                  @change=${(e: Event) => {
+                    this._showDots = (e.target as HTMLInputElement).checked;
+                    this._schedPaint();
+                  }}
+                />
+                LED dots
+              </label>
+            `}
+        <div class="wrap" role="img" aria-label=${aria}>
           <canvas></canvas>
           ${this._status !== "live"
             ? html`<span class="overlay">${this._status}</span>`
@@ -349,6 +533,12 @@ export class WledGeometryPreview extends BasePoweredElement {
         min-height: 0;
         max-height: 100%;
         overflow: hidden;
+      }
+      :host([compact]) {
+        display: block;
+        flex: none;
+        max-height: none;
+        overflow: visible;
       }
       .preview-shell {
         display: flex;
@@ -372,6 +562,12 @@ export class WledGeometryPreview extends BasePoweredElement {
       }
       .mode-toggle input {
         margin: 0;
+      }
+      .preview-shell.compact .wrap {
+        min-height: var(--wled-preview-height, 200px);
+        aspect-ratio: 16 / 9;
+        max-height: none;
+        flex: none;
       }
       .wrap {
         position: relative;

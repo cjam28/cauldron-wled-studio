@@ -60,7 +60,7 @@ def build_ddp_packets(
         is_last = off >= total
         flags = DDP_FLAG_V1 | (DDP_FLAG_PUSH if is_last else 0)
         header = struct.pack(
-            ">BBBIH",
+            ">BBBBIH",
             flags,
             seq,
             pkt_type,
@@ -82,7 +82,7 @@ def parse_ddp_packet(packet: bytes) -> dict[str, int | bytes]:
     if len(packet) < DDP_HEADER_LEN:
         raise DdpBuildError("packet too short")
     flags, seq, pkt_type, dest_id, data_off, data_len = struct.unpack(
-        ">BBBIH", packet[:DDP_HEADER_LEN]
+        ">BBBBIH", packet[:DDP_HEADER_LEN]
     )
     payload = packet[DDP_HEADER_LEN : DDP_HEADER_LEN + data_len]
     if len(payload) != data_len:
