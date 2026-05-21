@@ -6,7 +6,12 @@ import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-eleme
 import type { LiveFrameEvent } from "../api/live-stream.js";
 import { subscribeLive } from "../api/live-stream.js";
 import { expandToFixture } from "../api/lv-frame-parser.js";
-import { layoutResolvePositions, type LedPosition } from "../api/layout.js";
+import { layoutGet, layoutResolvePositions, type LedPosition } from "../api/layout.js";
+import {
+  backgroundFromLayout,
+  drawBackgroundLayer,
+  type BackgroundLayer,
+} from "../utils/background-layer.js";
 
 /**
  * 2-D scatter preview: one circle per LED positioned from resolved geometry.
@@ -23,6 +28,8 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   @state() private _positions: LedPosition[] = [];
   @state() private _status = "waiting";
+  private _bgLayer: BackgroundLayer | null = null;
+  private _bgImage: HTMLImageElement | null = null;
   private _canvas?: HTMLCanvasElement;
   private _ctx?: CanvasRenderingContext2D;
   private _pixels?: Uint8ClampedArray;
@@ -92,6 +99,17 @@ export class WledGeometryPreview extends BasePoweredElement {
   private async _resolvePositions(): Promise<void> {
     if (!this.connection || !this.controllerId || !this.fixtureId) return;
     try {
+      if (this.layoutId) {
+        const layout = await layoutGet(
+          this.connection,
+          this.controllerId,
+          this.layoutId
+        );
+        if (layout) {
+          this._bgLayer = backgroundFromLayout(layout);
+          this._loadBackgroundImage();
+        }
+      }
       this._positions = await layoutResolvePositions(
         this.connection,
         this.controllerId,
@@ -102,6 +120,21 @@ export class WledGeometryPreview extends BasePoweredElement {
     } catch {
       this._positions = [];
     }
+  }
+
+  private _loadBackgroundImage(): void {
+    const url = this._bgLayer?.url;
+    if (!url) {
+      this._bgImage = null;
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      this._bgImage = img;
+      this._schedPaint();
+    };
+    img.src = url;
   }
 
   private _attachLiveStream(): void {
@@ -130,6 +163,10 @@ export class WledGeometryPreview extends BasePoweredElement {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#0d0d0d";
     ctx.fillRect(0, 0, w, h);
+
+    if (this._bgImage?.complete && this._bgLayer) {
+      drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
+    }
 
     const pixels = this._pixels;
     const positions = this._positions;

@@ -15,6 +15,13 @@ import {
 import { uploadLayoutBackground } from "../api/layout-background.js";
 import { fetchDeviceState } from "../api/wled-state.js";
 import { importSegmentStarts } from "../utils/layout-tools.js";
+import {
+  backgroundFromLayout,
+  drawBackgroundLayer,
+  type BackgroundLayer,
+} from "../utils/background-layer.js";
+import "./layout-photo-editor.js";
+import type { WledLayoutPhotoEditor } from "./layout-photo-editor.js";
 
 /** Vertex used internally while editing. */
 interface Vertex {
@@ -51,16 +58,22 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _status = "";
   @state() private _busy = false;
   @state() private _closed = false;
-  @state() private _tool: "select" | "pen" = "select";
+  @state() private _tool: "select" | "pen" | "photo" = "select";
   @state() private _backgroundUrl: string | null = null;
+  @state() private _bgLayer: BackgroundLayer | null = null;
   @state() private _scalePxPerM: number | null = null;
   @state() private _calibActive = false;
   @state() private _calibMeters = "1";
-  @state() private _bgOpacity = 0.45;
 
   private _calibPts: Array<[number, number]> = [];
   private _penStroke: Array<[number, number]> = [];
   private _bgImage: HTMLImageElement | null = null;
+  private _photoPan: {
+    px: number;
+    py: number;
+    ox: number;
+    oy: number;
+  } | null = null;
 
   private _canvas?: HTMLCanvasElement;
   private _canvasWrap?: HTMLElement;
@@ -109,6 +122,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     canvas.addEventListener("pointercancel", this._onPointerUp);
     canvas.addEventListener("dblclick", this._onDblClick);
     canvas.addEventListener("contextmenu", this._onContextMenu);
+    canvas.addEventListener("wheel", this._onWheel, { passive: false });
   }
 
   private _unbindCanvas(): void {
@@ -120,8 +134,18 @@ export class WledLayoutDesigner extends BasePoweredElement {
     canvas.removeEventListener("pointercancel", this._onPointerUp);
     canvas.removeEventListener("dblclick", this._onDblClick);
     canvas.removeEventListener("contextmenu", this._onContextMenu);
+    canvas.removeEventListener("wheel", this._onWheel);
     this._boundCanvas = undefined;
   }
+
+  private _onWheel = (ev: WheelEvent): void => {
+    if (this._tool !== "photo" || !this._bgLayer) return;
+    ev.preventDefault();
+    const delta = ev.deltaY > 0 ? -0.04 : 0.04;
+    const scale = Math.max(0.25, Math.min(4, (this._bgLayer.scale ?? 1) + delta));
+    this._bgLayer = { ...this._bgLayer, scale };
+    this._paint();
+  };
 
   override disconnectedCallback(): void {
     this._resizeObs?.disconnect();
@@ -244,6 +268,17 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
 
+    if (this._tool === "photo" && this._bgLayer) {
+      this._photoPan = {
+        px: cx,
+        py: cy,
+        ox: this._bgLayer.offsetX ?? 0,
+        oy: this._bgLayer.offsetY ?? 0,
+      };
+      this._canvas?.setPointerCapture(ev.pointerId);
+      return;
+    }
+
     if (this._tool === "pen") {
       this._penStroke = [[cx, cy]];
       this._canvas?.setPointerCapture(ev.pointerId);
@@ -266,6 +301,19 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _onPointerMove = (ev: PointerEvent): void => {
     const [cx, cy] = this._canvasXY(ev);
 
+    if (this._photoPan && this._bgLayer) {
+      const canvas = this._canvas!;
+      const dx = (cx - this._photoPan.px) / canvas.width;
+      const dy = (cy - this._photoPan.py) / canvas.height;
+      this._bgLayer = {
+        ...this._bgLayer,
+        offsetX: this._photoPan.ox + dx,
+        offsetY: this._photoPan.oy + dy,
+      };
+      this._paint();
+      return;
+    }
+
     if (this._tool === "pen" && this._penStroke.length > 0) {
       const last = this._penStroke[this._penStroke.length - 1];
       if (Math.hypot(cx - last[0], cy - last[1]) > 2) {
@@ -284,6 +332,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
   };
 
   private _onPointerUp = (ev: PointerEvent): void => {
+    if (this._photoPan) {
+      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._photoPan = null;
+      return;
+    }
     if (this._tool === "pen" && this._penStroke.length > 0) {
       this._canvas?.releasePointerCapture(ev.pointerId);
       this._finishPenStroke();
@@ -367,10 +420,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ctx.fillStyle = "#111827";
     ctx.fillRect(0, 0, w, h);
 
-    if (this._bgImage?.complete && this._bgImage.naturalWidth > 0) {
-      ctx.globalAlpha = this._bgOpacity;
-      ctx.drawImage(this._bgImage, 0, 0, w, h);
-      ctx.globalAlpha = 1;
+    if (this._bgImage?.complete && this._bgImage.naturalWidth > 0 && this._bgLayer) {
+      drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
     }
 
     const verts = this._vertices;
@@ -382,14 +433,19 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
 
-    // Draw LED position dots
-    ctx.fillStyle = DOT_COLOR;
+    const hasPhoto = Boolean(this._bgImage);
     for (const { x, y } of this._ledPositions) {
       const cx = x * this._viewScale + this._viewOx;
       const cy = y * this._viewScale + this._viewOy;
+      if (hasPhoto) {
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "rgba(120,255,160,0.85)";
+      }
       ctx.beginPath();
-      ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
+      ctx.arc(cx, cy, hasPhoto ? DOT_R + 1 : DOT_R, 0, Math.PI * 2);
+      ctx.fillStyle = DOT_COLOR;
       ctx.fill();
+      ctx.shadowBlur = 0;
     }
 
     // Draw polyline (skip duplicate closing point for display)
@@ -502,7 +558,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
       }
       this._vertices = vertices;
       this._closed = Boolean(fixture.closed);
-      this._backgroundUrl = layout.background_url ?? null;
+      this._bgLayer = backgroundFromLayout(layout);
+      this._backgroundUrl = this._bgLayer?.url ?? layout.background_url ?? null;
       this._scalePxPerM = layout.scale_px_per_m ?? null;
       this._loadBackgroundImage();
 
@@ -553,6 +610,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       name: "Layout",
       pixel_count: this.pixelCount,
       background_url: this._backgroundUrl,
+      background: this._bgLayer,
       scale_px_per_m: this._scalePxPerM,
       fixtures: [
         {
@@ -610,9 +668,25 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const input = ev.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
-    if (!file || !this.controllerId || !this.layoutId) return;
+    if (!file) return;
+    const editor = this.renderRoot.querySelector<WledLayoutPhotoEditor>(
+      "wled-layout-photo-editor"
+    );
+    if (!editor) return;
+    try {
+      await editor.openWithFile(file);
+    } catch (err) {
+      this._status = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  private async _onPhotoApply(
+    ev: CustomEvent<{ file: File; layer: BackgroundLayer }>
+  ): Promise<void> {
+    const { file, layer } = ev.detail;
+    if (!this.controllerId || !this.layoutId) return;
     this._busy = true;
-    this._status = "Uploading floorplan…";
+    this._status = "Uploading photo…";
     try {
       const { background_url } = await uploadLayoutBackground(
         this.controllerId,
@@ -620,13 +694,34 @@ export class WledLayoutDesigner extends BasePoweredElement {
         file
       );
       this._backgroundUrl = background_url;
+      this._bgLayer = {
+        ...layer,
+        url: background_url,
+        cropX: 0,
+        cropY: 0,
+        cropW: 1,
+        cropH: 1,
+      };
       this._loadBackgroundImage();
-      this._status = "Floorplan uploaded — Save layout to persist";
+      this._status = "Photo ready — align with Photo tool, then Save layout";
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     } finally {
       this._busy = false;
     }
+  }
+
+  private _updateBgLayer(patch: Partial<BackgroundLayer>): void {
+    if (!this._bgLayer) return;
+    this._bgLayer = { ...this._bgLayer, ...patch };
+    this._paint();
+  }
+
+  private _clearPhoto(): void {
+    this._bgLayer = null;
+    this._backgroundUrl = null;
+    this._bgImage = null;
+    this._paint();
   }
 
   private async _save(): Promise<void> {
@@ -705,6 +800,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
             >
               Pen
             </button>
+            <button
+              class=${this._tool === "photo" ? "tool active" : "tool"}
+              ?disabled=${!this._bgLayer}
+              @click=${() => {
+                this._tool = "photo";
+              }}
+            >
+              Photo
+            </button>
           </div>
 
           <label class="check-row">
@@ -732,6 +836,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
             <ul>
               <li>Draw freehand → releases as vertices</li>
             </ul>
+            <strong>Photo tool</strong>
+            <ul>
+              <li>Drag to pan photo under the strip</li>
+              <li>Scroll wheel to zoom photo</li>
+            </ul>
           </div>
 
           <div class="action-stack">
@@ -739,28 +848,94 @@ export class WledLayoutDesigner extends BasePoweredElement {
               Import segments from WLED
             </button>
             <label class="file-btn secondary">
-              Upload floorplan
+              Add room photo…
               <input
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/heic"
+                accept="image/jpeg,image/png,image/webp,image/heic,.heic"
+                capture="environment"
                 hidden
                 @change=${this._onBackgroundFile}
               />
             </label>
-            <label class="check-row">
-              Floorplan opacity
-              <input
-                type="range"
-                min="0.1"
-                max="1"
-                step="0.05"
-                .value=${String(this._bgOpacity)}
-                @input=${(e: Event) => {
-                  this._bgOpacity = parseFloat((e.target as HTMLInputElement).value);
-                  this._paint();
-                }}
-              />
-            </label>
+            ${this._bgLayer
+              ? html`
+                  <div class="photo-tune">
+                    <label
+                      >Opacity
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.05"
+                        .value=${String(this._bgLayer.opacity ?? 0.55)}
+                        @input=${(e: Event) =>
+                          this._updateBgLayer({
+                            opacity: parseFloat((e.target as HTMLInputElement).value),
+                          })}
+                      />
+                    </label>
+                    <label
+                      >Brightness
+                      <input
+                        type="range"
+                        min="0.4"
+                        max="1.8"
+                        step="0.05"
+                        .value=${String(this._bgLayer.brightness ?? 1)}
+                        @input=${(e: Event) =>
+                          this._updateBgLayer({
+                            brightness: parseFloat((e.target as HTMLInputElement).value),
+                          })}
+                      />
+                    </label>
+                    <label
+                      >Saturation
+                      <input
+                        type="range"
+                        min="0"
+                        max="2"
+                        step="0.05"
+                        .value=${String(this._bgLayer.saturation ?? 1)}
+                        @input=${(e: Event) =>
+                          this._updateBgLayer({
+                            saturation: parseFloat((e.target as HTMLInputElement).value),
+                          })}
+                      />
+                    </label>
+                    <label
+                      >Rotation (°)
+                      <input
+                        type="range"
+                        min="-180"
+                        max="180"
+                        step="1"
+                        .value=${String(this._bgLayer.rotation ?? 0)}
+                        @input=${(e: Event) =>
+                          this._updateBgLayer({
+                            rotation: parseFloat((e.target as HTMLInputElement).value),
+                          })}
+                      />
+                    </label>
+                    <label
+                      >Zoom
+                      <input
+                        type="range"
+                        min="0.25"
+                        max="4"
+                        step="0.05"
+                        .value=${String(this._bgLayer.scale ?? 1)}
+                        @input=${(e: Event) =>
+                          this._updateBgLayer({
+                            scale: parseFloat((e.target as HTMLInputElement).value),
+                          })}
+                      />
+                    </label>
+                    <button class="secondary" @click=${() => this._clearPhoto()}>
+                      Remove photo
+                    </button>
+                  </div>
+                `
+              : null}
             <button
               class="secondary"
               ?disabled=${this._busy}
@@ -846,6 +1021,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
           </div>
         </div>
       </div>
+      <wled-layout-photo-editor
+        @photo-apply=${this._onPhotoApply}
+        @photo-error=${(e: CustomEvent<{ message: string }>) => {
+          this._status = e.detail.message;
+        }}
+      ></wled-layout-photo-editor>
     `;
   }
 
@@ -944,6 +1125,20 @@ export class WledLayoutDesigner extends BasePoweredElement {
         margin: 0;
         font-size: 0.75rem;
         opacity: 0.7;
+      }
+      .photo-tune {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.2);
+      }
+      .photo-tune label {
+        font-size: 0.78rem;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       }
       .anchor-panel {
         display: flex;

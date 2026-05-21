@@ -9,5 +9,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/cjam28/cauldron-wled-studio/issues",
   "requirements": ["aiohttp>=3.9"],
-  "version": "0.5.5"
+  "version": "0.5.6"
 }

@@ -37,6 +37,7 @@ class Layout:
     pixel_count: int = 210
     fixtures: list[Fixture] = field(default_factory=list)
     background_url: str | None = None
+    background: dict[str, Any] | None = None
     scale_px_per_m: float | None = None
     etag: str = ""
 
@@ -76,6 +77,9 @@ class Layout:
             pixel_count=int(data.get("pixel_count", 210)),
             fixtures=fixtures,
             background_url=data.get("background_url"),
+            background=data.get("background")
+            if isinstance(data.get("background"), dict)
+            else None,
             scale_px_per_m=data.get("scale_px_per_m"),
             etag=str(data.get("etag", "")),
         )

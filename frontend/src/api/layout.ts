@@ -2,6 +2,21 @@ import type { Connection } from "home-assistant-js-websocket";
 import { SCHEMA_VERSION } from "./types.js";
 import { waitForConnection } from "./live-stream.js";
 
+export interface LayoutBackground {
+  url: string;
+  opacity?: number;
+  brightness?: number;
+  saturation?: number;
+  rotation?: number;
+  offsetX?: number;
+  offsetY?: number;
+  scale?: number;
+  cropX?: number;
+  cropY?: number;
+  cropW?: number;
+  cropH?: number;
+}
+
 export interface LayoutRecord {
   id: string;
   controller_id: string;
@@ -9,6 +24,7 @@ export interface LayoutRecord {
   pixel_count: number;
   fixtures: Array<Record<string, unknown>>;
   background_url?: string | null;
+  background?: LayoutBackground | null;
   scale_px_per_m?: number | null;
   etag?: string;
 }
