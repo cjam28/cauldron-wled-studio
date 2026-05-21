@@ -6,6 +6,7 @@ import {
   normalizeCols,
   type WledSegment,
 } from "./wled-state.js";
+import { formatHaError } from "../utils/ha-error.js";
 
 /** Hash fields that matter for user edits (excludes transient `sel`). */
 export function segmentStateHash(seg: WledSegment): string {
@@ -92,8 +93,8 @@ export function createOptimisticApply(
           }
           scheduleVerify();
         })
-        .catch(() => {
-          onReconcile(seg, "Failed to apply state to WLED");
+        .catch((err) => {
+          onReconcile(seg, `Failed to apply state to WLED: ${formatHaError(err)}`);
         });
     },
     50,

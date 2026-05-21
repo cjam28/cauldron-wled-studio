@@ -113,6 +113,23 @@ class WledStudioCoordinator:
                 return entity.entity_id
         return None
 
+    @staticmethod
+    def _segment_id_from_entity(entity: er.RegistryEntry) -> int | None:
+        """Map a stock WLED light entity to WLED segment id (``unique_id`` suffix)."""
+        uid = entity.unique_id or ""
+        if "_" in uid:
+            try:
+                return int(uid.rsplit("_", 1)[-1])
+            except ValueError:
+                pass
+        eid = entity.entity_id
+        if "_segment_" in eid:
+            try:
+                return int(eid.rsplit("_segment_", 1)[-1])
+            except ValueError:
+                return None
+        return None
+
     def _resolve_segment_entities(self) -> list[dict[str, Any]]:
         ent_reg = er.async_get(self.hass)
         segments: list[dict[str, Any]] = []
@@ -121,20 +138,15 @@ class WledStudioCoordinator:
                 continue
             if entity.domain != "light":
                 continue
-            eid = entity.entity_id
-            if "_segment_" not in eid:
+            seg_num = self._segment_id_from_entity(entity)
+            if seg_num is None:
                 continue
-            suffix = eid.rsplit("_segment_", 1)[-1] if "_segment_" in eid else ""
-            try:
-                seg_num = int(suffix)
-            except ValueError:
-                seg_num = len(segments)
             segments.append(
                 {
-                    "entity_id": eid,
+                    "entity_id": entity.entity_id,
                     "segment_index": seg_num,
                     "wled_segment_id": seg_num,
-                    "name": entity.name or entity.original_name or eid,
+                    "name": entity.name or entity.original_name or entity.entity_id,
                 }
             )
         segments.sort(key=lambda s: s["segment_index"])

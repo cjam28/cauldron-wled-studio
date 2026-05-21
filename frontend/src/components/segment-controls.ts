@@ -20,10 +20,12 @@ import {
 } from "../api/wled-state.js";
 import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
 import { formatHaError } from "../utils/ha-error.js";
+import { solidEffectId } from "../utils/effect-categories.js";
 import {
   isMergeForEffectsActive,
-  mergedEffectTargetIds,
+  setMergeForEffectsActive,
 } from "../utils/effect-merge.js";
+import { mergedEffectTargetIds } from "../utils/effect-merge.js";
 import { createOptimisticApply } from "../api/state-writer.js";
 import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
@@ -140,6 +142,20 @@ export class WledSegmentControls extends BasePoweredElement {
       await this._refreshMeta();
       await this._loadPresets();
       this._mergeActive = isMergeForEffectsActive(this.controllerId);
+      const pixelCount = this._pixelCount();
+      const seg0 = this._segments.find((s) => s.id === 0);
+      const span0 = (seg0?.stop ?? 0) - (seg0?.start ?? 0);
+      if (
+        this._mergeActive &&
+        this._segments.length > 1 &&
+        pixelCount > 0 &&
+        span0 < pixelCount * 0.9
+      ) {
+        setMergeForEffectsActive(this.controllerId, false);
+        this._mergeActive = false;
+        this._toast =
+          "Merge for effects was turned off — WLED is using a multi-segment layout.";
+      }
       if (this._mergeActive) {
         this._editIds = mergedEffectTargetIds(this._segments, true);
         this._segId = this._editIds[0] ?? 0;
@@ -344,9 +360,12 @@ export class WledSegmentControls extends BasePoweredElement {
     const { rgb, white } = ev.detail;
     const cols = this._cols(seg);
     cols[this._colorSlot] = [rgb[0], rgb[1], rgb[2], white];
+    const solidId = solidEffectId(this._snapshot?.effects_by_name ?? {});
     this._patchSeg({
       col: cols.map((c) => [c[0], c[1], c[2], c[3]]),
+      fx: solidId,
     });
+    void this._refreshMeta();
   }
 
   private async _onAwm(ev: CustomEvent<{ awm: number }>): Promise<void> {

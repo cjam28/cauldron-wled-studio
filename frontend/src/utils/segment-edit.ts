@@ -13,11 +13,17 @@ export function toggleEditId(editIds: number[], id: number): number[] {
 
 export function labelForSegment(
   seg: WledSegment,
-  entities: Array<{ entity_id: string; segment_index: number; name?: string }>
+  entities: Array<{
+    entity_id: string;
+    segment_index: number;
+    wled_segment_id?: number;
+    name?: string;
+  }>
 ): string {
   const eid = seg.id;
   const ent = entities.find(
     (e) =>
+      e.wled_segment_id === eid ||
       e.segment_index === eid ||
       e.entity_id.endsWith(`_segment_${eid}`)
   );

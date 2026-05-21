@@ -207,9 +207,14 @@ export function wledSegmentIdFromEntity(entityId: string): number | undefined {
 
 export function entityForWledSegment(
   segId: number,
-  entities: Array<{ entity_id: string; segment_index: number }>
+  entities: Array<{
+    entity_id: string;
+    segment_index: number;
+    wled_segment_id?: number;
+  }>
 ): string | undefined {
   for (const e of entities) {
+    if (e.wled_segment_id === segId) return e.entity_id;
     const fromEntity = wledSegmentIdFromEntity(e.entity_id);
     if (fromEntity === segId) return e.entity_id;
     if (e.segment_index === segId) return e.entity_id;
