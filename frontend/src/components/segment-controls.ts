@@ -19,10 +19,15 @@ import {
   type WledSegment,
 } from "../api/wled-state.js";
 import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
+import {
+  isMergeForEffectsActive,
+  mergedEffectTargetIds,
+} from "../utils/effect-merge.js";
 import { createOptimisticApply } from "../api/state-writer.js";
 import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
+import "./effect-merge-toggle.js";
 import "./preset-bar.js";
 import type { PresetEntry } from "./preset-bar.js";
 
@@ -58,10 +63,12 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _presets: PresetEntry[] = [];
   @state() private _colorSlot = 0;
   @state() private _toast = "";
+  @state() private _mergeActive = false;
 
   private _optimistic?: OptimisticApplyHandle;
 
   protected override onPoweredConnect(): void {
+    this._mergeActive = isMergeForEffectsActive(this.controllerId);
     void this._load();
   }
 
@@ -92,6 +99,11 @@ export class WledSegmentControls extends BasePoweredElement {
 
   /** Called from parent when strip preview selects a segment (focus + ensure editing). */
   selectSegment(id: number): void {
+    if (this._mergeActive) {
+      this._segId = 0;
+      void this._refreshMeta();
+      return;
+    }
     if (!this._editIds.includes(id)) {
       this._editIds = [...this._editIds, id].sort((a, b) => a - b);
     }
@@ -126,6 +138,11 @@ export class WledSegmentControls extends BasePoweredElement {
       }
       await this._refreshMeta();
       await this._loadPresets();
+      this._mergeActive = isMergeForEffectsActive(this.controllerId);
+      if (this._mergeActive) {
+        this._editIds = mergedEffectTargetIds(this._segments, true);
+        this._segId = this._editIds[0] ?? 0;
+      }
     } catch (err) {
       this._error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -226,8 +243,25 @@ export class WledSegmentControls extends BasePoweredElement {
     }
   }
 
+  private _pixelCount(): number {
+    const leds = this._snapshot?.info?.leds as { count?: number } | undefined;
+    return Number(leds?.count) || 210;
+  }
+
   private _targetIds(): number[] {
+    if (this._mergeActive) {
+      const ids = mergedEffectTargetIds(this._segments, true);
+      return ids.length ? ids : [0];
+    }
     return this._editIds.length ? this._editIds : [this._segId];
+  }
+
+  private _onMergeChanged(): void {
+    this._mergeActive = isMergeForEffectsActive(this.controllerId);
+    void this._load();
+    this.dispatchEvent(
+      new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })
+    );
   }
 
   private _patchSeg(patch: Partial<WledSegment>): void {
@@ -270,6 +304,7 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _toggleSegEdit(id: number): void {
+    if (this._mergeActive) return;
     let next = toggleEditId(this._editIds, id);
     if (!next.length) {
       next = [id];
@@ -367,7 +402,24 @@ export class WledSegmentControls extends BasePoweredElement {
         ${this._toast
           ? html`<p class="toast" role="status">${this._toast}</p>`
           : null}
-        <p class="seg-hint">Tap segments to toggle editing — changes apply to all highlighted segments.</p>
+        ${this.connection && this.controllerId
+          ? html`
+              <wled-effect-merge-toggle
+                .connection=${this.connection}
+                .controllerId=${this.controllerId}
+                .segments=${this._segments}
+                .editIds=${this._editIds}
+                .pixelCount=${this._pixelCount()}
+                @merge-changed=${this._onMergeChanged}
+              ></wled-effect-merge-toggle>
+            `
+          : null}
+        ${this._mergeActive
+          ? html`<p class="seg-hint">Merge active — effects apply to the combined segment.</p>`
+          : html`<p class="seg-hint">Tap segments to toggle editing — changes apply to all highlighted segments.</p>`}
+        ${this._mergeActive
+          ? null
+          : html`
         <div class="seg-bar" role="group" aria-label="Segments">
           ${this._segments.map(
             (s) => html`
@@ -381,6 +433,7 @@ export class WledSegmentControls extends BasePoweredElement {
             `
           )}
         </div>
+            `}
 
         ${!this.compact && this._presets.length
           ? html`

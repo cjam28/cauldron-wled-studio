@@ -13,7 +13,12 @@ import {
   type WledSegment,
 } from "../api/wled-state.js";
 import { toggleEditId } from "../utils/segment-edit.js";
+import {
+  isMergeForEffectsActive,
+  mergedEffectTargetIds,
+} from "../utils/effect-merge.js";
 import "../components/effect-chips.js";
+import "../components/effect-merge-toggle.js";
 import "../components/segment-bar.js";
 
 export const VIEW_EFFECTS_TAG = "wled-view-effects";
@@ -42,8 +47,10 @@ export class WledViewEffects extends BasePoweredElement {
   @state() private _status = "Loading effects…";
   @state() private _toast = "";
   @state() private _meta?: EffectMeta;
+  @state() private _mergeActive = false;
 
   protected override onPoweredConnect(): void {
+    this._mergeActive = isMergeForEffectsActive(this.controllerId);
     void this._load();
   }
 
@@ -73,6 +80,11 @@ export class WledViewEffects extends BasePoweredElement {
           this._focusSegId = this._segments[0].id;
         }
       }
+      this._mergeActive = isMergeForEffectsActive(this.controllerId);
+      if (this._mergeActive) {
+        this._editIds = mergedEffectTargetIds(this._segments, true);
+        this._focusSegId = this._editIds[0] ?? 0;
+      }
       await this._refreshMeta();
       this._status = "";
     } catch {
@@ -98,6 +110,11 @@ export class WledViewEffects extends BasePoweredElement {
 
   /** Strip preview tap — focus segment and include in edit set. */
   selectSegmentFromPreview(id: number): void {
+    if (this._mergeActive) {
+      this._focusSegId = 0;
+      void this._refreshMeta();
+      return;
+    }
     if (!this._editIds.includes(id)) {
       this._editIds = [...this._editIds, id].sort((a, b) => a - b);
     }
@@ -106,11 +123,30 @@ export class WledViewEffects extends BasePoweredElement {
   }
 
   private _onSegToggle(ev: CustomEvent<{ id: number }>): void {
+    if (this._mergeActive) return;
     let next = toggleEditId(this._editIds, ev.detail.id);
     if (!next.length) next = [ev.detail.id];
     this._editIds = next;
     this._focusSegId = ev.detail.id;
     void this._refreshMeta();
+  }
+
+  private _pixelCount(): number {
+    const leds = this._snapshot?.info?.leds as { count?: number } | undefined;
+    return Number(leds?.count) || 210;
+  }
+
+  private _targetIds(): number[] {
+    if (this._mergeActive) {
+      const ids = mergedEffectTargetIds(this._segments, true);
+      return ids.length ? ids : [0];
+    }
+    return this._editIds.length ? this._editIds : [this._focusSegId];
+  }
+
+  private _onMergeChanged(): void {
+    this._mergeActive = isMergeForEffectsActive(this.controllerId);
+    void this._load();
   }
 
   protected override render() {
@@ -119,7 +155,7 @@ export class WledViewEffects extends BasePoweredElement {
     const fx = seg?.fx ?? 0;
     const meta = this._meta;
     const sliders = meta?.sliders ?? {};
-    const targetCount = this._editIds.length;
+    const targetCount = this._targetIds().length;
 
     return html`
       <div class="wrap">
@@ -141,7 +177,19 @@ export class WledViewEffects extends BasePoweredElement {
         ${this._status ? html`<p>${this._status}</p>` : null}
         ${this._toast ? html`<p class="toast" role="status">${this._toast}</p>` : null}
 
-        ${this._segments.length
+        ${this.connection && this.controllerId
+          ? html`
+              <wled-effect-merge-toggle
+                .connection=${this.connection}
+                .controllerId=${this.controllerId}
+                .segments=${this._segments}
+                .editIds=${this._editIds}
+                .pixelCount=${this._pixelCount()}
+                @merge-changed=${this._onMergeChanged}
+              ></wled-effect-merge-toggle>
+            `
+          : null}
+        ${this._segments.length && !this._mergeActive
           ? html`
               <wled-segment-bar
                 .segments=${this._segments}
@@ -207,9 +255,7 @@ export class WledViewEffects extends BasePoweredElement {
 
   private async _onFx(effectId: number, toggledOff?: boolean): Promise<void> {
     if (!this.connection || !this._snapshot) return;
-    const targets = this._editIds.length
-      ? this._editIds
-      : [this._focusSegId];
+    const targets = this._targetIds();
     const patch = buildSegmentPatchForIds(
       targets,
       { fx: effectId, on: true },
@@ -243,9 +289,7 @@ export class WledViewEffects extends BasePoweredElement {
   private _slider(key: keyof WledSegment, ev: Event): void {
     if (!this.connection || !this._snapshot) return;
     const value = Number((ev.target as HTMLInputElement).value);
-    const targets = this._editIds.length
-      ? this._editIds
-      : [this._focusSegId];
+    const targets = this._targetIds();
     const patch = buildSegmentPatchForIds(
       targets,
       { [key]: value } as Partial<WledSegment>,

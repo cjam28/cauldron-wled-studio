@@ -9,6 +9,12 @@ import {
   solidEffectId,
   type EffectCategory,
 } from "../utils/effect-categories.js";
+import {
+  getRecentEffects,
+  maxItemsForRowWidth,
+  pushRecentEffect,
+  type RecentEffectEntry,
+} from "../utils/recent-store.js";
 import "./effect-tile.js";
 
 export const EFFECT_CHIPS_TAG = "wled-effect-chips";
@@ -21,8 +27,48 @@ export class WledEffectChips extends BasePoweredElement {
   @property({ type: String }) filter = "";
   @property() controllerId = "";
   @property({ type: Boolean }) toggleOff = true;
+  @property({ type: Boolean }) showRecents = true;
 
   @state() private _category: EffectCategory = "all";
+  @state() private _recentEntries: RecentEffectEntry[] = [];
+  @state() private _recentVisible = 6;
+
+  private _ro?: ResizeObserver;
+  private _recentRowEl?: HTMLElement;
+
+  protected override onPoweredConnect(): void {
+    this._loadRecents();
+    this._ro = new ResizeObserver(() => this._measureRecents());
+    this.addUnsub(() => this._ro?.disconnect());
+  }
+
+  protected override updated(changed: import("lit").PropertyValues): void {
+    if (changed.has("controllerId")) this._loadRecents();
+    const row = this.renderRoot.querySelector(".recent-row") as HTMLElement | null;
+    if (row && row !== this._recentRowEl) {
+      this._recentRowEl = row;
+      this._ro?.observe(row);
+      this._measureRecents();
+    }
+  }
+
+  private _loadRecents(): void {
+    this._recentEntries = getRecentEffects(this.controllerId);
+  }
+
+  private _measureRecents(): void {
+    const row = this._recentRowEl;
+    if (!row) return;
+    const next = maxItemsForRowWidth(row.clientWidth, 76, 6, 10);
+    if (next !== this._recentVisible) this._recentVisible = next;
+  }
+
+  private _effectName(effectId: number): string {
+    return (
+      Object.entries(this.effectsByName).find(([, id]) => id === effectId)?.[0] ??
+      `Effect ${effectId}`
+    );
+  }
 
   protected override render() {
     const q = this.filter.trim().toLowerCase();
@@ -48,8 +94,42 @@ export class WledEffectChips extends BasePoweredElement {
       "solid",
     ];
 
+    const showRecentRow =
+      this.showRecents && !q && this._recentEntries.length > 0;
+    const recentVisible = this._recentEntries.slice(0, this._recentVisible);
+
     return html`
       <div class="wrap">
+        ${showRecentRow
+          ? html`
+              <div class="recent-block">
+                <span class="recent-label">Recent</span>
+                <div class="recent-row" role="group" aria-label="Recent effects">
+                  ${recentVisible.map((entry) => {
+                    const id = entry.id;
+                    const name = entry.name;
+                    const flag = this.soundFlags[id];
+                    const active = id === this.selectedFx;
+                    return html`
+                      <button
+                        type="button"
+                        class="recent-chip ${active ? "active" : ""}"
+                        aria-pressed=${active}
+                        @click=${() => this._pick(id, solidId)}
+                      >
+                        ${name}
+                        ${flag === "v" ? html`<span class="badge">♪</span>` : null}
+                        ${flag === "f" ? html`<span class="badge">♫</span>` : null}
+                        ${flag === "2"
+                          ? html`<span class="badge dim">2D</span>`
+                          : null}
+                      </button>
+                    `;
+                  })}
+                </div>
+              </div>
+            `
+          : null}
         <div class="filters" role="tablist" aria-label="Effect categories">
           ${categories.map(
             (cat) => html`
@@ -131,6 +211,14 @@ export class WledEffectChips extends BasePoweredElement {
       );
       return;
     }
+    if (this.showRecents && this.controllerId) {
+      this._recentEntries = pushRecentEffect(
+        this.controllerId,
+        id,
+        this._effectName(id),
+        { skipSolid: true, solidId }
+      );
+    }
     this.dispatchEvent(
       new CustomEvent("effect-select", {
         detail: { effectId: id, toggledOff: false },
@@ -147,6 +235,42 @@ export class WledEffectChips extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         gap: 8px;
+      }
+      .recent-block {
+        margin-bottom: 2px;
+      }
+      .recent-label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        opacity: 0.65;
+      }
+      .recent-row {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 6px;
+        overflow: hidden;
+      }
+      .recent-chip {
+        flex: 1 1 0;
+        min-width: 0;
+        border: 1px solid var(--divider-color, #555);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: var(--secondary-background-color, transparent);
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.78rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .recent-chip.active {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        border-color: transparent;
       }
       .filters {
         display: flex;

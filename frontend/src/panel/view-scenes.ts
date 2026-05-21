@@ -18,7 +18,10 @@ import {
   type WledSegment,
 } from "../api/wled-state.js";
 import { toggleEditId } from "../utils/segment-edit.js";
+import { pushRecentScene } from "../utils/recent-store.js";
 import "../components/segment-bar.js";
+import "../components/recent-scenes-row.js";
+import type { WledRecentScenesRow } from "../components/recent-scenes-row.js";
 
 export const VIEW_SCENES_TAG = "wled-view-scenes";
 
@@ -154,6 +157,16 @@ export class WledViewScenes extends BasePoweredElement {
             `
           : null}
 
+        <wled-recent-scenes-row
+          .controllerId=${this.controllerId}
+          .scenes=${this._scenes}
+          ?disabled=${this._busy}
+          @scene-select=${(e: CustomEvent<{ sceneId: string }>) => {
+            const scene = this._scenes.find((s) => s.id === e.detail.sceneId);
+            if (scene) void this._apply(scene);
+          }}
+        ></wled-recent-scenes-row>
+
         ${this._conflict
           ? html`
               <div class="conflict" role="alert">
@@ -218,6 +231,13 @@ export class WledViewScenes extends BasePoweredElement {
     `;
   }
 
+  private _recentScenesRow(): WledRecentScenesRow | null {
+    return (
+      this.renderRoot.querySelector<WledRecentScenesRow>("wled-recent-scenes-row") ??
+      null
+    );
+  }
+
   private async _apply(scene: SceneRecord): Promise<void> {
     if (!this.connection) return;
     this._busy = true;
@@ -232,6 +252,8 @@ export class WledViewScenes extends BasePoweredElement {
         signal: this._applyAbort.signal,
         segmentIds: allSelected ? undefined : [...this._applySegIds],
       });
+      pushRecentScene(this.controllerId, scene.id, scene.name);
+      this._recentScenesRow()?.reload();
       await this._load();
       this._toast = `Applied ${scene.name}`;
       this.dispatchEvent(
