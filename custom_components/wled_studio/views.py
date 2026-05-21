@@ -19,7 +19,7 @@ _VIEWS_REGISTERED_KEY = f"{DOMAIN}_http_views_registered"
 
 def layout_bg_dir(hass: HomeAssistant, controller_id: str) -> Path:
     """Directory under config/www for layout floorplan images."""
-    directory = Path(hass.config.path) / "www" / "wled_studio" / "layouts" / controller_id
+    directory = Path(hass.config.path("www")) / "wled_studio" / "layouts" / controller_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

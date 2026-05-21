@@ -451,6 +451,14 @@ async def ws_layout_upload_bg(
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
+    except OSError as err:
+        _LOGGER.exception("layout_upload_bg write failed")
+        connection.send_error(msg["id"], "save_failed", str(err))
+        return
+    except Exception as err:
+        _LOGGER.exception("layout_upload_bg failed")
+        connection.send_error(msg["id"], "unknown_error", str(err))
+        return
     connection.send_result(
         msg["id"],
         {
