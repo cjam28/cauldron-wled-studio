@@ -13,11 +13,7 @@ import {
 import { uploadLayoutBackground } from "../api/layout-background.js";
 import { fetchDeviceState } from "../api/wled-state.js";
 import { importSegmentStarts } from "../utils/layout-tools.js";
-import {
-  backgroundFromLayout,
-  drawBackgroundLayer,
-  type BackgroundLayer,
-} from "../utils/background-layer.js";
+import { backgroundFromLayout, type BackgroundLayer } from "../utils/background-layer.js";
 import "./layout-photo-editor.js";
 import type { WledLayoutPhotoEditor } from "./layout-photo-editor.js";
 import {
@@ -30,11 +26,11 @@ import {
   polylineToGuide,
   rectToGuide,
   snapToGuide,
-  strokeGuide,
 } from "../utils/draw-tools.js";
 import { parseSvgToGuide } from "../utils/svg-import.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { loadHaImage } from "../utils/ha-image.js";
+import { LayoutDesignerKonvaStage } from "./layout-designer-konva.js";
 
 /** Sparse corners / segment pins (user-placed). */
 interface Vertex {
@@ -43,13 +39,6 @@ interface Vertex {
   anchorLed: number | null;
 }
 
-const ANCHOR_COLOR = "#f59e0b";
-const VERTEX_COLOR = "#6366f1";
-const EDGE_COLOR = "rgba(99,102,241,0.6)";
-const DOT_COLOR = "rgba(120,220,120,0.65)";
-const VERTEX_R = 7;
-const ANCHOR_R = 9;
-const DOT_R = 3;
 const HIT_R = 14;
 
 function lerp(a: number, b: number, t: number): number {
@@ -92,14 +81,9 @@ export class WledLayoutDesigner extends BasePoweredElement {
     oy: number;
   } | null = null;
 
-  private _canvas?: HTMLCanvasElement;
-  private _canvasWrap?: HTMLElement;
-  private _ctx?: CanvasRenderingContext2D;
-  private _drag: { idx: number; ox: number; oy: number } | null = null;
-  private _boundCanvas?: HTMLCanvasElement;
-  private _viewOx = 0;
-  private _viewOy = 0;
-  private _viewScale = 1;
+  private _stageMount?: HTMLElement;
+  private _konva?: LayoutDesignerKonvaStage;
+  private _drag: { idx: number } | null = null;
   private _resizeObs?: ResizeObserver;
 
   protected override onPoweredConnect(): void {
@@ -107,140 +91,87 @@ export class WledLayoutDesigner extends BasePoweredElement {
   }
 
   protected override firstUpdated(): void {
-    this._canvasWrap =
-      this.renderRoot.querySelector(".canvas-wrap") ?? undefined;
-    this._resizeObs = new ResizeObserver(() => this._onResize());
-    if (this._canvasWrap) {
-      this._resizeObs.observe(this._canvasWrap);
+    this._stageMount =
+      this.renderRoot.querySelector(".stage-mount") ?? undefined;
+    if (this._stageMount) {
+      const rect = this._stageMount.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      this._konva = new LayoutDesignerKonvaStage(this._stageMount, w, h);
+      const el = this._konva.stage.container();
+      el.addEventListener("pointerdown", this._onPointerDown);
+      el.addEventListener("pointermove", this._onPointerMove);
+      el.addEventListener("pointerup", this._onPointerUp);
+      el.addEventListener("pointercancel", this._onPointerUp);
+      el.addEventListener("dblclick", this._onDblClick);
+      el.addEventListener("contextmenu", this._onContextMenu);
+      el.addEventListener("wheel", this._onWheel, { passive: false });
+      this._resizeObs = new ResizeObserver(() => this._onResize());
+      this._resizeObs.observe(this._stageMount);
+      this._onResize();
     }
-    this._bindCanvas();
-    this._onResize();
   }
 
   protected override updated(changed: import("lit").PropertyValues): void {
     super.updated(changed);
-    this._bindCanvas();
     if (changed.has("connection") || changed.has("layoutId") || changed.has("fixtureId")) {
       void this._loadLayout();
     }
   }
 
-  /** Re-attach listeners when Lit recreates the canvas node. */
-  private _bindCanvas(): void {
-    const canvas = this.renderRoot.querySelector("canvas") ?? undefined;
-    if (!canvas || canvas === this._boundCanvas) return;
-    this._unbindCanvas();
-    this._canvas = canvas;
-    this._boundCanvas = canvas;
-    this._ctx = canvas.getContext("2d", { alpha: true }) ?? undefined;
-    canvas.addEventListener("pointerdown", this._onPointerDown);
-    canvas.addEventListener("pointermove", this._onPointerMove);
-    canvas.addEventListener("pointerup", this._onPointerUp);
-    canvas.addEventListener("pointercancel", this._onPointerUp);
-    canvas.addEventListener("dblclick", this._onDblClick);
-    canvas.addEventListener("contextmenu", this._onContextMenu);
-    canvas.addEventListener("wheel", this._onWheel, { passive: false });
-  }
-
-  private _unbindCanvas(): void {
-    const canvas = this._boundCanvas;
-    if (!canvas) return;
-    canvas.removeEventListener("pointerdown", this._onPointerDown);
-    canvas.removeEventListener("pointermove", this._onPointerMove);
-    canvas.removeEventListener("pointerup", this._onPointerUp);
-    canvas.removeEventListener("pointercancel", this._onPointerUp);
-    canvas.removeEventListener("dblclick", this._onDblClick);
-    canvas.removeEventListener("contextmenu", this._onContextMenu);
-    canvas.removeEventListener("wheel", this._onWheel);
-    this._boundCanvas = undefined;
-  }
-
   private _onWheel = (ev: WheelEvent): void => {
-    if (this._tool !== "photo" || !this._bgLayer) return;
+    if (!this._konva) return;
     ev.preventDefault();
-    const delta = ev.deltaY > 0 ? -0.04 : 0.04;
-    const scale = Math.max(0.25, Math.min(4, (this._bgLayer.scale ?? 1) + delta));
-    this._bgLayer = { ...this._bgLayer, scale };
-    this._paint();
+    if (this._tool === "photo" && this._bgLayer) {
+      const delta = ev.deltaY > 0 ? -0.04 : 0.04;
+      const scale = Math.max(0.25, Math.min(4, (this._bgLayer.scale ?? 1) + delta));
+      this._bgLayer = { ...this._bgLayer, scale };
+      this._syncStage();
+      return;
+    }
+    this._konva.zoomAtPointer(ev.deltaY);
+    this._syncStage();
   };
 
   override disconnectedCallback(): void {
     this._resizeObs?.disconnect();
-    this._unbindCanvas();
+    const el = this._konva?.stage.container();
+    if (el) {
+      el.removeEventListener("pointerdown", this._onPointerDown);
+      el.removeEventListener("pointermove", this._onPointerMove);
+      el.removeEventListener("pointerup", this._onPointerUp);
+      el.removeEventListener("pointercancel", this._onPointerUp);
+      el.removeEventListener("dblclick", this._onDblClick);
+      el.removeEventListener("contextmenu", this._onContextMenu);
+      el.removeEventListener("wheel", this._onWheel);
+    }
+    this._konva?.destroy();
+    this._konva = undefined;
     super.disconnectedCallback();
   }
 
   private _onResize(): void {
-    const canvas = this._canvas;
-    const wrap = this._canvasWrap;
-    if (!canvas || !wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.floor(rect.width * dpr));
-    const h = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
+    const mount = this._stageMount;
+    const stage = this._konva;
+    if (!mount || !stage) return;
+    const rect = mount.getBoundingClientRect();
+    const w = Math.max(1, Math.floor(rect.width));
+    const h = Math.max(1, Math.floor(rect.height));
+    stage.resize(w, h);
     this._fitView();
-    this._paint();
+    this._syncStage();
   }
 
   private _fitView(): void {
-    const canvas = this._canvas;
-    if (!canvas) return;
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    const addPt = (x: number, y: number) => {
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    };
-    for (const v of this._vertices) addPt(v.x, v.y);
-    for (const p of this._guide?.points ?? []) addPt(p[0], p[1]);
-    if (!Number.isFinite(minX)) {
-      this._viewOx = 40;
-      this._viewOy = 40;
-      this._viewScale = 1;
-      return;
-    }
-    const pad = 48;
-    const rx = maxX - minX || 100;
-    const ry = maxY - minY || 100;
-    const scale = Math.min(
-      (canvas.width - pad * 2) / rx,
-      (canvas.height - pad * 2) / ry,
-      4
-    );
-    this._viewScale = scale;
-    this._viewOx = pad - minX * scale;
-    this._viewOy = pad - minY * scale;
+    this._konva?.fitView(this._vertices, this._guide?.points ?? []);
   }
 
-  private _vtxToCanvas(v: Vertex): [number, number] {
-    return [
-      v.x * this._viewScale + this._viewOx,
-      v.y * this._viewScale + this._viewOy,
-    ];
+  private _pointerModel(): [number, number] | null {
+    return this._konva?.getModelPointer() ?? null;
   }
 
-  private _canvasToModel(cx: number, cy: number): [number, number] {
-    return [
-      (cx - this._viewOx) / this._viewScale,
-      (cy - this._viewOy) / this._viewScale,
-    ];
-  }
-
-  /** Map pointer coords to canvas backing-store pixels (CSS size often differs). */
-  private _pointerCanvasXY(clientX: number, clientY: number): [number, number] {
-    const canvas = this._canvas!;
-    const rect = canvas.getBoundingClientRect();
-    const sx = rect.width > 0 ? canvas.width / rect.width : 1;
-    const sy = rect.height > 0 ? canvas.height / rect.height : 1;
-    return [(clientX - rect.left) * sx, (clientY - rect.top) * sy];
+  private _stageContainer(): HTMLElement | undefined {
+    return this._konva?.stage.container();
   }
 
   private _isClosingDuplicate(i: number): boolean {
@@ -252,13 +183,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
     return Math.hypot(a.x - b.x, a.y - b.y) < 0.5;
   }
 
-  private _hitVertex(cx: number, cy: number): number {
+  private _hitVertex(mx: number, my: number): number {
+    const scale = this._konva?.viewScaleSafe ?? 1;
+    const hitR = HIT_R / scale;
     let best = -1;
-    let bestDist = HIT_R + 1;
+    let bestDist = hitR + 1;
     for (let i = 0; i < this._vertices.length; i++) {
       if (this._isClosingDuplicate(i)) continue;
-      const [vx, vy] = this._vtxToCanvas(this._vertices[i]);
-      const d = Math.hypot(cx - vx, cy - vy);
+      const v = this._vertices[i];
+      const d = Math.hypot(mx - v.x, my - v.y);
       if (d > HIT_R) continue;
       const anchored = this._vertices[i].anchorLed !== null;
       const bestAnchored = best >= 0 && this._vertices[best].anchorLed !== null;
@@ -272,10 +205,6 @@ export class WledLayoutDesigner extends BasePoweredElement {
       }
     }
     return best;
-  }
-
-  private _canvasXY(ev: PointerEvent): [number, number] {
-    return this._pointerCanvasXY(ev.clientX, ev.clientY);
   }
 
   /** New shape guide → drop old guide, corners, and LED overlay for a fresh layout. */
@@ -293,7 +222,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
     const snap = snapToGuide(this._guide, mx, my);
-    const thresh = 24 / Math.max(this._viewScale, 0.01);
+    const thresh = 24 / (this._konva?.viewScaleSafe ?? 1);
     if (snap.dist > thresh) {
       this._status = "Click closer to the purple guide line.";
       return;
@@ -313,49 +242,52 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._anchorInput = String(led);
     this._status = `Placed v${this._selectedVtx} @ LED ${led} — add more or set anchors manually`;
     void this._refreshPositions();
-    this._paint();
+    this._syncStage();
   }
 
   private _onPointerDown = (ev: PointerEvent): void => {
     ev.preventDefault();
-    const [cx, cy] = this._canvasXY(ev);
-    const [mx, my] = this._canvasToModel(cx, cy);
+    const pos = this._pointerModel();
+    if (!pos) return;
+    const [mx, my] = pos;
 
     if (this._calibActive) {
       this._calibPts.push([mx, my]);
       if (this._calibPts.length >= 2) this._applyCalibration();
-      this._paint();
+      this._syncStage();
       return;
     }
 
     if (this._tool === "photo" && this._bgLayer) {
+      const st = this._konva?.stage;
+      const pointer = st?.getPointerPosition();
       this._photoPan = {
-        px: cx,
-        py: cy,
+        px: pointer?.x ?? 0,
+        py: pointer?.y ?? 0,
         ox: this._bgLayer.offsetX ?? 0,
         oy: this._bgLayer.offsetY ?? 0,
       };
-      this._canvas?.setPointerCapture(ev.pointerId);
+      this._stageContainer()?.setPointerCapture(ev.pointerId);
       return;
     }
 
     if (this._tool === "place") {
-      const hit = this._hitVertex(cx, cy);
+      const hit = this._hitVertex(mx, my);
       if (hit >= 0) {
         this._selectedVtx = hit;
         this._anchorInput = String(this._vertices[hit].anchorLed ?? "");
       } else {
         this._placeVertexOnGuide(mx, my);
       }
-      this._paint();
+      this._syncStage();
       return;
     }
 
     if (this._tool === "pen") {
       this._beginNewGuideDrawing();
-      this._penStroke = [[cx, cy]];
-      this._canvas?.setPointerCapture(ev.pointerId);
-      this._paint();
+      this._penStroke = [[mx, my]];
+      this._stageContainer()?.setPointerCapture(ev.pointerId);
+      this._syncStage();
       return;
     }
 
@@ -369,14 +301,14 @@ export class WledLayoutDesigner extends BasePoweredElement {
         this._lineStart = null;
         this._status = "Line guide ready — switch to Place vertices";
       }
-      this._paint();
+      this._syncStage();
       return;
     }
 
     if (this._tool === "rect" || this._tool === "ellipse") {
       this._beginNewGuideDrawing();
       this._shapeStart = [mx, my];
-      this._canvas?.setPointerCapture(ev.pointerId);
+      this._stageContainer()?.setPointerCapture(ev.pointerId);
       return;
     }
 
@@ -386,84 +318,90 @@ export class WledLayoutDesigner extends BasePoweredElement {
       }
       this._polylinePts = [...this._polylinePts, [mx, my]];
       this._status = `Polyline: ${this._polylinePts.length} pts — double-click to finish`;
-      this._paint();
+      this._syncStage();
       return;
     }
 
-    const idx = this._hitVertex(cx, cy);
+    const idx = this._hitVertex(mx, my);
     if (idx >= 0) {
       this._selectedVtx = idx;
       this._anchorInput = String(this._vertices[idx].anchorLed ?? "");
-      this._drag = { idx, ox: cx, oy: cy };
-      this._canvas?.setPointerCapture(ev.pointerId);
+      this._drag = { idx };
+      this._stageContainer()?.setPointerCapture(ev.pointerId);
     } else {
       this._selectedVtx = -1;
     }
-    this._paint();
+    this._syncStage();
   };
 
-  private _onPointerMove = (ev: PointerEvent): void => {
-    const [cx, cy] = this._canvasXY(ev);
+  private _onPointerMove = (_ev: PointerEvent): void => {
+    const pos = this._pointerModel();
+    if (!pos) return;
+    const [mx, my] = pos;
 
-    if (this._photoPan && this._bgLayer) {
-      const canvas = this._canvas!;
-      const dx = (cx - this._photoPan.px) / canvas.width;
-      const dy = (cy - this._photoPan.py) / canvas.height;
+    if (this._photoPan && this._bgLayer && this._konva) {
+      const pointer = this._konva.stage.getPointerPosition();
+      if (!pointer) return;
+      const w = this._konva.stage.width();
+      const h = this._konva.stage.height();
+      const dx = (pointer.x - this._photoPan.px) / w;
+      const dy = (pointer.y - this._photoPan.py) / h;
       this._bgLayer = {
         ...this._bgLayer,
         offsetX: this._photoPan.ox + dx,
         offsetY: this._photoPan.oy + dy,
       };
-      this._paint();
+      this._syncStage();
       return;
     }
 
     if (this._tool === "pen" && this._penStroke.length > 0) {
       const last = this._penStroke[this._penStroke.length - 1];
-      if (Math.hypot(cx - last[0], cy - last[1]) > 2) {
-        this._penStroke = [...this._penStroke, [cx, cy]];
-        this._paint();
+      const minDist = 2 / (this._konva?.viewScaleSafe ?? 1);
+      if (Math.hypot(mx - last[0], my - last[1]) > minDist) {
+        this._penStroke = [...this._penStroke, [mx, my]];
+        this._syncStage();
       }
       return;
     }
 
     if (this._shapeStart && (this._tool === "rect" || this._tool === "ellipse")) {
-      const [mx, my] = this._canvasToModel(cx, cy);
       const [x0, y0] = this._shapeStart;
-      if (this._tool === "rect") {
-        const preview = rectToGuide(x0, y0, mx, my);
-        this._paint(preview);
-      } else {
-        const rx = Math.abs(mx - x0) / 2;
-        const ry = Math.abs(my - y0) / 2;
-        const preview = ellipseToGuide((x0 + mx) / 2, (y0 + my) / 2, rx, ry);
-        this._paint(preview);
-      }
+      const preview =
+        this._tool === "rect"
+          ? rectToGuide(x0, y0, mx, my)
+          : ellipseToGuide(
+              (x0 + mx) / 2,
+              (y0 + my) / 2,
+              Math.abs(mx - x0) / 2,
+              Math.abs(my - y0) / 2
+            );
+      this._syncStage(preview);
       return;
     }
 
     if (!this._drag) return;
-    const [mx, my] = this._canvasToModel(cx, cy);
     const verts = [...this._vertices];
     verts[this._drag.idx] = { ...verts[this._drag.idx], x: mx, y: my };
     this._vertices = verts;
-    this._paint();
+    this._syncStage();
   };
 
   private _onPointerUp = (ev: PointerEvent): void => {
     if (this._photoPan) {
-      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._stageContainer()?.releasePointerCapture(ev.pointerId);
       this._photoPan = null;
       return;
     }
     if (this._tool === "pen" && this._penStroke.length > 0) {
-      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._stageContainer()?.releasePointerCapture(ev.pointerId);
       this._finishPenGuide();
       return;
     }
     if (this._shapeStart && (this._tool === "rect" || this._tool === "ellipse")) {
-      const [cx, cy] = this._canvasXY(ev);
-      const [mx, my] = this._canvasToModel(cx, cy);
+      const pos = this._pointerModel();
+      if (!pos) return;
+      const [mx, my] = pos;
       const [x0, y0] = this._shapeStart;
       this._guide =
         this._tool === "rect"
@@ -476,12 +414,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
             );
       this._shapeStart = null;
       this._status = "Shape guide ready — switch to Place vertices";
-      this._canvas?.releasePointerCapture(ev.pointerId);
-      this._paint();
+      this._stageContainer()?.releasePointerCapture(ev.pointerId);
+      this._syncStage();
       return;
     }
     if (this._drag) {
-      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._stageContainer()?.releasePointerCapture(ev.pointerId);
       this._drag = null;
       void this._refreshPositions();
     }
@@ -490,16 +428,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _finishPenGuide(): void {
     const stroke = this._penStroke;
     this._penStroke = [];
-    this._guide = penStrokeToGuide(
-      stroke,
-      (cx, cy) => this._canvasToModel(cx, cy),
-      this._closed
-    );
+    this._guide = penStrokeToGuide(stroke, (x, y) => [x, y], this._closed);
     this._status =
       this._guide.points.length >= 2
         ? "Smooth guide drawn — switch to Place vertices and click along the line"
         : "Stroke too short";
-    this._paint();
+    this._syncStage();
   }
 
   private _finishPolyline(): void {
@@ -510,7 +444,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._guide = polylineToGuide(this._polylinePts, this._closed);
     this._polylinePts = [];
     this._status = "Polyline guide ready — Place vertices along the path";
-    this._paint();
+    this._syncStage();
   }
 
   private _applyCalibration(): void {
@@ -533,156 +467,50 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
     if (this._tool !== "select") return;
-    const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
-    if (this._hitVertex(cx, cy) >= 0) return;
-    const [mx, my] = this._canvasToModel(cx, cy);
+    const pos = this._pointerModel();
+    if (!pos) return;
+    const [mx, my] = pos;
+    if (this._hitVertex(mx, my) >= 0) return;
     this._vertices = [...this._vertices, { x: mx, y: my, anchorLed: null }];
     this._selectedVtx = this._vertices.length - 1;
     this._anchorInput = "";
-    this._paint();
+    this._syncStage();
     void this._refreshPositions();
   };
 
   private _onContextMenu = (ev: MouseEvent): void => {
     ev.preventDefault();
-    const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
-    const hit = this._hitVertex(cx, cy);
+    const pos = this._pointerModel();
+    if (!pos) return;
+    const hit = this._hitVertex(pos[0], pos[1]);
     if (hit < 0) return;
     this._vertices = this._vertices.filter((_, i) => i !== hit);
     if (this._selectedVtx === hit) this._selectedVtx = -1;
     else if (this._selectedVtx > hit) this._selectedVtx--;
-    this._paint();
+    this._syncStage();
     void this._refreshPositions();
   };
 
-  private _paint(guidePreview: GuidePath | null = null): void {
-    const ctx = this._ctx;
-    const canvas = this._canvas;
-    if (!ctx || !canvas) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#111827";
-    ctx.fillRect(0, 0, w, h);
-
-    if (this._bgImage?.complete && this._bgImage.naturalWidth > 0 && this._bgLayer) {
-      drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
+  private _syncStage(guidePreview: GuidePath | null = null): void {
+    const el = this._konva?.stage.container();
+    if (el) {
+      el.style.cursor =
+        this._tool === "photo" && this._bgLayer ? "grab" : "crosshair";
     }
-
-    const toCanvas = (x: number, y: number) => this._vtxToCanvas({ x, y, anchorLed: null });
-    strokeGuide(ctx, toCanvas, this._guide);
-    if (guidePreview) strokeGuide(ctx, toCanvas, guidePreview);
-
-    if (this._polylinePts.length >= 2) {
-      strokeGuide(
-        ctx,
-        toCanvas,
-        polylineToGuide(this._polylinePts, false)
-      );
-    }
-
-    if (this._penStroke.length >= 2) {
-      ctx.beginPath();
-      ctx.strokeStyle = "rgba(168,85,247,0.5)";
-      ctx.lineWidth = 2;
-      ctx.moveTo(this._penStroke[0][0], this._penStroke[0][1]);
-      for (let i = 1; i < this._penStroke.length; i++) {
-        ctx.lineTo(this._penStroke[i][0], this._penStroke[i][1]);
-      }
-      ctx.stroke();
-    }
-
-    const verts = this._vertices;
-    if (verts.length === 0 && !this._guide) {
-      ctx.fillStyle = "rgba(255,255,255,0.25)";
-      ctx.font = "14px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("Draw a shape, then use Place vertices", w / 2, h / 2);
-      return;
-    }
-
-    const hasPhoto = Boolean(this._bgImage);
-    for (const { x, y } of this._ledPositions) {
-      const cx = x * this._viewScale + this._viewOx;
-      const cy = y * this._viewScale + this._viewOy;
-      if (hasPhoto) {
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = "rgba(120,255,160,0.85)";
-      }
-      ctx.beginPath();
-      ctx.arc(cx, cy, hasPhoto ? DOT_R + 1 : DOT_R, 0, Math.PI * 2);
-      ctx.fillStyle = DOT_COLOR;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-
-    if (verts.length >= 2) {
-      const drawVerts =
-        verts.length >= 2 && this._isClosingDuplicate(verts.length - 1)
-          ? verts.slice(0, -1)
-          : verts;
-      if (drawVerts.length >= 2) {
-        ctx.beginPath();
-        ctx.strokeStyle = EDGE_COLOR;
-        ctx.lineWidth = 2;
-        const [sx, sy] = this._vtxToCanvas(drawVerts[0]);
-        ctx.moveTo(sx, sy);
-        for (let i = 1; i < drawVerts.length; i++) {
-          const [vx, vy] = this._vtxToCanvas(drawVerts[i]);
-          ctx.lineTo(vx, vy);
-        }
-        if (this._closed && drawVerts.length >= 3) ctx.closePath();
-        ctx.stroke();
-      }
-    }
-
-    for (const [mx, my] of this._calibPts) {
-      const [cx, cy] = this._vtxToCanvas({ x: mx, y: my, anchorLed: null });
-      ctx.beginPath();
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#22d3ee";
-      ctx.fill();
-    }
-
-    // Draw vertices
-    for (let i = 0; i < verts.length; i++) {
-      const v = verts[i];
-      const [cx, cy] = this._vtxToCanvas(v);
-      const isAnchor = v.anchorLed !== null;
-      const isSelected = i === this._selectedVtx;
-      const r = isAnchor ? ANCHOR_R : VERTEX_R;
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = isSelected
-        ? "white"
-        : isAnchor
-          ? ANCHOR_COLOR
-          : VERTEX_COLOR;
-      ctx.fill();
-
-      if (isSelected) {
-        ctx.strokeStyle = VERTEX_COLOR;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-
-      if (isAnchor && v.anchorLed !== null) {
-        ctx.fillStyle = "#111";
-        ctx.font = `bold ${Math.max(9, r - 1)}px monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(v.anchorLed), cx, cy);
-      }
-
-      // Vertex index label
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
-      ctx.font = "10px sans-serif";
-      ctx.textBaseline = "bottom";
-      ctx.textAlign = "left";
-      ctx.fillText(`v${i}`, cx + r + 2, cy - 2);
-    }
+    this._konva?.redraw({
+      vertices: this._vertices,
+      selectedVtx: this._selectedVtx,
+      guide: this._guide,
+      guidePreview,
+      ledPositions: this._ledPositions,
+      closed: this._closed,
+      polylinePts: this._polylinePts,
+      penStroke: this._penStroke,
+      calibPts: this._calibPts,
+      bgImage: this._bgImage,
+      bgLayer: this._bgLayer,
+      tool: this._tool,
+    });
   }
 
   private async _loadLayout(): Promise<void> {
@@ -732,7 +560,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
       this._fitView();
       await this._refreshPositions();
-      this._paint();
+      this._syncStage();
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     }
@@ -759,7 +587,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
         this.fixtureId,
         this.layoutId || undefined
       );
-      this._paint();
+      this._syncStage();
     } catch {
       this._ledPositions = [];
     }
@@ -805,7 +633,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._guide = parseSvgToGuide(text);
       this._status = "SVG guide loaded — Place vertices along the path";
       this._fitView();
-      this._paint();
+      this._syncStage();
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     }
@@ -816,7 +644,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._polylinePts = [];
     this._lineStart = null;
     this._beginNewGuideDrawing();
-    this._paint();
+    this._syncStage();
   }
 
   private _loadBackgroundImage(bustCache = false): void {
@@ -828,12 +656,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
     void loadHaImage(url, bustCache)
       .then((img) => {
         this._bgImage = img;
-        this._paint();
+        this._syncStage();
       })
       .catch((err) => {
         this._bgImage = null;
         this._status = formatHaError(err);
-        this._paint();
+        this._syncStage();
       });
   }
 
@@ -850,7 +678,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._vertices = importSegmentStarts(this._vertices, starts, this._closed);
       this._status = `Imported ${starts.length} segment boundary(ies) from WLED`;
       void this._refreshPositions();
-      this._paint();
+      this._syncStage();
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     } finally {
@@ -912,14 +740,14 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _updateBgLayer(patch: Partial<BackgroundLayer>): void {
     if (!this._bgLayer) return;
     this._bgLayer = { ...this._bgLayer, ...patch };
-    this._paint();
+    this._syncStage();
   }
 
   private _clearPhoto(): void {
     this._bgLayer = null;
     this._backgroundUrl = null;
     this._bgImage = null;
-    this._paint();
+    this._syncStage();
   }
 
   private async _save(): Promise<void> {
@@ -949,7 +777,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const verts = [...this._vertices];
     verts[idx] = { ...verts[idx], anchorLed: led };
     this._vertices = verts;
-    this._paint();
+    this._syncStage();
   }
 
   private _mirrorSliderMax(): number {
@@ -970,7 +798,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       verts[i] = { ...verts[i], anchorLed: newLed };
     }
     this._vertices = verts;
-    this._paint();
+    this._syncStage();
   }
 
   protected override render() {
@@ -978,7 +806,20 @@ export class WledLayoutDesigner extends BasePoweredElement {
     return html`
       <div class="designer">
         <div class="canvas-wrap">
-          <canvas></canvas>
+          <div class="stage-toolbar">
+            <button
+              type="button"
+              class="secondary small"
+              @click=${() => {
+                this._fitView();
+                this._syncStage();
+              }}
+            >
+              Fit view
+            </button>
+            <span class="zoom-hint">Scroll to zoom (Photo tool: zoom image)</span>
+          </div>
+          <div class="stage-mount"></div>
         </div>
         <div class="sidebar">
           <div class="tool-group">
@@ -1065,7 +906,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
               .checked=${this._closed}
               @change=${(e: Event) => {
                 this._closed = (e.target as HTMLInputElement).checked;
-                this._paint();
+                this._syncStage();
                 void this._refreshPositions();
               }}
             />
@@ -1324,13 +1165,30 @@ export class WledLayoutDesigner extends BasePoweredElement {
         background: #111827;
         min-height: 320px;
         height: min(55vh, 480px);
+        display: flex;
+        flex-direction: column;
       }
-      canvas {
-        display: block;
+      .stage-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        background: rgba(0, 0, 0, 0.35);
+        font-size: 0.75rem;
+      }
+      .zoom-hint {
+        opacity: 0.55;
+      }
+      .stage-mount {
+        flex: 1;
         width: 100%;
-        height: 100%;
+        min-height: 280px;
         cursor: crosshair;
         touch-action: none;
+      }
+      .stage-mount > div {
+        width: 100% !important;
+        height: 100% !important;
       }
       .sidebar {
         display: flex;
