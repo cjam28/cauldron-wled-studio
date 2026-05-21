@@ -7,7 +7,10 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import dispatcher_async
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
 
 from .thumbnails import (
     ThumbKey,
@@ -92,9 +95,7 @@ class ThumbCaptureRunner:
         self._task = asyncio.create_task(self._run())
 
     def _emit(self, payload: dict[str, Any]) -> None:
-        dispatcher_async.async_dispatcher_send(
-            self.hass, SIGNAL_THUMB_PROGRESS, payload
-        )
+        async_dispatcher_send(self.hass, SIGNAL_THUMB_PROGRESS, payload)
         self.hass.bus.async_fire("wled_studio_thumb_progress", payload)
 
     async def _collect_frames(self, count: int) -> list[list[str]]:
@@ -213,9 +214,7 @@ def async_subscribe_thumb_progress(
     def _forward(data: dict[str, Any]) -> None:
         callback_fn(data)
 
-    remove = dispatcher_async.async_dispatcher_connect(
-        hass, SIGNAL_THUMB_PROGRESS, _forward
-    )
+    remove = async_dispatcher_connect(hass, SIGNAL_THUMB_PROGRESS, _forward)
 
     @callback
     def _unsub() -> None:
