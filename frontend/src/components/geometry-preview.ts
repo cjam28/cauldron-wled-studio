@@ -29,6 +29,9 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   @state() private _positions: LedPosition[] = [];
   @state() private _status = "waiting";
+  /** false = solid strip (default); true = per-LED dots */
+  @state() private _showDots = false;
+  @state() private _closed = false;
   private _bgLayer: BackgroundLayer | null = null;
   private _bgImage: HTMLImageElement | null = null;
   private _canvas?: HTMLCanvasElement;
@@ -48,6 +51,11 @@ export class WledGeometryPreview extends BasePoweredElement {
   setStatus(s: string): void {
     this._status = s;
     this.requestUpdate();
+  }
+
+  /** Reload positions from saved layout (e.g. after Save layout). */
+  async refresh(): Promise<void> {
+    await this._resolvePositions();
   }
 
   protected override onPoweredConnect(): void {
@@ -109,6 +117,16 @@ export class WledGeometryPreview extends BasePoweredElement {
         if (layout) {
           this._bgLayer = backgroundFromLayout(layout);
           this._loadBackgroundImage();
+          const fixtures = layout.fixtures ?? [];
+          const fixture = (
+            this.fixtureId
+              ? fixtures.find(
+                  (f) =>
+                    String((f as Record<string, unknown>).id ?? "") === this.fixtureId
+                )
+              : fixtures[0]
+          ) as Record<string, unknown> | undefined;
+          this._closed = Boolean(fixture?.closed ?? false);
         }
       }
       this._positions = await layoutResolvePositions(
@@ -156,6 +174,15 @@ export class WledGeometryPreview extends BasePoweredElement {
     });
   }
 
+  private _rgbForLed(
+    pixels: Uint8ClampedArray | undefined,
+    led: number
+  ): [number, number, number] {
+    if (!pixels) return [80, 80, 80];
+    const o = led * 4;
+    return [pixels[o], pixels[o + 1], pixels[o + 2]];
+  }
+
   private _paint(): void {
     const ctx = this._ctx;
     const canvas = this._canvas;
@@ -172,12 +199,14 @@ export class WledGeometryPreview extends BasePoweredElement {
     }
 
     const pixels = this._pixels;
-    const positions = this._positions;
+    const positions = [...this._positions].sort((a, b) => a.led - b.led);
     const r = this.dotRadius;
 
     if (positions.length > 0) {
-      // Map fixture coordinate space into canvas bounds
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
       for (const p of positions) {
         if (p.x < minX) minX = p.x;
         if (p.x > maxX) maxX = p.x;
@@ -191,33 +220,64 @@ export class WledGeometryPreview extends BasePoweredElement {
       const scaleY = (h - pad * 2) / rangeY;
       const scale = Math.min(scaleX, scaleY);
 
+      const toCanvas = (x: number, y: number): [number, number] => [
+        pad + (x - minX) * scale,
+        pad + (y - minY) * scale,
+      ];
+
       const disableBloom = this.remote.state.disableBloom;
+      const lineW = Math.max(2.5, r * 1.35);
 
-      for (const { x, y, led } of positions) {
-        const cx = pad + (x - minX) * scale;
-        const cy = pad + (y - minY) * scale;
+      if (!this._showDots) {
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = lineW;
 
-        let red = 80, green = 80, blue = 80;
-        if (pixels) {
-          const o = led * 4;
-          red = pixels[o];
-          green = pixels[o + 1];
-          blue = pixels[o + 2];
+        const drawSegment = (from: LedPosition, to: LedPosition): void => {
+          const [x0, y0] = toCanvas(from.x, from.y);
+          const [x1, y1] = toCanvas(to.x, to.y);
+          const [red, green, blue] = this._rgbForLed(pixels, from.led);
+          if (!disableBloom && (red > 10 || green > 10 || blue > 10)) {
+            ctx.shadowColor = `rgba(${red},${green},${blue},0.55)`;
+            ctx.shadowBlur = lineW * 1.5;
+          } else {
+            ctx.shadowBlur = 0;
+          }
+          ctx.strokeStyle = `rgb(${red},${green},${blue})`;
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+        };
+
+        for (let i = 0; i < positions.length - 1; i++) {
+          drawSegment(positions[i], positions[i + 1]);
         }
-
-        if (!disableBloom && (red > 10 || green > 10 || blue > 10)) {
-          ctx.shadowColor = `rgba(${red},${green},${blue},0.7)`;
-          ctx.shadowBlur = r * 2.5;
-        } else {
-          ctx.shadowBlur = 0;
+        if (this._closed && positions.length >= 2) {
+          drawSegment(positions[positions.length - 1], positions[0]);
         }
-
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgb(${red},${green},${blue})`;
-        ctx.fill();
+        ctx.shadowBlur = 0;
       }
-      ctx.shadowBlur = 0;
+
+      if (this._showDots) {
+        for (const { x, y, led } of positions) {
+          const [cx, cy] = toCanvas(x, y);
+          const [red, green, blue] = this._rgbForLed(pixels, led);
+
+          if (!disableBloom && (red > 10 || green > 10 || blue > 10)) {
+            ctx.shadowColor = `rgba(${red},${green},${blue},0.7)`;
+            ctx.shadowBlur = r * 2.5;
+          } else {
+            ctx.shadowBlur = 0;
+          }
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fillStyle = `rgb(${red},${green},${blue})`;
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+      }
     } else {
       // Linear fallback
       const n = this.pixelCount;
@@ -241,15 +301,28 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   protected override render() {
     return html`
-      <div
-        class="wrap"
-        role="img"
-        aria-label="LED geometry preview — positions mapped from fixture layout"
-      >
-        <canvas></canvas>
-        ${this._status !== "live"
-          ? html`<span class="overlay">${this._status}</span>`
-          : null}
+      <div class="preview-shell">
+        <label class="mode-toggle">
+          <input
+            type="checkbox"
+            .checked=${this._showDots}
+            @change=${(e: Event) => {
+              this._showDots = (e.target as HTMLInputElement).checked;
+              this._schedPaint();
+            }}
+          />
+          LED dots
+        </label>
+        <div
+          class="wrap"
+          role="img"
+          aria-label="LED geometry preview — positions mapped from fixture layout"
+        >
+          <canvas></canvas>
+          ${this._status !== "live"
+            ? html`<span class="overlay">${this._status}</span>`
+            : null}
+        </div>
       </div>
     `;
   }
@@ -257,14 +330,35 @@ export class WledGeometryPreview extends BasePoweredElement {
   static override styles = [
     ...sharedBaseStyles,
     css`
+      .preview-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 100%;
+        height: 100%;
+        min-height: 200px;
+      }
+      .mode-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.75rem;
+        opacity: 0.85;
+        cursor: pointer;
+        user-select: none;
+        flex-shrink: 0;
+      }
+      .mode-toggle input {
+        margin: 0;
+      }
       .wrap {
         position: relative;
         border-radius: 8px;
         overflow: hidden;
         background: #0d0d0d;
         width: 100%;
-        height: 100%;
-        min-height: 200px;
+        flex: 1;
+        min-height: 180px;
       }
       canvas {
         display: block;

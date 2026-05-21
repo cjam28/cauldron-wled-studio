@@ -120,8 +120,11 @@ export class WledViewLayout extends BasePoweredElement {
   }
 
   private _onDesignerSave = async (): Promise<void> => {
-    // After designer saves, reload the list and push segments
     await this._load();
+    const preview = this.renderRoot.querySelector<WledGeometryPreview>(
+      "wled-geometry-preview"
+    );
+    await preview?.refresh();
     if (this._activeLayoutId) {
       await this._applySegments(this._activeLayoutId);
     }
