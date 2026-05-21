@@ -1,8 +1,13 @@
 import type { Connection } from "home-assistant-js-websocket";
 import { debounce } from "../utils/debounce.js";
-import { applyState, fetchDeviceState, type WledSegment } from "./wled-state.js";
+import {
+  applyState,
+  fetchDeviceState,
+  normalizeCols,
+  type WledSegment,
+} from "./wled-state.js";
 
-/** Stable hash of segment fields we optimistically control. */
+/** Hash fields that matter for user edits (excludes transient `sel`). */
 export function segmentStateHash(seg: WledSegment): string {
   const pick = {
     id: seg.id,
@@ -18,27 +23,31 @@ export function segmentStateHash(seg: WledSegment): string {
     o2: seg.o2,
     o3: seg.o3,
     pal: seg.pal,
-    col: seg.col,
+    col: normalizeCols(seg.col),
     awm: seg.awm,
-    sel: seg.sel,
   };
   return JSON.stringify(pick);
 }
 
-export type RollbackHandler = (seg: WledSegment, reason: string) => void;
+function colorsOrFxDiffer(a: WledSegment, b: WledSegment): boolean {
+  if (a.fx !== b.fx) return true;
+  return JSON.stringify(normalizeCols(a.col)) !== JSON.stringify(normalizeCols(b.col));
+}
+
+export type ReconcileHandler = (seg: WledSegment, message?: string) => void;
 
 export interface OptimisticApplyHandle {
   push: (patch: Record<string, unknown>, seg: WledSegment) => void;
   cancel: () => void;
 }
 
-/** Debounced apply with 500 ms server reconciliation + rollback callback. */
+/** Debounced apply with 500 ms reconcile (no false rollback on `sel` drift). */
 export function createOptimisticApply(
   connection: Connection,
   controllerId: string,
-  onRollback: RollbackHandler
+  onReconcile: ReconcileHandler
 ): OptimisticApplyHandle {
-  let lastHash = "";
+  let lastExpected: WledSegment | null = null;
   let lastSegId = 0;
   let verifyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -49,9 +58,17 @@ export function createOptimisticApply(
         try {
           const snap = await fetchDeviceState(connection, controllerId);
           const server = (snap.segments ?? []).find((s) => s.id === lastSegId);
-          if (!server || !lastHash) return;
-          if (segmentStateHash(server) !== lastHash) {
-            onRollback(server, "Device state differed from your edit");
+          if (!server || !lastExpected) return;
+          const expectedHash = segmentStateHash(lastExpected);
+          const serverHash = segmentStateHash(server);
+          if (expectedHash === serverHash) return;
+          if (colorsOrFxDiffer(lastExpected, server)) {
+            onReconcile(
+              server,
+              "WLED applied a different color or effect than requested"
+            );
+          } else {
+            onReconcile(server);
           }
         } catch {
           /* ignore probe errors */
@@ -62,12 +79,21 @@ export function createOptimisticApply(
 
   const debounced = debounce(
     (patch: Record<string, unknown>, seg: WledSegment) => {
-      lastHash = segmentStateHash(seg);
+      lastExpected = seg;
       lastSegId = seg.id;
-      void applyState(connection, controllerId, patch)
-        .then(() => scheduleVerify())
+      void applyState(connection, controllerId, patch, { fullResponse: true })
+        .then((state) => {
+          const segs = state.seg as WledSegment[] | undefined;
+          const updated = Array.isArray(segs)
+            ? segs.find((s) => s.id === seg.id)
+            : undefined;
+          if (updated) {
+            lastExpected = { ...seg, ...updated, id: seg.id };
+          }
+          scheduleVerify();
+        })
         .catch(() => {
-          onRollback(seg, "Failed to apply state to WLED");
+          onReconcile(seg, "Failed to apply state to WLED");
         });
     },
     50,

@@ -5,6 +5,7 @@ import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import {
   applyState,
+  buildSegmentPatch,
   fetchDeviceState,
   fetchEffectMeta,
   fetchPresets,
@@ -71,7 +72,7 @@ export class WledSegmentControls extends BasePoweredElement {
       this._optimistic = createOptimisticApply(
         this.connection,
         this.controllerId,
-        (seg, reason) => this._rollback(seg, reason)
+        (seg, message) => this._reconcile(seg, message)
       );
       void this._load();
     }
@@ -101,7 +102,7 @@ export class WledSegmentControls extends BasePoweredElement {
     try {
       const snap = await fetchDeviceState(this.connection, this.controllerId);
       this._snapshot = snap;
-      this._segments = snap.segments ?? [];
+      this._segments = [...(snap.segments ?? [])].sort((a, b) => a.id - b.id);
       if (this._segments.length) {
         const ids = this._segments.map((s) => s.id);
         if (!ids.includes(this._segId)) {
@@ -138,19 +139,23 @@ export class WledSegmentControls extends BasePoweredElement {
     }
   }
 
-  private _rollback(seg: WledSegment, reason: string): void {
+  private _reconcile(seg: WledSegment, message?: string): void {
     const idx = this._segments.findIndex((s) => s.id === seg.id);
     if (idx >= 0) {
       const next = [...this._segments];
-      next[idx] = seg;
+      next[idx] = { ...next[idx], ...seg, id: seg.id };
       this._segments = next;
     }
-    this._toast = reason;
-    this.requestUpdate();
-    window.setTimeout(() => {
-      this._toast = "";
+    if (message) {
+      this._toast = message;
       this.requestUpdate();
-    }, 4000);
+      window.setTimeout(() => {
+        this._toast = "";
+        this.requestUpdate();
+      }, 4000);
+    } else {
+      this.requestUpdate();
+    }
   }
 
   private _activeSeg(): WledSegment | undefined {
@@ -170,20 +175,41 @@ export class WledSegmentControls extends BasePoweredElement {
   private _patchSeg(patch: Partial<WledSegment>): void {
     const seg = this._activeSeg();
     if (!seg || !this._optimistic) return;
-    const merged = { ...seg, ...patch, id: seg.id };
+    const merged: WledSegment = {
+      ...seg,
+      ...patch,
+      id: seg.id,
+      sel: true,
+      on: patch.on !== undefined ? patch.on : seg.on !== false,
+    };
     const idx = this._segments.findIndex((s) => s.id === seg.id);
     if (idx >= 0) {
       const next = [...this._segments];
       next[idx] = merged;
       this._segments = next;
     }
-    this._optimistic.push({ seg: [merged] }, merged);
+    this._optimistic.push(buildSegmentPatch(seg.id, patch), merged);
   }
 
   private _selectSeg(id: number): void {
     this._segId = id;
     this._colorSlot = 0;
     void this._refreshMeta();
+    if (this.connection && this.controllerId) {
+      void applyState(
+        this.connection,
+        this.controllerId,
+        buildSegmentPatch(id, { sel: true })
+      );
+    }
+    const idx = this._segments.findIndex((s) => s.id === id);
+    if (idx >= 0) {
+      const next = this._segments.map((s) => ({
+        ...s,
+        sel: s.id === id,
+      }));
+      this._segments = next;
+    }
   }
 
   private async _onEffectSelect(ev: CustomEvent<{ effectId: number }>): Promise<void> {
@@ -293,6 +319,17 @@ export class WledSegmentControls extends BasePoweredElement {
               </div>
             `
           : null}
+
+        <label class="bri-label">
+          Segment brightness
+          <ha-slider
+            min="0"
+            max="255"
+            step="1"
+            .value=${seg.bri ?? 255}
+            @change=${(ev: Event) => this._slider("bri", ev)}
+          ></ha-slider>
+        </label>
 
         <wled-color-wheel-rgbw
           .rgb=${[col[0], col[1], col[2]] as [number, number, number]}
@@ -450,6 +487,12 @@ export class WledSegmentControls extends BasePoweredElement {
         font-size: 0.8rem;
         color: var(--warning-color, orange);
         margin: 0;
+      }
+      .bri-label {
+        font-size: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       }
     `,
   ];
