@@ -5,6 +5,7 @@ import type { LovelaceCard } from "custom-card-helpers";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
+import { fetchDeviceState } from "../api/wled-state.js";
 import type { WledStripPreview } from "../components/strip-preview.js";
 import "../components/strip-preview.js";
 import "../components/segment-controls.js";
@@ -29,6 +30,10 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @state() private _hint = "";
 
   @query("wled-strip-preview") private _preview?: WledStripPreview;
+  @query("wled-segment-controls") private _segmentControls?: import("../components/segment-controls.js").WledSegmentControls;
+
+  @state() private _selectedSegId = -1;
+  @state() private _segments: import("../api/wled-state.js").WledSegment[] = [];
 
   private _unsubLive?: () => void;
   private _bootstrapGen = 0;
@@ -60,6 +65,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
+    this._syncSegmentsFromControls();
     // Lovelace passes hass on every state change — do not re-bootstrap each time.
     if (changed.has("config")) {
       this._bindConnectionReady();
@@ -159,6 +165,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         this._bootstrapControllerKey = controllerKey;
         this._hint = "";
         this._startLive();
+        void this._loadSegments();
         this.requestUpdate();
         return;
       } catch (err) {
@@ -197,6 +204,35 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       { remote: this.remote.state.isRemote }
     );
     this.addUnsub(() => this._unsubLive?.());
+  }
+
+  private _onStripSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
+    this._selectedSegId = ev.detail.segmentId;
+    this._segmentControls?.selectSegment(ev.detail.segmentId);
+  }
+
+  private _onSegmentChange(ev: CustomEvent<{ segmentId: number }>): void {
+    this._selectedSegId = ev.detail.segmentId;
+    this.requestUpdate();
+  }
+
+  private async _loadSegments(): Promise<void> {
+    if (!this.hass?.connection || !this._controllerId) return;
+    try {
+      const snap = await fetchDeviceState(this.hass.connection, this._controllerId);
+      this._segments = snap.segments ?? [];
+      if (this._segments.length && this._selectedSegId < 0) {
+        this._selectedSegId = this._segments[0].id;
+      }
+      this.requestUpdate();
+    } catch {
+      /* strip tap-to-select degrades gracefully */
+    }
+  }
+
+  private _syncSegmentsFromControls(): void {
+    const segs = this._segmentControls?.segments;
+    if (segs?.length) this._segments = segs;
   }
 
   private _togglePower(): void {
@@ -238,7 +274,10 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         <wled-strip-preview
           .heightPx=${height}
           .pixelCount=${this._pixelCount}
+          .segments=${this._segments}
+          .selectedSegId=${this._selectedSegId}
           .hass=${this.hass}
+          @segment-select=${this._onStripSegmentSelect}
         ></wled-strip-preview>
 
         <div class="controls">
@@ -259,7 +298,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
                 class="segment-block"
                 .connection=${this.hass.connection}
                 .controllerId=${this._controllerId}
+                .selectedSegId=${this._selectedSegId}
                 compact
+                @segment-change=${this._onSegmentChange}
               ></wled-segment-controls>
             `
           : null}

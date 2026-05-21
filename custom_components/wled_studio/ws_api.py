@@ -11,6 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, SCHEMA_VERSION
+from .geometry import Layout, resolve_led_positions
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -291,6 +292,122 @@ async def ws_subscribe_live(
     )
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/layout_list",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    layouts = await coord.layout_store.async_list(msg["controller_id"])
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "layouts": [lay.to_dict() for lay in layouts],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/layout_save",
+        vol.Required("controller_id"): str,
+        vol.Required("layout"): dict,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    raw = dict(msg["layout"])
+    raw["controller_id"] = msg["controller_id"]
+    layout = Layout.from_dict(raw)
+    saved = await coord.layout_store.async_save(layout)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "layout": saved.to_dict(),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/layout_resolve_positions",
+        vol.Required("controller_id"): str,
+        vol.Required("fixture_id"): str,
+        vol.Optional("layout_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_resolve(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    layout_id = msg.get("layout_id")
+    fixture_id = msg["fixture_id"]
+    layout = None
+    if layout_id:
+        layout = await coord.layout_store.async_get(msg["controller_id"], layout_id)
+    if layout is None:
+        layouts = await coord.layout_store.async_list(msg["controller_id"])
+        layout = layouts[0] if layouts else None
+    if layout is None:
+        connection.send_error(msg["id"], "not_found", "No layout saved")
+        return
+    fixture = next((f for f in layout.fixtures if f.id == fixture_id), None)
+    if fixture is None:
+        connection.send_error(msg["id"], "not_found", "Fixture not found")
+        return
+    positions = resolve_led_positions(fixture, layout.pixel_count)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "positions": [
+                {"x": x, "y": y, "led": led} for x, y, led in positions
+            ],
+        },
+    )
+
+
 _WS_HANDLERS = (
     ws_ping,
     ws_list_controllers,
@@ -298,6 +415,9 @@ _WS_HANDLERS = (
     ws_apply_state,
     ws_get_presets,
     ws_effect_meta,
+    ws_layout_list,
+    ws_layout_save,
+    ws_layout_resolve,
     ws_subscribe_live,
 )
 

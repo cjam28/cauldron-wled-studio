@@ -5,7 +5,6 @@ import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import {
   applyState,
-  createDebouncedApply,
   fetchDeviceState,
   fetchEffectMeta,
   fetchPresets,
@@ -14,8 +13,12 @@ import {
   type EffectMeta,
   type WledSegment,
 } from "../api/wled-state.js";
+import { createOptimisticApply } from "../api/state-writer.js";
+import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
+import "./preset-bar.js";
+import type { PresetEntry } from "./preset-bar.js";
 
 export const SEGMENT_CONTROLS_TAG = "wled-segment-controls";
 
@@ -35,6 +38,7 @@ export class WledSegmentControls extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
   @property({ type: Boolean }) compact = false;
+  @property({ type: Number }) selectedSegId = -1;
 
   @state() private _loading = true;
   @state() private _error = "";
@@ -43,31 +47,51 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _snapshot?: DeviceStateSnapshot;
   @state() private _meta?: EffectMeta;
   @state() private _effectFilter = "";
-  @state() private _qlPresets: Array<{ id: string; name: string; ql?: string }> =
-    [];
+  @state() private _presets: PresetEntry[] = [];
+  @state() private _colorSlot = 0;
+  @state() private _toast = "";
 
-  private _debouncedApply?: ReturnType<typeof createDebouncedApply>;
+  private _optimistic?: OptimisticApplyHandle;
 
   protected override onPoweredConnect(): void {
     void this._load();
   }
 
   protected override willUpdate(changed: PropertyValues): void {
+    if (changed.has("selectedSegId") && this.selectedSegId >= 0) {
+      this._segId = this.selectedSegId;
+      void this._refreshMeta();
+    }
     if (
       (changed.has("connection") || changed.has("controllerId")) &&
       this.connection &&
       this.controllerId
     ) {
-      this._debouncedApply = createDebouncedApply(
+      this._optimistic?.cancel();
+      this._optimistic = createOptimisticApply(
         this.connection,
-        this.controllerId
+        this.controllerId,
+        (seg, reason) => this._rollback(seg, reason)
       );
       void this._load();
     }
   }
 
   protected override onPoweredDisconnect(): void {
-    this._debouncedApply = undefined;
+    this._optimistic?.cancel();
+    this._optimistic = undefined;
+  }
+
+  /** Called from parent when strip preview selects a segment. */
+  selectSegment(id: number): void {
+    this._selectSeg(id);
+    this.dispatchEvent(
+      new CustomEvent("segment-change", {
+        detail: { segmentId: id },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   private async _load(): Promise<void> {
@@ -97,18 +121,36 @@ export class WledSegmentControls extends BasePoweredElement {
     if (!this.connection || !this.controllerId) return;
     try {
       const presets = await fetchPresets(this.connection, this.controllerId);
-      const ql: Array<{ id: string; name: string; ql?: string }> = [];
+      const list: PresetEntry[] = [];
       for (const [id, raw] of Object.entries(presets)) {
         if (!raw || typeof raw !== "object") continue;
         const p = raw as Record<string, unknown>;
-        const name = String(p.n ?? p.name ?? `Preset ${id}`);
-        const quick = p.ql ? String(p.ql) : undefined;
-        if (quick) ql.push({ id, name, ql: quick });
+        list.push({
+          id,
+          name: String(p.n ?? p.name ?? `Preset ${id}`),
+          ql: p.ql ? String(p.ql) : undefined,
+        });
       }
-      this._qlPresets = ql.slice(0, 12);
+      list.sort((a, b) => Number(a.id) - Number(b.id));
+      this._presets = list;
     } catch {
-      this._qlPresets = [];
+      this._presets = [];
     }
+  }
+
+  private _rollback(seg: WledSegment, reason: string): void {
+    const idx = this._segments.findIndex((s) => s.id === seg.id);
+    if (idx >= 0) {
+      const next = [...this._segments];
+      next[idx] = seg;
+      this._segments = next;
+    }
+    this._toast = reason;
+    this.requestUpdate();
+    window.setTimeout(() => {
+      this._toast = "";
+      this.requestUpdate();
+    }, 4000);
   }
 
   private _activeSeg(): WledSegment | undefined {
@@ -127,7 +169,7 @@ export class WledSegmentControls extends BasePoweredElement {
 
   private _patchSeg(patch: Partial<WledSegment>): void {
     const seg = this._activeSeg();
-    if (!seg || !this._debouncedApply) return;
+    if (!seg || !this._optimistic) return;
     const merged = { ...seg, ...patch, id: seg.id };
     const idx = this._segments.findIndex((s) => s.id === seg.id);
     if (idx >= 0) {
@@ -135,11 +177,12 @@ export class WledSegmentControls extends BasePoweredElement {
       next[idx] = merged;
       this._segments = next;
     }
-    this._debouncedApply({ seg: [merged] });
+    this._optimistic.push({ seg: [merged] }, merged);
   }
 
   private _selectSeg(id: number): void {
     this._segId = id;
+    this._colorSlot = 0;
     void this._refreshMeta();
   }
 
@@ -148,9 +191,24 @@ export class WledSegmentControls extends BasePoweredElement {
     await this._refreshMeta();
   }
 
+  private _cols(seg: WledSegment): [number, number, number, number][] {
+    const raw = seg.col ?? [];
+    const out: [number, number, number, number][] = [];
+    for (let i = 0; i < 3; i++) {
+      out.push(parseColSlot(raw[i] as number[] | undefined));
+    }
+    return out;
+  }
+
   private _onColor(ev: CustomEvent<{ rgb: [number, number, number]; white: number }>): void {
+    const seg = this._activeSeg();
+    if (!seg) return;
     const { rgb, white } = ev.detail;
-    this._patchSeg({ col: [[rgb[0], rgb[1], rgb[2], white]] });
+    const cols = this._cols(seg);
+    cols[this._colorSlot] = [rgb[0], rgb[1], rgb[2], white];
+    this._patchSeg({
+      col: cols.map((c) => [c[0], c[1], c[2], c[3]]),
+    });
   }
 
   private _onAwm(ev: CustomEvent<{ awm: number }>): void {
@@ -179,12 +237,18 @@ export class WledSegmentControls extends BasePoweredElement {
     if (!seg) {
       return html`<p class="muted">No segments on this controller.</p>`;
     }
-    const col = parseColSlot(seg.col?.[0]);
+    const cols = this._cols(seg);
+    const col = cols[this._colorSlot] ?? cols[0];
     const meta = this._meta;
     const sliders = meta?.sliders ?? {};
+    const colorSlots = meta?.colors_enabled !== false ? 3 : 1;
+    const slotLabels = ["Primary", "Secondary", "Tertiary"];
 
     return html`
       <div class="controls ${this.compact ? "compact" : ""}">
+        ${this._toast
+          ? html`<p class="toast" role="status">${this._toast}</p>`
+          : null}
         <div class="seg-bar" role="tablist" aria-label="Segments">
           ${this._segments.map(
             (s) => html`
@@ -192,7 +256,7 @@ export class WledSegmentControls extends BasePoweredElement {
                 class="seg-tab ${s.id === this._segId ? "active" : ""}"
                 role="tab"
                 aria-selected=${s.id === this._segId}
-                @click=${() => this._selectSeg(s.id)}
+                @click=${() => this.selectSegment(s.id)}
               >
                 ${this._labelForSeg(s)}
               </button>
@@ -200,17 +264,29 @@ export class WledSegmentControls extends BasePoweredElement {
           )}
         </div>
 
-        ${this._qlPresets.length
+        ${!this.compact && this._presets.length
           ? html`
-              <div class="ql-row" aria-label="Quick load presets">
-                ${this._qlPresets.map(
-                  (p) => html`
+              <wled-preset-bar
+                .presets=${this._presets}
+                @preset-select=${(ev: CustomEvent<{ presetId: string }>) =>
+                  this._loadPreset(ev.detail.presetId)}
+              ></wled-preset-bar>
+            `
+          : null}
+
+        ${colorSlots > 1
+          ? html`
+              <div class="color-slots" role="tablist" aria-label="Color slots">
+                ${slotLabels.slice(0, colorSlots).map(
+                  (label, i) => html`
                     <button
-                      class="ql"
-                      title=${p.name}
-                      @click=${() => this._loadPreset(p.id)}
+                      class="slot ${this._colorSlot === i ? "active" : ""}"
+                      role="tab"
+                      @click=${() => {
+                        this._colorSlot = i;
+                      }}
                     >
-                      ${p.ql}
+                      ${label}
                     </button>
                   `
                 )}
@@ -277,6 +353,10 @@ export class WledSegmentControls extends BasePoweredElement {
     );
     if (ent?.name) return ent.name.replace(/^.*\s—\s/, "");
     return `Seg ${seg.id + 1}`;
+  }
+
+  get segments(): WledSegment[] {
+    return this._segments;
   }
 
   static override styles = [
@@ -347,6 +427,29 @@ export class WledSegmentControls extends BasePoweredElement {
       }
       .compact .sliders {
         display: none;
+      }
+      .color-slots {
+        display: flex;
+        gap: 6px;
+      }
+      .slot {
+        flex: 1;
+        padding: 6px;
+        border-radius: 6px;
+        border: 1px solid var(--divider-color, #555);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.75rem;
+      }
+      .slot.active {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+      }
+      .toast {
+        font-size: 0.8rem;
+        color: var(--warning-color, orange);
+        margin: 0;
       }
     `,
   ];

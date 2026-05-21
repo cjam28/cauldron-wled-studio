@@ -4,14 +4,18 @@ import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import type { LiveFrameEvent } from "../api/live-stream.js";
 import { expandToFixture } from "../api/lv-frame-parser.js";
+import type { WledSegment } from "../api/wled-state.js";
 
 /** Live strip preview — 2D canvas with optional bloom; WebGL path in Phase 1 uses 2D glow. */
 @safeCustomElement("wled-strip-preview")
 export class WledStripPreview extends BasePoweredElement {
   @property({ type: Number }) heightPx = 56;
   @property({ type: Number }) pixelCount = 210;
+  @property({ type: Array }) segments: WledSegment[] = [];
+  @property({ type: Number }) selectedSegId = -1;
 
   @state() private _status = "waiting";
+  @state() private _hoverLed = -1;
   private _canvas?: HTMLCanvasElement;
   private _ctx?: CanvasRenderingContext2D;
   private _lastPixels?: Uint8ClampedArray;
@@ -47,7 +51,74 @@ export class WledStripPreview extends BasePoweredElement {
     this._canvas = this.renderRoot.querySelector("canvas") ?? undefined;
     if (this._canvas) {
       this._ctx = this._canvas.getContext("2d", { alpha: false }) ?? undefined;
+      this._canvas.addEventListener("click", this._onCanvasClick);
+      this._canvas.addEventListener("mousemove", this._onCanvasMove);
+      this._canvas.addEventListener("mouseleave", this._onCanvasLeave);
+      this.addUnsub(() => {
+        this._canvas?.removeEventListener("click", this._onCanvasClick);
+        this._canvas?.removeEventListener("mousemove", this._onCanvasMove);
+        this._canvas?.removeEventListener("mouseleave", this._onCanvasLeave);
+      });
     }
+  }
+
+  private _onCanvasClick = (ev: MouseEvent): void => {
+    const led = this._ledAtEvent(ev);
+    if (led < 0) return;
+    const segId = this._segmentForLed(led);
+    if (segId < 0) return;
+    this.dispatchEvent(
+      new CustomEvent("segment-select", {
+        detail: { segmentId: segId, ledIndex: led },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  };
+
+  private _onCanvasMove = (ev: MouseEvent): void => {
+    const led = this._ledAtEvent(ev);
+    if (led !== this._hoverLed) {
+      this._hoverLed = led;
+      this.requestUpdate();
+      if (this._lastPixels) this._schedulePaint();
+    }
+  };
+
+  private _onCanvasLeave = (): void => {
+    if (this._hoverLed >= 0) {
+      this._hoverLed = -1;
+      this.requestUpdate();
+      if (this._lastPixels) this._schedulePaint();
+    }
+  };
+
+  private _ledAtEvent(ev: MouseEvent): number {
+    const canvas = this._canvas;
+    if (!canvas) return -1;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const ratio = x / rect.width;
+    return Math.min(this.pixelCount - 1, Math.max(0, Math.floor(ratio * this.pixelCount)));
+  }
+
+  private _segmentForLed(led: number): number {
+    for (const seg of this.segments) {
+      const start = seg.start ?? 0;
+      const stop = seg.stop ?? seg.len ?? this.pixelCount;
+      if (led >= start && led < stop) return seg.id;
+    }
+    if (this.segments.length === 1) return this.segments[0].id;
+    return -1;
+  }
+
+  private _ledInSelectedSeg(led: number): boolean {
+    if (this.selectedSegId < 0) return false;
+    const seg = this.segments.find((s) => s.id === this.selectedSegId);
+    if (!seg) return false;
+    const start = seg.start ?? 0;
+    const stop = seg.stop ?? seg.len ?? this.pixelCount;
+    return led >= start && led < stop;
   }
 
   private _schedulePaint(): void {
@@ -76,10 +147,19 @@ export class WledStripPreview extends BasePoweredElement {
       const r = this._lastPixels[o];
       const g = this._lastPixels[o + 1];
       const b = this._lastPixels[o + 2];
+      const selected = this._ledInSelectedSeg(i);
+      const hover = i === this._hoverLed;
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.shadowColor = `rgba(${r},${g},${b},0.85)`;
-      ctx.shadowBlur = this.remote.state.disableBloom ? 0 : 6;
-      ctx.fillRect(i * segW, 2, Math.max(1, segW - 1), h - 4);
+      ctx.shadowBlur = this.remote.state.disableBloom ? 0 : selected || hover ? 10 : 6;
+      const y = selected ? 0 : 2;
+      const bh = selected ? h : h - 4;
+      ctx.fillRect(i * segW, y, Math.max(1, segW - 1), bh);
+      if (selected) {
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(i * segW + 0.5, 0.5, Math.max(1, segW - 2), h - 1);
+      }
     }
     ctx.shadowBlur = 0;
   }
@@ -87,8 +167,12 @@ export class WledStripPreview extends BasePoweredElement {
   protected override render() {
     const w = Math.max(320, this.pixelCount * 3);
     return html`
-      <div class="wrap" role="img" aria-label="Live LED strip preview">
-        <canvas width=${w} height=${this.heightPx}></canvas>
+      <div class="wrap" role="img" aria-label="Live LED strip preview — tap a pixel to select its segment">
+        <canvas
+          width=${w}
+          height=${this.heightPx}
+          style="cursor: crosshair"
+        ></canvas>
         ${this._status !== "live"
           ? html`<span class="overlay">${this._status}</span>`
           : null}

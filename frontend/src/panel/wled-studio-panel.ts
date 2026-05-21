@@ -3,6 +3,7 @@ import { state } from "lit/decorators.js";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import "../components/segment-controls.js";
+import "./view-layout.js";
 import { listControllers } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
@@ -67,14 +68,21 @@ export class WledStudioPanel extends BasePoweredElement {
               : null}
           </header>
           <section class="content" aria-live="polite">
-            ${this._view === "segments" && this._controllerId && this.hass?.connection
+            ${this._view === "layout" && this._controllerId && this.hass?.connection
               ? html`
-                  <wled-segment-controls
+                  <wled-view-layout
                     .connection=${this.hass.connection}
                     .controllerId=${this._controllerId}
-                  ></wled-segment-controls>
+                  ></wled-view-layout>
                 `
-              : html`
+              : this._view === "segments" && this._controllerId && this.hass?.connection
+                ? html`
+                    <wled-segment-controls
+                      .connection=${this.hass.connection}
+                      .controllerId=${this._controllerId}
+                    ></wled-segment-controls>
+                  `
+                : html`
                   <p>
                     View: <strong>${this._view}</strong>
                     ${this._view === "segments"

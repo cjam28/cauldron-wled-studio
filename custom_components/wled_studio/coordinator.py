@@ -13,6 +13,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .attach import resolve_wled_entry
 from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY
+from .layout_store import LayoutStore
 from .live_proxy import LiveProxy, get_live_proxy, shutdown_live_proxy
 from .wled_client import WledClient
 
@@ -33,6 +34,7 @@ class WledStudioCoordinator:
         self.title = entry.title or "WLED Studio"
         self.client: WledClient | None = None
         self.live_proxy: LiveProxy | None = None
+        self.layout_store = LayoutStore(hass)
         self._session: aiohttp.ClientSession | None = None
         self._master_entity_id: str | None = None
         self._segment_entities: list[dict[str, Any]] = []

@@ -1,4 +1,7 @@
-# Phase 2 verification (segment control + color)
+# Phase 2 verification (segment control + color) — v0.4.2
+
+Includes deferred items: strip tap-to-select, primary/secondary/tertiary colors,
+full preset list (panel), optimistic apply + 500 ms rollback toast.
 
 After HACS **Redownload** of `0.4.0+` and **Reload** WLED Studio:
 
