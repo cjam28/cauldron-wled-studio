@@ -209,6 +209,36 @@ class WledClient:
             pass
         return 0
 
+    def led_bus_rgbwm(self, bus_index: int = 0) -> int:
+        """Per-bus auto-white mode from /json/cfg (persistent LED settings).
+
+        Matches WLED UI "Auto-calculate W channel from RGB". Values: 0 Manual,
+        1 Brighter, 2 Accurate, 3 Dual, 4 Max. Segment ``awm`` in /json/state is
+        only a per-request override and is often omitted when unset.
+        """
+        try:
+            led = self.cfg.get("hw", {}).get("led", {})
+            if not isinstance(led, dict):
+                return 0
+            global_rgbwm = int(led.get("rgbwm", 255))
+            ins = led.get("ins", [])
+            if not isinstance(ins, list) or not ins:
+                return max(0, min(4, global_rgbwm)) if global_rgbwm != 255 else 0
+            idx = max(0, min(bus_index, len(ins) - 1))
+            bus = ins[idx]
+            if not isinstance(bus, dict):
+                return 0
+            if global_rgbwm != 255:
+                return max(0, min(4, global_rgbwm))
+            return max(0, min(4, int(bus.get("rgbwm", 0))))
+        except (TypeError, ValueError):
+            return 0
+
+    async def apply_cfg(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """POST /json/cfg and refresh cached config."""
+        await self._request("POST", "/json/cfg", json=patch)
+        return await self.get_cfg()
+
     async def bootstrap(self) -> None:
         await self.get_info()
         await self.refresh_catalog()

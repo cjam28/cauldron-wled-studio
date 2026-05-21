@@ -5,6 +5,7 @@ import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import {
+  applyRgbwm,
   applyState,
   buildSegmentPatch,
   entityForWledSegment,
@@ -283,8 +284,23 @@ export class WledSegmentControls extends BasePoweredElement {
     });
   }
 
-  private _onAwm(ev: CustomEvent<{ awm: number }>): void {
-    this._patchSeg({ awm: ev.detail.awm });
+  private async _onAwm(ev: CustomEvent<{ awm: number }>): Promise<void> {
+    const rgbwm = ev.detail.awm;
+    if (!this.connection || !this.controllerId) return;
+    try {
+      const persisted = await applyRgbwm(
+        this.connection,
+        this.controllerId,
+        rgbwm
+      );
+      if (this._snapshot) {
+        this._snapshot = { ...this._snapshot, rgbwm: persisted };
+      }
+      this._patchSeg({ awm: rgbwm });
+    } catch (err) {
+      this._toast = err instanceof Error ? err.message : String(err);
+      this.requestUpdate();
+    }
   }
 
   private _slider(key: keyof WledSegment, ev: Event): void {
@@ -315,6 +331,7 @@ export class WledSegmentControls extends BasePoweredElement {
     const sliders = meta?.sliders ?? {};
     const colorSlots = meta?.colors_enabled !== false ? 3 : 1;
     const slotLabels = ["Primary", "Secondary", "Tertiary"];
+    const busRgbwm = this._snapshot?.rgbwm ?? 0;
 
     return html`
       <div class="controls ${this.compact ? "compact" : ""}">
@@ -380,7 +397,7 @@ export class WledSegmentControls extends BasePoweredElement {
         <wled-color-wheel-rgbw
           .rgb=${[col[0], col[1], col[2]] as [number, number, number]}
           .white=${col[3]}
-          .awm=${seg.awm ?? 0}
+          .awm=${busRgbwm}
           .showWhite=${(this._snapshot?.led_order ?? 0) > 0}
           @color-change=${this._onColor}
           @awm-change=${this._onAwm}

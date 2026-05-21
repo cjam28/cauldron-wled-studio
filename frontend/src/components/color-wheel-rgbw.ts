@@ -100,8 +100,8 @@ export class WledColorWheelRgbw extends BasePoweredElement {
               `
             : null}
           <label>
-            Auto-white
-            <select @change=${this._onAwm}>
+            Auto-calculate W
+            <select @change=${this._onAwm} aria-label="Auto-calculate W channel from RGB">
               <option value="0" ?selected=${this.awm === 0}>Manual</option>
               <option value="1" ?selected=${this.awm === 1}>Brighter</option>
               <option value="2" ?selected=${this.awm === 2}>Accurate</option>

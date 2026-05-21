@@ -47,6 +47,8 @@ export interface DeviceStateSnapshot {
   sound_flags: Array<string | null>;
   fxdata: string;
   led_order: number;
+  /** Persistent auto-white from /json/cfg hw.led.ins[].rgbwm (WLED LED settings). */
+  rgbwm?: number;
   segment_entities: Array<{
     entity_id: string;
     segment_index: number;
@@ -115,6 +117,24 @@ export async function fetchEffectMeta(
       defaults: {},
     }
   );
+}
+
+/** Apply persistent auto-white mode (cfg rgbwm), not just segment state awm. */
+export async function applyRgbwm(
+  connection: Connection,
+  controllerId: string,
+  rgbwm: number,
+  busIndex = 0
+): Promise<number> {
+  await waitForConnection(connection);
+  const res = (await connection.sendMessagePromise({
+    type: "wled_studio/apply_rgbwm",
+    schema_version: SCHEMA_VERSION,
+    controller_id: controllerId,
+    rgbwm,
+    bus_index: busIndex,
+  })) as { rgbwm?: number };
+  return res.rgbwm ?? rgbwm;
 }
 
 export async function fetchPresets(

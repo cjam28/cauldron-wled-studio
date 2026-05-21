@@ -113,9 +113,11 @@ async def ws_get_state(
         return
     client = coord.client
     if client:
+        await client.get_cfg()
         await client.get_state(refresh=True)
     state = client.state if client else {}
     seg = state.get("seg") if isinstance(state.get("seg"), list) else []
+    bus_index = int(msg.get("bus_index", 0))
     connection.send_result(
         msg["id"],
         {
@@ -129,7 +131,58 @@ async def ws_get_state(
             "sound_flags": client.sound_flags if client else [],
             "fxdata": client.fxdata if client else "",
             "led_order": client.led_bus_order() if client else 0,
+            "rgbwm": client.led_bus_rgbwm(bus_index) if client else 0,
             "segment_entities": coord._segment_entities,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/apply_rgbwm",
+        vol.Required("controller_id"): str,
+        vol.Required("rgbwm"): vol.All(vol.Coerce(int), vol.Range(min=0, max=4)),
+        vol.Optional("bus_index", default=0): vol.Coerce(int),
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_apply_rgbwm(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Persist auto-white mode to /json/cfg (WLED LED settings)."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    bus_index = int(msg.get("bus_index", 0))
+    rgbwm = int(msg["rgbwm"])
+    client = coord.client
+    try:
+        ins = client.cfg.get("hw", {}).get("led", {}).get("ins", [])
+        if isinstance(ins, list) and ins and 0 <= bus_index < len(ins):
+            ins_patch = list(ins)
+            entry = dict(ins_patch[bus_index]) if isinstance(ins_patch[bus_index], dict) else {}
+            entry["rgbwm"] = rgbwm
+            ins_patch[bus_index] = entry
+            patch: dict[str, Any] = {"hw": {"led": {"ins": ins_patch}}}
+        else:
+            patch = {"hw": {"led": {"rgbwm": rgbwm}}}
+        await client.apply_cfg(patch)
+    except Exception as err:
+        connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "rgbwm": client.led_bus_rgbwm(bus_index),
         },
     )
 
@@ -839,6 +892,7 @@ _WS_HANDLERS = (
     ws_scene_delete,
     ws_scene_apply,
     ws_scene_capture,
+    ws_apply_rgbwm,
 )
 
 
