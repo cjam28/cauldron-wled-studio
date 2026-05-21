@@ -3,8 +3,6 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
-import { getStroke } from "perfect-freehand";
-import simplify from "simplify-js";
 import {
   layoutGet,
   layoutResolvePositions,
@@ -22,12 +20,25 @@ import {
 } from "../utils/background-layer.js";
 import "./layout-photo-editor.js";
 import type { WledLayoutPhotoEditor } from "./layout-photo-editor.js";
+import {
+  type DrawTool,
+  type GuidePath,
+  ellipseToGuide,
+  ledIndexAlongGuide,
+  lineToGuide,
+  penStrokeToGuide,
+  polylineToGuide,
+  rectToGuide,
+  snapToGuide,
+  strokeGuide,
+} from "../utils/draw-tools.js";
+import { parseSvgToGuide } from "../utils/svg-import.js";
 
-/** Vertex used internally while editing. */
+/** Sparse corners / segment pins (user-placed). */
 interface Vertex {
   x: number;
   y: number;
-  anchorLed: number | null; // null = unanchored
+  anchorLed: number | null;
 }
 
 const ANCHOR_COLOR = "#f59e0b";
@@ -58,7 +69,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _status = "";
   @state() private _busy = false;
   @state() private _closed = false;
-  @state() private _tool: "select" | "pen" | "photo" = "select";
+  @state() private _tool: DrawTool = "select";
+  @state() private _guide: GuidePath | null = null;
   @state() private _backgroundUrl: string | null = null;
   @state() private _bgLayer: BackgroundLayer | null = null;
   @state() private _scalePxPerM: number | null = null;
@@ -67,6 +79,9 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _calibPts: Array<[number, number]> = [];
   private _penStroke: Array<[number, number]> = [];
+  private _shapeStart: [number, number] | null = null;
+  private _lineStart: [number, number] | null = null;
+  private _polylinePts: Array<[number, number]> = [];
   private _bgImage: HTMLImageElement | null = null;
   private _photoPan: {
     px: number;
@@ -170,20 +185,25 @@ export class WledLayoutDesigner extends BasePoweredElement {
   }
 
   private _fitView(): void {
-    if (this._vertices.length === 0) {
+    const canvas = this._canvas;
+    if (!canvas) return;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    const addPt = (x: number, y: number) => {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    };
+    for (const v of this._vertices) addPt(v.x, v.y);
+    for (const p of this._guide?.points ?? []) addPt(p[0], p[1]);
+    if (!Number.isFinite(minX)) {
       this._viewOx = 40;
       this._viewOy = 40;
       this._viewScale = 1;
       return;
-    }
-    const canvas = this._canvas;
-    if (!canvas) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const v of this._vertices) {
-      if (v.x < minX) minX = v.x;
-      if (v.x > maxX) maxX = v.x;
-      if (v.y < minY) minY = v.y;
-      if (v.y > maxY) maxY = v.y;
     }
     const pad = 48;
     const rx = maxX - minX || 100;
@@ -256,6 +276,35 @@ export class WledLayoutDesigner extends BasePoweredElement {
     return this._pointerCanvasXY(ev.clientX, ev.clientY);
   }
 
+  private _placeVertexOnGuide(mx: number, my: number): void {
+    if (!this._guide || this._guide.points.length < 2) {
+      this._status = "Draw a shape first (pen, line, rect, …), then place vertices.";
+      return;
+    }
+    const snap = snapToGuide(this._guide, mx, my);
+    const thresh = 24 / Math.max(this._viewScale, 0.01);
+    if (snap.dist > thresh) {
+      this._status = "Click closer to the purple guide line.";
+      return;
+    }
+    for (const v of this._vertices) {
+      if (Math.hypot(v.x - snap.x, v.y - snap.y) < thresh * 0.5) {
+        this._status = "Vertex already placed near here.";
+        return;
+      }
+    }
+    const led = ledIndexAlongGuide(snap.t, this.pixelCount);
+    this._vertices = [
+      ...this._vertices,
+      { x: snap.x, y: snap.y, anchorLed: led },
+    ];
+    this._selectedVtx = this._vertices.length - 1;
+    this._anchorInput = String(led);
+    this._status = `Placed v${this._selectedVtx} @ LED ${led} — add more or set anchors manually`;
+    void this._refreshPositions();
+    this._paint();
+  }
+
   private _onPointerDown = (ev: PointerEvent): void => {
     ev.preventDefault();
     const [cx, cy] = this._canvasXY(ev);
@@ -279,9 +328,47 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
 
+    if (this._tool === "place") {
+      const hit = this._hitVertex(cx, cy);
+      if (hit >= 0) {
+        this._selectedVtx = hit;
+        this._anchorInput = String(this._vertices[hit].anchorLed ?? "");
+      } else {
+        this._placeVertexOnGuide(mx, my);
+      }
+      this._paint();
+      return;
+    }
+
     if (this._tool === "pen") {
       this._penStroke = [[cx, cy]];
       this._canvas?.setPointerCapture(ev.pointerId);
+      this._paint();
+      return;
+    }
+
+    if (this._tool === "line") {
+      if (!this._lineStart) {
+        this._lineStart = [mx, my];
+        this._status = "Line: click end point";
+      } else {
+        this._guide = lineToGuide(this._lineStart, [mx, my]);
+        this._lineStart = null;
+        this._status = "Line guide ready — switch to Place vertices";
+      }
+      this._paint();
+      return;
+    }
+
+    if (this._tool === "rect" || this._tool === "ellipse") {
+      this._shapeStart = [mx, my];
+      this._canvas?.setPointerCapture(ev.pointerId);
+      return;
+    }
+
+    if (this._tool === "polyline") {
+      this._polylinePts = [...this._polylinePts, [mx, my]];
+      this._status = `Polyline: ${this._polylinePts.length} pts — double-click to finish`;
       this._paint();
       return;
     }
@@ -323,6 +410,21 @@ export class WledLayoutDesigner extends BasePoweredElement {
       return;
     }
 
+    if (this._shapeStart && (this._tool === "rect" || this._tool === "ellipse")) {
+      const [mx, my] = this._canvasToModel(cx, cy);
+      const [x0, y0] = this._shapeStart;
+      if (this._tool === "rect") {
+        const preview = rectToGuide(x0, y0, mx, my);
+        this._paint(preview);
+      } else {
+        const rx = Math.abs(mx - x0) / 2;
+        const ry = Math.abs(my - y0) / 2;
+        const preview = ellipseToGuide((x0 + mx) / 2, (y0 + my) / 2, rx, ry);
+        this._paint(preview);
+      }
+      return;
+    }
+
     if (!this._drag) return;
     const [mx, my] = this._canvasToModel(cx, cy);
     const verts = [...this._vertices];
@@ -339,7 +441,26 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
     if (this._tool === "pen" && this._penStroke.length > 0) {
       this._canvas?.releasePointerCapture(ev.pointerId);
-      this._finishPenStroke();
+      this._finishPenGuide();
+      return;
+    }
+    if (this._shapeStart && (this._tool === "rect" || this._tool === "ellipse")) {
+      const [cx, cy] = this._canvasXY(ev);
+      const [mx, my] = this._canvasToModel(cx, cy);
+      const [x0, y0] = this._shapeStart;
+      this._guide =
+        this._tool === "rect"
+          ? rectToGuide(x0, y0, mx, my)
+          : ellipseToGuide(
+              (x0 + mx) / 2,
+              (y0 + my) / 2,
+              Math.abs(mx - x0) / 2,
+              Math.abs(my - y0) / 2
+            );
+      this._shapeStart = null;
+      this._status = "Shape guide ready — switch to Place vertices";
+      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._paint();
       return;
     }
     if (this._drag) {
@@ -349,26 +470,25 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
   };
 
-  private _finishPenStroke(): void {
+  private _finishPenGuide(): void {
     const stroke = this._penStroke;
     this._penStroke = [];
-    if (stroke.length < 2) return;
-    const outline = getStroke(
-      stroke.map(([x, y]) => [x, y, 0.5] as [number, number, number]),
-      { size: 10, thinning: 0.6, smoothing: 0.5 }
-    );
-    const pts = simplify(
-      outline.map(([x, y]) => ({ x, y })),
-      2.5,
-      true
-    );
-    if (pts.length < 2) return;
-    this._vertices = pts.map((p) => {
-      const [mx, my] = this._canvasToModel(p.x, p.y);
-      return { x: mx, y: my, anchorLed: null };
-    });
-    this._selectedVtx = -1;
-    void this._refreshPositions();
+    this._guide = penStrokeToGuide(stroke, (cx, cy) => this._canvasToModel(cx, cy));
+    this._status =
+      this._guide.points.length >= 2
+        ? "Smooth guide drawn — switch to Place vertices and click along the line"
+        : "Stroke too short";
+    this._paint();
+  }
+
+  private _finishPolyline(): void {
+    if (this._polylinePts.length < 2) {
+      this._status = "Need at least 2 points";
+      return;
+    }
+    this._guide = polylineToGuide(this._polylinePts, this._closed);
+    this._polylinePts = [];
+    this._status = "Polyline guide ready — Place vertices along the path";
     this._paint();
   }
 
@@ -386,9 +506,14 @@ export class WledLayoutDesigner extends BasePoweredElement {
   }
 
   private _onDblClick = (ev: MouseEvent): void => {
+    if (this._tool === "polyline") {
+      ev.preventDefault();
+      this._finishPolyline();
+      return;
+    }
+    if (this._tool !== "select") return;
     const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
-    const hit = this._hitVertex(cx, cy);
-    if (hit >= 0) return;
+    if (this._hitVertex(cx, cy) >= 0) return;
     const [mx, my] = this._canvasToModel(cx, cy);
     this._vertices = [...this._vertices, { x: mx, y: my, anchorLed: null }];
     this._selectedVtx = this._vertices.length - 1;
@@ -409,7 +534,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     void this._refreshPositions();
   };
 
-  private _paint(): void {
+  private _paint(guidePreview: GuidePath | null = null): void {
     const ctx = this._ctx;
     const canvas = this._canvas;
     if (!ctx || !canvas) return;
@@ -424,12 +549,35 @@ export class WledLayoutDesigner extends BasePoweredElement {
       drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
     }
 
+    const toCanvas = (x: number, y: number) => this._vtxToCanvas({ x, y, anchorLed: null });
+    strokeGuide(ctx, toCanvas, this._guide);
+    if (guidePreview) strokeGuide(ctx, toCanvas, guidePreview);
+
+    if (this._polylinePts.length >= 2) {
+      strokeGuide(
+        ctx,
+        toCanvas,
+        polylineToGuide(this._polylinePts, false)
+      );
+    }
+
+    if (this._penStroke.length >= 2) {
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(168,85,247,0.5)";
+      ctx.lineWidth = 2;
+      ctx.moveTo(this._penStroke[0][0], this._penStroke[0][1]);
+      for (let i = 1; i < this._penStroke.length; i++) {
+        ctx.lineTo(this._penStroke[i][0], this._penStroke[i][1]);
+      }
+      ctx.stroke();
+    }
+
     const verts = this._vertices;
-    if (verts.length === 0) {
+    if (verts.length === 0 && !this._guide) {
       ctx.fillStyle = "rgba(255,255,255,0.25)";
       ctx.font = "14px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Double-click to add vertices", w / 2, h / 2);
+      ctx.fillText("Draw a shape, then use Place vertices", w / 2, h / 2);
       return;
     }
 
@@ -448,35 +596,24 @@ export class WledLayoutDesigner extends BasePoweredElement {
       ctx.shadowBlur = 0;
     }
 
-    // Draw polyline (skip duplicate closing point for display)
-    const drawVerts =
-      verts.length >= 2 && this._isClosingDuplicate(verts.length - 1)
-        ? verts.slice(0, -1)
-        : verts;
-    if (drawVerts.length >= 2) {
-      ctx.beginPath();
-      ctx.strokeStyle = EDGE_COLOR;
-      ctx.lineWidth = 2;
-      const [sx, sy] = this._vtxToCanvas(drawVerts[0]);
-      ctx.moveTo(sx, sy);
-      for (let i = 1; i < drawVerts.length; i++) {
-        const [vx, vy] = this._vtxToCanvas(drawVerts[i]);
-        ctx.lineTo(vx, vy);
+    if (verts.length >= 2) {
+      const drawVerts =
+        verts.length >= 2 && this._isClosingDuplicate(verts.length - 1)
+          ? verts.slice(0, -1)
+          : verts;
+      if (drawVerts.length >= 2) {
+        ctx.beginPath();
+        ctx.strokeStyle = EDGE_COLOR;
+        ctx.lineWidth = 2;
+        const [sx, sy] = this._vtxToCanvas(drawVerts[0]);
+        ctx.moveTo(sx, sy);
+        for (let i = 1; i < drawVerts.length; i++) {
+          const [vx, vy] = this._vtxToCanvas(drawVerts[i]);
+          ctx.lineTo(vx, vy);
+        }
+        if (this._closed && drawVerts.length >= 3) ctx.closePath();
+        ctx.stroke();
       }
-      if (this._closed && drawVerts.length >= 3) ctx.closePath();
-      ctx.stroke();
-    }
-
-    if (this._penStroke.length >= 2) {
-      ctx.beginPath();
-      ctx.strokeStyle = "rgba(168,85,247,0.8)";
-      ctx.lineWidth = 2;
-      const [px0, py0] = this._penStroke[0];
-      ctx.moveTo(px0, py0);
-      for (let i = 1; i < this._penStroke.length; i++) {
-        ctx.lineTo(this._penStroke[i][0], this._penStroke[i][1]);
-      }
-      ctx.stroke();
     }
 
     for (const [mx, my] of this._calibPts) {
@@ -557,6 +694,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
         }
       }
       this._vertices = vertices;
+      const gp = fixture.guide_points as Array<[number, number]> | undefined;
+      const gk = fixture.guide_kind as GuidePath["kind"] | undefined;
+      if (Array.isArray(gp) && gp.length >= 2) {
+        this._guide = {
+          points: gp.map((p) => [Number(p[0]), Number(p[1])] as [number, number]),
+          closed: Boolean(fixture.closed),
+          kind: gk ?? "polyline",
+        };
+      }
       this._closed = Boolean(fixture.closed);
       this._bgLayer = backgroundFromLayout(layout);
       this._backgroundUrl = this._bgLayer?.url ?? layout.background_url ?? null;
@@ -620,9 +766,34 @@ export class WledLayoutDesigner extends BasePoweredElement {
           closed: this._closed,
           points: pts,
           anchors,
+          guide_points: this._guide?.points ?? [],
+          guide_kind: this._guide?.kind ?? null,
         },
       ],
     };
+  }
+
+  private async _onSvgFile(ev: Event): Promise<void> {
+    const input = ev.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      this._guide = parseSvgToGuide(text);
+      this._status = "SVG guide loaded — Place vertices along the path";
+      this._fitView();
+      this._paint();
+    } catch (err) {
+      this._status = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  private _clearGuide(): void {
+    this._guide = null;
+    this._polylinePts = [];
+    this._lineStart = null;
+    this._paint();
   }
 
   private _loadBackgroundImage(): void {
@@ -783,32 +954,82 @@ export class WledLayoutDesigner extends BasePoweredElement {
           <canvas></canvas>
         </div>
         <div class="sidebar">
-          <div class="tool-row">
-            <button
-              class=${this._tool === "select" ? "tool active" : "tool"}
-              @click=${() => {
-                this._tool = "select";
-              }}
-            >
-              Select
-            </button>
-            <button
-              class=${this._tool === "pen" ? "tool active" : "tool"}
-              @click=${() => {
-                this._tool = "pen";
-              }}
-            >
-              Pen
-            </button>
-            <button
-              class=${this._tool === "photo" ? "tool active" : "tool"}
-              ?disabled=${!this._bgLayer}
-              @click=${() => {
-                this._tool = "photo";
-              }}
-            >
-              Photo
-            </button>
+          <div class="tool-group">
+            <span class="tool-label">Edit</span>
+            <div class="tool-row">
+              <button
+                class=${this._tool === "select" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "select";
+                }}
+              >
+                Select
+              </button>
+              <button
+                class=${this._tool === "place" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "place";
+                }}
+              >
+                Place ●
+              </button>
+              <button
+                class=${this._tool === "photo" ? "tool active" : "tool"}
+                ?disabled=${!this._bgLayer}
+                @click=${() => {
+                  this._tool = "photo";
+                }}
+              >
+                Photo
+              </button>
+            </div>
+          </div>
+          <div class="tool-group">
+            <span class="tool-label">Draw shape (guide)</span>
+            <div class="tool-row wrap">
+              <button
+                class=${this._tool === "pen" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "pen";
+                }}
+              >
+                Freehand
+              </button>
+              <button
+                class=${this._tool === "line" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "line";
+                  this._lineStart = null;
+                }}
+              >
+                Line
+              </button>
+              <button
+                class=${this._tool === "rect" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "rect";
+                }}
+              >
+                Rectangle
+              </button>
+              <button
+                class=${this._tool === "ellipse" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "ellipse";
+                }}
+              >
+                Oval
+              </button>
+              <button
+                class=${this._tool === "polyline" ? "tool active" : "tool"}
+                @click=${() => {
+                  this._tool = "polyline";
+                  this._polylinePts = [];
+                }}
+              >
+                Polyline
+              </button>
+            </div>
           </div>
 
           <label class="check-row">
@@ -825,21 +1046,22 @@ export class WledLayoutDesigner extends BasePoweredElement {
           </label>
 
           <div class="instructions">
-            <strong>Select tool</strong>
+            <strong>Workflow</strong>
+            <ol>
+              <li>Draw a <em>purple guide</em> (shape tools)</li>
+              <li><strong>Place ●</strong> — click the guide to drop corners (suggests LED #)</li>
+              <li>Set anchor LEDs → Save → Apply segments</li>
+            </ol>
+            <strong>Place ●</strong>
             <ul>
-              <li>Click vertex → select & set anchor LED</li>
-              <li>Drag vertex → move corner</li>
-              <li>Double-click empty → add vertex</li>
-              <li>Right-click vertex → delete</li>
+              <li>Clicks snap to the guide; LED index from position along strip</li>
             </ul>
-            <strong>Pen tool</strong>
+            <strong>Shapes</strong>
             <ul>
-              <li>Draw freehand → releases as vertices</li>
-            </ul>
-            <strong>Photo tool</strong>
-            <ul>
-              <li>Drag to pan photo under the strip</li>
-              <li>Scroll wheel to zoom photo</li>
+              <li>Line: two clicks</li>
+              <li>Rect / Oval: drag</li>
+              <li>Polyline: clicks, double-click to finish</li>
+              <li>Freehand: smooth stroke (not hundreds of vertices)</li>
             </ul>
           </div>
 
@@ -857,6 +1079,25 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 @change=${this._onBackgroundFile}
               />
             </label>
+            <label class="file-btn secondary">
+              Import SVG guide
+              <input
+                type="file"
+                accept="image/svg+xml,.svg"
+                hidden
+                @change=${this._onSvgFile}
+              />
+            </label>
+            <button class="secondary" @click=${() => this._clearGuide()}>
+              Clear shape guide
+            </button>
+            ${this._tool === "polyline" && this._polylinePts.length >= 2
+              ? html`
+                  <button class="secondary" @click=${() => this._finishPolyline()}>
+                    Finish polyline
+                  </button>
+                `
+              : null}
             ${this._bgLayer
               ? html`
                   <div class="photo-tune">
@@ -1074,9 +1315,23 @@ export class WledLayoutDesigner extends BasePoweredElement {
         margin: 4px 0 0;
         padding-left: 1.1rem;
       }
+      .tool-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .tool-label {
+        font-size: 0.72rem;
+        opacity: 0.65;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
       .tool-row {
         display: flex;
         gap: 6px;
+      }
+      .tool-row.wrap {
+        flex-wrap: wrap;
       }
       .tool {
         flex: 1;
