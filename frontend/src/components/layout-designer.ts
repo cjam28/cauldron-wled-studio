@@ -79,6 +79,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _canUndo = false;
   @state() private _canRedo = false;
   @state() private _zoomSlider = 50;
+  /** Last “scale anchors to LED” slider position (UI only). */
+  @state() private _anchorScaleEnd = -1;
 
   private _calibPts: Array<[number, number]> = [];
   private _undoStack: LayoutDesignerSnapshot[] = [];
@@ -959,24 +961,34 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._syncStage();
   }
 
-  private _mirrorSliderMax(): number {
+  private _anchorScaleMax(): number {
     return Math.max(0, this.pixelCount - 1);
   }
 
-  private _onMirrorSlider(ev: Event): void {
+  private _anchorScaleSliderValue(): number {
+    const max = this._anchorScaleMax();
+    if (this._anchorScaleEnd < 0) return max;
+    return Math.min(max, this._anchorScaleEnd);
+  }
+
+  private _onAnchorScaleSlider(ev: Event): void {
     const input = ev.target as HTMLInputElement;
-    const mirrorAt = parseInt(input.value, 10);
-    if (isNaN(mirrorAt) || this._vertices.length === 0) return;
+    const endLed = parseInt(input.value, 10);
+    if (isNaN(endLed) || this._vertices.length === 0) return;
     this._recordUndo();
+    const max = this._anchorScaleMax();
     const verts = [...this._vertices];
     for (let i = 0; i < verts.length; i++) {
       const a = verts[i].anchorLed;
       if (a === null) continue;
-      const t = a / this._mirrorSliderMax();
-      const newLed = Math.round(lerp(0, mirrorAt, t));
+      const t = max > 0 ? a / max : 0;
+      const newLed = Math.round(lerp(0, endLed, t));
       verts[i] = { ...verts[i], anchorLed: newLed };
     }
     this._vertices = verts;
+    this._anchorScaleEnd = endLed;
+    this._status = `Anchors rescaled to LEDs 0–${endLed} (spacing preserved)`;
+    void this._refreshPositions();
     this._syncStage();
   }
 
@@ -1341,15 +1353,20 @@ export class WledLayoutDesigner extends BasePoweredElement {
               `
             : null}
 
-          <div class="mirror-panel">
+          <div class="scale-anchors-panel">
+            <span class="panel-title">Scale all anchors</span>
+            <p class="panel-hint">
+              Keeps the same relative spacing between pinned anchors, but fits them
+              into LEDs 0 through the value below (not a canvas mirror).
+            </p>
             <label>
-              Mirror anchor at LED
+              End at LED ${this._anchorScaleSliderValue()}
               <input
                 type="range"
                 min="0"
-                max=${this._mirrorSliderMax()}
-                value=${this.pixelCount - 1}
-                @change=${this._onMirrorSlider}
+                max=${this._anchorScaleMax()}
+                .value=${String(this._anchorScaleSliderValue())}
+                @change=${this._onAnchorScaleSlider}
               />
             </label>
           </div>
@@ -1602,15 +1619,30 @@ export class WledLayoutDesigner extends BasePoweredElement {
         width: 100%;
         box-sizing: border-box;
       }
-      .mirror-panel {
+      .scale-anchors-panel {
         font-size: 0.82rem;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
-      .mirror-panel label {
+      .scale-anchors-panel .panel-title {
+        font-size: 0.72rem;
+        opacity: 0.65;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .scale-anchors-panel .panel-hint {
+        margin: 0;
+        font-size: 0.75rem;
+        opacity: 0.7;
+        line-height: 1.4;
+      }
+      .scale-anchors-panel label {
         display: flex;
         flex-direction: column;
         gap: 4px;
       }
-      .mirror-panel input[type="range"] {
+      .scale-anchors-panel input[type="range"] {
         width: 100%;
       }
       .status {
