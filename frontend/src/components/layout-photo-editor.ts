@@ -2,13 +2,28 @@ import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { loadImageElementFromFile } from "../api/layout-background.js";
 import {
-  DEFAULT_BACKGROUND,
   drawBackgroundLayer,
   normalizeBackground,
   renderBackgroundBlob,
   type BackgroundLayer,
 } from "../utils/background-layer.js";
+
+/** Full-opacity preview in the editor (designer uses lower default). */
+const EDITOR_PREVIEW_DEFAULTS: Partial<BackgroundLayer> = {
+  opacity: 1,
+  brightness: 1,
+  saturation: 1,
+  rotation: 0,
+  offsetX: 0,
+  offsetY: 0,
+  scale: 1,
+  cropX: 0,
+  cropY: 0,
+  cropW: 1,
+  cropH: 1,
+};
 
 export const PHOTO_EDITOR_TAG = "wled-layout-photo-editor";
 
@@ -23,38 +38,71 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
   @state() private _cropStart = { x: 0, y: 0, cx: 0, cy: 0, cw: 1, ch: 1 };
 
   private _canvas?: HTMLCanvasElement;
+  private _previewWrap?: HTMLElement;
+  private _resizeObs?: ResizeObserver;
   private _file?: File;
+  private _loadError = "";
 
   async openWithFile(file: File): Promise<void> {
     this._file = file;
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("Could not load image"));
-      img.src = url;
-    });
-    this._img = img;
-    this._layer = normalizeBackground(url, DEFAULT_BACKGROUND);
+    this._loadError = "";
+    this._img = null;
+    this._layer = null;
     this.open = true;
     await this.updateComplete;
-    this._paint();
+    this._bindCanvas();
+    try {
+      const img = await loadImageElementFromFile(file);
+      this._img = img;
+      this._layer = normalizeBackground("local-preview", EDITOR_PREVIEW_DEFAULTS);
+      this._paint();
+    } catch (err) {
+      this._loadError = err instanceof Error ? err.message : String(err);
+      this._paint();
+      throw err;
+    }
   }
 
   protected override updated(changed: import("lit").PropertyValues): void {
     super.updated(changed);
-    if (changed.has("open") && this.open) {
-      requestAnimationFrame(() => this._paint());
+    if (changed.has("open")) {
+      if (this.open) {
+        this._bindCanvas();
+        requestAnimationFrame(() => this._paint());
+      } else {
+        this._resizeObs?.disconnect();
+      }
     }
   }
 
-  protected override firstUpdated(): void {
-    this._canvas = this.renderRoot.querySelector("canvas") ?? undefined;
-    if (this._canvas) {
-      this._canvas.addEventListener("pointerdown", this._onDown);
-      this._canvas.addEventListener("pointermove", this._onMove);
-      this._canvas.addEventListener("pointerup", this._onUp);
+  private _bindCanvas(): void {
+    const canvas = this.renderRoot.querySelector("canvas") ?? undefined;
+    const wrap =
+      (this.renderRoot.querySelector(".preview-wrap") as HTMLElement | null) ??
+      undefined;
+    if (!canvas) return;
+
+    if (canvas !== this._canvas) {
+      this._canvas?.removeEventListener("pointerdown", this._onDown);
+      this._canvas?.removeEventListener("pointermove", this._onMove);
+      this._canvas?.removeEventListener("pointerup", this._onUp);
+      this._canvas = canvas;
+      canvas.addEventListener("pointerdown", this._onDown);
+      canvas.addEventListener("pointermove", this._onMove);
+      canvas.addEventListener("pointerup", this._onUp);
     }
+
+    if (wrap && wrap !== this._previewWrap) {
+      this._resizeObs?.disconnect();
+      this._previewWrap = wrap;
+      this._resizeObs = new ResizeObserver(() => this._paint());
+      this._resizeObs.observe(wrap);
+    }
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._resizeObs?.disconnect();
   }
 
   private _canvasRect(): DOMRect {
@@ -137,11 +185,24 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
     const ctx = canvas?.getContext("2d");
     const img = this._img;
     const layer = this._layer;
-    if (!canvas || !ctx || !img || !layer) return;
+    if (!canvas || !ctx) return;
 
-    const r = canvas.parentElement?.getBoundingClientRect();
-    const w = Math.max(320, Math.floor((r?.width ?? 640) * (window.devicePixelRatio || 1)));
-    const h = Math.max(240, Math.floor((r?.height ?? 400) * (window.devicePixelRatio || 1)));
+    const r = this._previewWrap?.getBoundingClientRect() ?? canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor((r.width || 640) * dpr));
+    const h = Math.max(1, Math.floor((r.height || 360) * dpr));
+
+    if (!img?.complete || !img.naturalWidth || !layer) {
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, w, h);
+      if (this._loadError) {
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(this._loadError, w / 2, h / 2);
+      }
+      return;
+    }
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -186,6 +247,7 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
     this._img = null;
     this._layer = null;
     this._file = undefined;
+    this._loadError = "";
   }
 
   private async _apply(): Promise<void> {
@@ -230,6 +292,12 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
           <p class="hint">Crop the room photo, tune brightness, then apply. Draw your LED path on top in the designer.</p>
           <div class="preview-wrap">
             <canvas></canvas>
+            ${!this._img && !this._loadError
+              ? html`<span class="loading">Loading photo…</span>`
+              : null}
+            ${this._loadError
+              ? html`<span class="load-error">${this._loadError}</span>`
+              : null}
           </div>
           ${l
             ? html`
@@ -363,10 +431,27 @@ export class WledLayoutPhotoEditor extends BasePoweredElement {
         opacity: 0.75;
       }
       .preview-wrap {
+        position: relative;
         height: min(50vh, 360px);
+        min-height: 200px;
         border-radius: 8px;
         overflow: hidden;
         background: #111;
+      }
+      .loading,
+      .load-error {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        text-align: center;
+        font-size: 0.85rem;
+        pointer-events: none;
+      }
+      .load-error {
+        color: #fca5a5;
       }
       canvas {
         width: 100%;
