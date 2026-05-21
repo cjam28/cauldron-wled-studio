@@ -10,6 +10,7 @@ import {
   type BackgroundLayer,
 } from "../utils/background-layer.js";
 import type { LedPosition } from "../api/layout.js";
+import { anchorLedFontSize } from "../utils/anchor-label.js";
 
 export interface LayoutVertex {
   x: number;
@@ -47,14 +48,6 @@ function guideToLinePoints(guide: GuidePath): number[] {
     pts.push(x, y);
   }
   return pts;
-}
-
-/** Font size (model units) so LED index fits inside anchor circle radius r. */
-function anchorLedFontSize(led: number, r: number): number {
-  const digits = String(led).length;
-  const maxByRadius = r * 1.05;
-  const maxByWidth = (r * 1.85) / (digits * 0.62);
-  return Math.max(4, Math.min(maxByRadius, maxByWidth));
 }
 
 function isClosingDuplicate(vertices: LayoutVertex[], i: number): boolean {
@@ -337,25 +330,19 @@ export class LayoutDesignerKonvaStage {
       if (isAnchor && v.anchorLed !== null) {
         const label = String(v.anchorLed);
         const fontSize = anchorLedFontSize(v.anchorLed, r);
-        const box = r * 2;
-        this._vertices.add(
-          new Konva.Text({
-            x: v.x,
-            y: v.y,
-            width: box,
-            height: box,
-            offsetX: box / 2,
-            offsetY: box / 2,
-            text: label,
-            fontSize,
-            fontStyle: "bold",
-            fontFamily: "system-ui, -apple-system, sans-serif",
-            fill: "#111",
-            align: "center",
-            verticalAlign: "middle",
-            listening: false,
-          })
-        );
+        const ledText = new Konva.Text({
+          x: v.x,
+          y: v.y,
+          text: label,
+          fontSize,
+          fontStyle: "bold",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fill: "#111",
+          listening: false,
+        });
+        ledText.offsetX(ledText.width() / 2);
+        ledText.offsetY(ledText.height() / 2);
+        this._vertices.add(ledText);
       }
 
       this._vertices.add(
