@@ -1,6 +1,38 @@
-/** Upload floorplan background for a layout (POST multipart to HA API). */
+/** Upload floorplan background for a layout (authenticated WebSocket). */
+
+import type { Connection } from "home-assistant-js-websocket";
+import { waitForConnection } from "./live-stream.js";
+import { SCHEMA_VERSION } from "./types.js";
 
 const MAX_EDGE = 2048;
+
+async function layoutWs<T>(
+  connection: Connection,
+  payload: { type: string } & Record<string, unknown>
+): Promise<T> {
+  await waitForConnection(connection);
+  return connection.sendMessagePromise({
+    ...payload,
+    schema_version: SCHEMA_VERSION,
+  }) as Promise<T>;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Encode failed"));
+        return;
+      }
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(new Error("Encode failed"));
+    reader.readAsDataURL(blob);
+  });
+}
 
 /** Decode any browser-supported image (incl. HEIC where createImageBitmap works). */
 export async function loadImageElementFromFile(file: File): Promise<HTMLImageElement> {
@@ -71,24 +103,28 @@ export async function resizeImageFile(file: File): Promise<Blob> {
 }
 
 export async function uploadLayoutBackground(
+  connection: Connection,
   controllerId: string,
   layoutId: string,
   file: File
 ): Promise<{ background_url: string }> {
-  const blob = await resizeImageFile(file);
-  const ext = blob.type === "image/png" ? "png" : "jpg";
-  const form = new FormData();
-  form.append(
-    "file",
-    new File([blob], `background.${ext}`, { type: blob.type })
-  );
-  const res = await fetch(
-    `/api/wled_studio/layout_bg/${encodeURIComponent(controllerId)}/${encodeURIComponent(layoutId)}`,
-    { method: "POST", body: form, credentials: "same-origin" }
-  );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Upload failed (${res.status})`);
+  if (!connection) {
+    throw new Error("Not connected to Home Assistant");
   }
-  return (await res.json()) as { background_url: string };
+  const blob = await resizeImageFile(file);
+  const data = await blobToBase64(blob);
+  const res = await layoutWs<{ background_url?: string; ok?: boolean }>(
+    connection,
+    {
+      type: "wled_studio/layout_upload_bg",
+      controller_id: controllerId,
+      layout_id: layoutId,
+      data,
+      content_type: blob.type || "image/jpeg",
+    }
+  );
+  if (!res.background_url) {
+    throw new Error("Photo upload failed — no URL returned");
+  }
+  return { background_url: res.background_url };
 }

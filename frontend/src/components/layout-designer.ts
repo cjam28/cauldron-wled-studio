@@ -876,11 +876,15 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ev: CustomEvent<{ file: File; layer: BackgroundLayer }>
   ): Promise<void> {
     const { file, layer } = ev.detail;
-    if (!this.controllerId || !this.layoutId) return;
+    if (!this.connection || !this.controllerId || !this.layoutId) {
+      this._status = "Cannot upload photo — not connected to Home Assistant";
+      return;
+    }
     this._busy = true;
     this._status = "Uploading photo…";
     try {
       const { background_url } = await uploadLayoutBackground(
+        this.connection,
         this.controllerId,
         this.layoutId,
         file
@@ -1284,7 +1288,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
         </div>
       </div>
       <wled-layout-photo-editor
-        @photo-apply=${this._onPhotoApply}
+        @photo-apply=${(e: CustomEvent<{ file: File; layer: BackgroundLayer }>) => {
+          void this._onPhotoApply(e).catch((err) => {
+            this._status = err instanceof Error ? err.message : String(err);
+            this._busy = false;
+          });
+        }}
         @photo-error=${(e: CustomEvent<{ message: string }>) => {
           this._status = e.detail.message;
         }}

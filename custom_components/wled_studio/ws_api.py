@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 from typing import Any
 
@@ -12,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, SCHEMA_VERSION
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
+from .views import save_layout_background
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -410,6 +413,56 @@ async def ws_layout_resolve(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "wled_studio/layout_upload_bg",
+        vol.Required("controller_id"): str,
+        vol.Required("layout_id"): str,
+        vol.Required("data"): str,
+        vol.Optional("content_type", default="image/jpeg"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_layout_upload_bg(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Upload floorplan image via authenticated WebSocket (base64 body)."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    try:
+        raw = base64.b64decode(msg["data"], validate=True)
+    except (binascii.Error, ValueError):
+        connection.send_error(msg["id"], "invalid_format", "Invalid image data")
+        return
+    try:
+        background_url = save_layout_background(
+            hass,
+            msg["controller_id"],
+            msg["layout_id"],
+            raw,
+            str(msg.get("content_type") or "image/jpeg"),
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "background_url": background_url,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "wled_studio/layout_get",
         vol.Required("controller_id"): str,
         vol.Required("layout_id"): str,
@@ -510,6 +563,7 @@ _WS_HANDLERS = (
     ws_effect_meta,
     ws_layout_list,
     ws_layout_get,
+    ws_layout_upload_bg,
     ws_layout_save,
     ws_layout_resolve,
     ws_layout_to_segments,

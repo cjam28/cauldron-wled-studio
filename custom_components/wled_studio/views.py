@@ -24,6 +24,33 @@ def layout_bg_dir(hass: HomeAssistant, controller_id: str) -> Path:
     return directory
 
 
+def _layout_bg_ext(content_type: str) -> str:
+    return "png" if "png" in (content_type or "").lower() else "jpg"
+
+
+def save_layout_background(
+    hass: HomeAssistant,
+    controller_id: str,
+    layout_id: str,
+    raw: bytes,
+    content_type: str = "image/jpeg",
+) -> str:
+    """Write floorplan bytes under www and return /local/... URL."""
+    if not controller_id or not layout_id or ".." in controller_id or ".." in layout_id:
+        raise ValueError("Invalid controller or layout id")
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise ValueError("Invalid image size")
+    ext = _layout_bg_ext(content_type)
+    directory = layout_bg_dir(hass, controller_id)
+    dest = (directory / f"{layout_id}.{ext}").resolve()
+    try:
+        dest.relative_to(directory.resolve())
+    except ValueError as err:
+        raise ValueError("Invalid layout path") from err
+    dest.write_bytes(raw)
+    return f"{LAYOUT_BG_LOCAL_PREFIX}/{controller_id}/{layout_id}.{ext}"
+
+
 def _safe_filename(filename: str) -> str | None:
     """Reject path traversal; allow basenames only."""
     name = (filename or "").strip()
@@ -97,20 +124,13 @@ class WledStudioLayoutBgView(HomeAssistantView):
             raise web.HTTPBadRequest
 
         raw = await field.read()
-        if not raw or len(raw) > 8 * 1024 * 1024:
-            raise web.HTTPBadRequest
-
         ctype = (field.headers.get("Content-Type") or "").lower()
-        ext = "png" if "png" in ctype else "jpg"
-        directory = layout_bg_dir(self.hass, controller_id)
-        dest = (directory / f"{layout_id}.{ext}").resolve()
         try:
-            dest.relative_to(directory.resolve())
+            background_url = save_layout_background(
+                self.hass, controller_id, layout_id, raw, ctype
+            )
         except ValueError:
-            raise web.HTTPForbidden from None
-
-        dest.write_bytes(raw)
-        background_url = f"{LAYOUT_BG_LOCAL_PREFIX}/{controller_id}/{layout_id}.{ext}"
+            raise web.HTTPBadRequest from None
         return web.json_response({"background_url": background_url})
 
 
