@@ -295,7 +295,11 @@ export class WledStudioPanel extends BasePoweredElement {
     }
     if (this._view === "effects" && conn && id) {
       return html`
-        <wled-view-effects .connection=${conn} .controllerId=${id}></wled-view-effects>
+        <wled-view-effects
+          .hass=${this.hass}
+          .connection=${conn}
+          .controllerId=${id}
+        ></wled-view-effects>
       `;
     }
     if (this._view === "segments" && conn && id) {

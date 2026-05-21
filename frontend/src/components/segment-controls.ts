@@ -19,6 +19,7 @@ import {
   type WledSegment,
 } from "../api/wled-state.js";
 import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
+import { formatHaError } from "../utils/ha-error.js";
 import {
   isMergeForEffectsActive,
   mergedEffectTargetIds,
@@ -144,7 +145,7 @@ export class WledSegmentControls extends BasePoweredElement {
         this._segId = this._editIds[0] ?? 0;
       }
     } catch (err) {
-      this._error = err instanceof Error ? err.message : String(err);
+      this._error = formatHaError(err);
     } finally {
       this._loading = false;
     }
@@ -500,7 +501,9 @@ export class WledSegmentControls extends BasePoweredElement {
           : null}
 
         <wled-effect-chips
+          .hass=${this.hass}
           .controllerId=${this.controllerId}
+          .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
           .effectsByName=${this._snapshot?.effects_by_name ?? {}}
           .soundFlags=${this._snapshot?.sound_flags ?? []}
           .selectedFx=${seg.fx ?? 0}

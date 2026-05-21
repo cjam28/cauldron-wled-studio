@@ -159,7 +159,8 @@ export class WledEffectChips extends BasePoweredElement {
                   this.controllerId,
                   id,
                   "strip",
-                  this.fwVer
+                  this.fwVer,
+                  this.hass
                 );
                 const tileLabel =
                   name +

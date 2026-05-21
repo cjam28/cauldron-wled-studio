@@ -4,6 +4,7 @@ import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { debounce } from "../utils/debounce.js";
+import { formatHaError } from "../utils/ha-error.js";
 import { paintFrame, paintStart, paintStop } from "../api/paint.js";
 
 @safeCustomElement("wled-view-paint")
@@ -43,7 +44,7 @@ export class WledViewPaint extends BasePoweredElement {
       this._allocBuffer();
       this._status = "Paint ready";
     } catch (err) {
-      this._status = err instanceof Error ? err.message : String(err);
+      this._status = formatHaError(err);
     }
   }
 
@@ -105,7 +106,7 @@ export class WledViewPaint extends BasePoweredElement {
       await paintFrame(this.connection, this.controllerId, this._buffer, this._rgbw);
       this._status = "Live paint";
     } catch (err) {
-      this._status = err instanceof Error ? err.message : String(err);
+      this._status = formatHaError(err);
     }
   }
 

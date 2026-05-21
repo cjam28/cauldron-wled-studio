@@ -1,12 +1,24 @@
-/** Effect thumbnail URLs served via integration HTTP view (not /local/). */
+/** Effect thumbnail URLs under HA ``/local/`` (files in ``/config/www/wled_studio/thumbs/``). */
+
+import type { HomeAssistant } from "custom-card-helpers";
+import { withHaAuth } from "../utils/ha-auth-url.js";
 
 export type ThumbVariant = "strip" | "geom";
 
-/** API path served by ``WledStudioThumbView`` (Cache-Control: no-cache). */
+/** Public URL prefix for captured WebP files (served from www). */
+export const THUMB_LOCAL_PREFIX = "/local/wled_studio/thumbs";
+
+/** @deprecated Use ``thumbLocalUrl`` — API view requires cookie auth that img tags lack. */
 export function thumbApiUrl(controllerId: string, filename: string): string {
   const cid = encodeURIComponent(controllerId);
   const file = encodeURIComponent(filename);
   return `/api/wled_studio/thumb/${cid}/${file}`;
+}
+
+export function thumbLocalUrl(controllerId: string, filename: string): string {
+  const cid = encodeURIComponent(controllerId);
+  const file = encodeURIComponent(filename);
+  return `${THUMB_LOCAL_PREFIX}/${cid}/${file}`;
 }
 
 function sanitizeFwVer(fwVer: string): string {
@@ -34,9 +46,10 @@ export function thumbUrlForFx(
   controllerId: string,
   fxId: number,
   variant: ThumbVariant = "strip",
-  fwVer?: string
+  fwVer?: string,
+  hass?: HomeAssistant
 ): string | undefined {
   if (!controllerId || fxId < 0) return undefined;
   const file = thumbFilenameForFx(fxId, variant, fwVer);
-  return thumbApiUrl(controllerId, file);
+  return withHaAuth(thumbLocalUrl(controllerId, file), hass);
 }

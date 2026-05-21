@@ -1,16 +1,21 @@
 import type { Connection } from "home-assistant-js-websocket";
 import { SCHEMA_VERSION } from "./types.js";
 import { waitForConnection } from "./live-stream.js";
+import { formatHaError } from "../utils/ha-error.js";
 
 async function ws<T>(
   connection: Connection,
   payload: { type: string } & Record<string, unknown>
 ): Promise<T> {
   await waitForConnection(connection);
-  return connection.sendMessagePromise({
-    ...payload,
-    schema_version: SCHEMA_VERSION,
-  }) as Promise<T>;
+  try {
+    return (await connection.sendMessagePromise({
+      ...payload,
+      schema_version: SCHEMA_VERSION,
+    })) as T;
+  } catch (err) {
+    throw new Error(formatHaError(err));
+  }
 }
 
 export interface PaintStartResult {
