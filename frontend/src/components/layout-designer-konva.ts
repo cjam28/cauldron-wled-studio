@@ -190,22 +190,19 @@ export class LayoutDesignerKonvaStage {
     this._applyWorldTransform();
   }
 
-  /** Zoom world view toward stage pointer (not photo layer scale). */
-  zoomAtPointer(deltaY: number, factor = 1.08): void {
-    const pointer = this.stage.getPointerPosition();
-    if (!pointer) return;
+  /** Zoom world view toward a stage pixel (default: center). */
+  setViewScale(scale: number, anchorX?: number, anchorY?: number): void {
+    const ax = anchorX ?? this.stage.width() / 2;
+    const ay = anchorY ?? this.stage.height() / 2;
     const oldScale = this.viewScale;
-    const newScale = Math.max(
-      0.15,
-      Math.min(8, deltaY < 0 ? oldScale * factor : oldScale / factor)
-    );
+    const newScale = Math.max(0.15, Math.min(8, scale));
     const mousePointTo = {
-      x: (pointer.x - this.viewOx) / oldScale,
-      y: (pointer.y - this.viewOy) / oldScale,
+      x: (ax - this.viewOx) / oldScale,
+      y: (ay - this.viewOy) / oldScale,
     };
     this.viewScale = newScale;
-    this.viewOx = pointer.x - mousePointTo.x * newScale;
-    this.viewOy = pointer.y - mousePointTo.y * newScale;
+    this.viewOx = ax - mousePointTo.x * newScale;
+    this.viewOy = ay - mousePointTo.y * newScale;
     this._applyWorldTransform();
   }
 

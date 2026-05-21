@@ -31,6 +31,14 @@ import { parseSvgToGuide } from "../utils/svg-import.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { loadHaImage } from "../utils/ha-image.js";
 import { LayoutDesignerKonvaStage } from "./layout-designer-konva.js";
+import {
+  cloneLayoutSnapshot,
+  photoScaleToSlider,
+  sliderToPhotoScale,
+  sliderToViewScale,
+  viewScaleToSlider,
+  type LayoutDesignerSnapshot,
+} from "../utils/layout-history.js";
 
 /** Sparse corners / segment pins (user-placed). */
 interface Vertex {
@@ -40,6 +48,7 @@ interface Vertex {
 }
 
 const HIT_R = 14;
+const MAX_UNDO = 50;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -67,8 +76,14 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _scalePxPerM: number | null = null;
   @state() private _calibActive = false;
   @state() private _calibMeters = "1";
+  @state() private _canUndo = false;
+  @state() private _canRedo = false;
+  @state() private _zoomSlider = 50;
 
   private _calibPts: Array<[number, number]> = [];
+  private _undoStack: LayoutDesignerSnapshot[] = [];
+  private _redoStack: LayoutDesignerSnapshot[] = [];
+  private _suspendHistory = false;
   private _penStroke: Array<[number, number]> = [];
   private _shapeStart: [number, number] | null = null;
   private _lineStart: [number, number] | null = null;
@@ -109,6 +124,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._resizeObs = new ResizeObserver(() => this._onResize());
       this._resizeObs.observe(this._stageMount);
       this._onResize();
+      this._syncZoomSliderFromView();
     }
   }
 
@@ -119,19 +135,9 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
   }
 
+  /** Block page scroll over the stage; zoom uses the rail slider. */
   private _onWheel = (ev: WheelEvent): void => {
-    if (!this._konva) return;
-    this._konva.updatePointerFromEvent(ev);
     ev.preventDefault();
-    if (this._tool === "photo" && this._bgLayer) {
-      const delta = ev.deltaY > 0 ? -0.04 : 0.04;
-      const scale = Math.max(0.25, Math.min(4, (this._bgLayer.scale ?? 1) + delta));
-      this._bgLayer = { ...this._bgLayer, scale };
-      this._syncStage();
-      return;
-    }
-    this._konva.zoomAtPointer(ev.deltaY);
-    this._syncStage();
   };
 
   override disconnectedCallback(): void {
@@ -164,7 +170,131 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private _fitView(): void {
     this._konva?.fitView(this._vertices, this._guide?.points ?? []);
+    this._syncZoomSliderFromView();
   }
+
+  private _captureSnapshot(): LayoutDesignerSnapshot {
+    return {
+      vertices: this._vertices.map((v) => ({ ...v })),
+      guide: this._guide
+        ? {
+            points: this._guide.points.map((p) => [p[0], p[1]] as [number, number]),
+            closed: this._guide.closed,
+            kind: this._guide.kind,
+          }
+        : null,
+      closed: this._closed,
+      bgLayer: this._bgLayer ? { ...this._bgLayer } : null,
+      backgroundUrl: this._backgroundUrl,
+      scalePxPerM: this._scalePxPerM,
+      selectedVtx: this._selectedVtx,
+      anchorInput: this._anchorInput,
+    };
+  }
+
+  private _recordUndo(): void {
+    if (this._suspendHistory) return;
+    this._undoStack.push(this._captureSnapshot());
+    if (this._undoStack.length > MAX_UNDO) this._undoStack.shift();
+    this._redoStack = [];
+    this._canUndo = this._undoStack.length > 0;
+    this._canRedo = false;
+  }
+
+  private _applySnapshot(snap: LayoutDesignerSnapshot): void {
+    const s = cloneLayoutSnapshot(snap);
+    this._vertices = s.vertices;
+    this._guide = s.guide;
+    this._closed = s.closed;
+    this._bgLayer = s.bgLayer;
+    this._backgroundUrl = s.backgroundUrl;
+    this._scalePxPerM = s.scalePxPerM;
+    this._selectedVtx = s.selectedVtx;
+    this._anchorInput = s.anchorInput;
+    this._penStroke = [];
+    this._shapeStart = null;
+    this._lineStart = null;
+    this._polylinePts = [];
+    if (this._backgroundUrl) this._loadBackgroundImage();
+    else this._bgImage = null;
+    void this._refreshPositions();
+    this._syncZoomSliderFromView();
+    this._syncStage();
+  }
+
+  private _undo(): void {
+    if (!this._undoStack.length) return;
+    this._redoStack.push(this._captureSnapshot());
+    const prev = this._undoStack.pop()!;
+    this._suspendHistory = true;
+    this._applySnapshot(prev);
+    this._suspendHistory = false;
+    this._canUndo = this._undoStack.length > 0;
+    this._canRedo = this._redoStack.length > 0;
+    this._status = "Undo";
+  }
+
+  private _redo(): void {
+    if (!this._redoStack.length) return;
+    this._undoStack.push(this._captureSnapshot());
+    const next = this._redoStack.pop()!;
+    this._suspendHistory = true;
+    this._applySnapshot(next);
+    this._suspendHistory = false;
+    this._canUndo = this._undoStack.length > 0;
+    this._canRedo = this._redoStack.length > 0;
+    this._status = "Redo";
+  }
+
+  private _syncZoomSliderFromView(): void {
+    if (this._tool === "photo" && this._bgLayer) {
+      this._zoomSlider = photoScaleToSlider(this._bgLayer.scale ?? 1);
+      return;
+    }
+    if (this._konva) {
+      this._zoomSlider = viewScaleToSlider(this._konva.viewScale);
+    }
+  }
+
+  private _onZoomSlider(ev: Event): void {
+    const slider = parseInt((ev.target as HTMLInputElement).value, 10);
+    if (isNaN(slider)) return;
+    this._zoomSlider = slider;
+    if (this._tool === "photo" && this._bgLayer) {
+      this._bgLayer = { ...this._bgLayer, scale: sliderToPhotoScale(slider) };
+    } else if (this._konva) {
+      this._konva.setViewScale(sliderToViewScale(slider));
+    }
+    this._syncStage();
+  }
+
+  private _nudgeZoom(factor: number): void {
+    if (this._tool === "photo" && this._bgLayer) {
+      const next = Math.max(0.25, Math.min(4, (this._bgLayer.scale ?? 1) * factor));
+      this._bgLayer = { ...this._bgLayer, scale: next };
+      this._zoomSlider = photoScaleToSlider(next);
+    } else if (this._konva) {
+      const next = Math.max(0.15, Math.min(8, this._konva.viewScale * factor));
+      this._konva.setViewScale(next);
+      this._zoomSlider = viewScaleToSlider(next);
+    }
+    this._syncStage();
+  }
+
+  private _onKeyDown = (ev: KeyboardEvent): void => {
+    const mod = ev.metaKey || ev.ctrlKey;
+    if (!mod) return;
+    if (ev.key === "z" && !ev.shiftKey) {
+      ev.preventDefault();
+      this._undo();
+    } else if (ev.key === "z" && ev.shiftKey) {
+      ev.preventDefault();
+      this._redo();
+    } else if (ev.key === "y") {
+      ev.preventDefault();
+      this._redo();
+    }
+  };
 
   private _pointerModel(ev?: PointerEvent | MouseEvent | WheelEvent): [number, number] | null {
     return this._konva?.getModelPointer(ev) ?? null;
@@ -234,6 +364,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       }
     }
     const led = ledIndexAlongGuide(snap.t, this.pixelCount);
+    this._recordUndo();
     this._vertices = [
       ...this._vertices,
       { x: snap.x, y: snap.y, anchorLed: led },
@@ -284,6 +415,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
 
     if (this._tool === "pen") {
+      this._recordUndo();
       this._beginNewGuideDrawing();
       this._penStroke = [[mx, my]];
       this._stageContainer()?.setPointerCapture(ev.pointerId);
@@ -293,6 +425,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
     if (this._tool === "line") {
       if (!this._lineStart) {
+        this._recordUndo();
         this._beginNewGuideDrawing();
         this._lineStart = [mx, my];
         this._status = "Line: click end point";
@@ -306,6 +439,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     }
 
     if (this._tool === "rect" || this._tool === "ellipse") {
+      this._recordUndo();
       this._beginNewGuideDrawing();
       this._shapeStart = [mx, my];
       this._status =
@@ -319,6 +453,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
     if (this._tool === "polyline") {
       if (this._polylinePts.length === 0) {
+        this._recordUndo();
         this._beginNewGuideDrawing();
       }
       this._polylinePts = [...this._polylinePts, [mx, my]];
@@ -329,6 +464,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
     const idx = this._hitVertex(mx, my);
     if (idx >= 0) {
+      this._recordUndo();
       this._selectedVtx = idx;
       this._anchorInput = String(this._vertices[idx].anchorLed ?? "");
       this._drag = { idx };
@@ -444,9 +580,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _finishPenGuide(): void {
     const stroke = this._penStroke;
     this._penStroke = [];
-    this._guide = penStrokeToGuide(stroke, (x, y) => [x, y], this._closed);
+    if (stroke.length >= 2) {
+      this._guide = penStrokeToGuide(stroke, (x, y) => [x, y], this._closed);
+    }
     this._status =
-      this._guide.points.length >= 2
+      this._guide && this._guide.points.length >= 2
         ? "Smooth guide drawn — switch to Place vertices and click along the line"
         : "Stroke too short";
     this._syncStage();
@@ -457,6 +595,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._status = "Need at least 2 points";
       return;
     }
+    this._recordUndo();
     this._guide = polylineToGuide(this._polylinePts, this._closed);
     this._polylinePts = [];
     this._status = "Polyline guide ready — Place vertices along the path";
@@ -487,6 +626,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     if (!pos) return;
     const [mx, my] = pos;
     if (this._hitVertex(mx, my) >= 0) return;
+    this._recordUndo();
     this._vertices = [...this._vertices, { x: mx, y: my, anchorLed: null }];
     this._selectedVtx = this._vertices.length - 1;
     this._anchorInput = "";
@@ -500,6 +640,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     if (!pos) return;
     const hit = this._hitVertex(pos[0], pos[1]);
     if (hit < 0) return;
+    this._recordUndo();
     this._vertices = this._vertices.filter((_, i) => i !== hit);
     if (this._selectedVtx === hit) this._selectedVtx = -1;
     else if (this._selectedVtx > hit) this._selectedVtx--;
@@ -531,6 +672,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
   private async _loadLayout(): Promise<void> {
     if (!this.connection || !this.controllerId || !this.layoutId) return;
+    this._suspendHistory = true;
+    this._undoStack = [];
+    this._redoStack = [];
+    this._canUndo = false;
+    this._canRedo = false;
     try {
       const layout = await layoutGet(this.connection, this.controllerId, this.layoutId);
       if (!layout) return;
@@ -579,6 +725,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._syncStage();
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._suspendHistory = false;
     }
   }
 
@@ -645,6 +793,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     if (!file) return;
     try {
       const text = await file.text();
+      this._recordUndo();
       this._beginNewGuideDrawing();
       this._guide = parseSvgToGuide(text);
       this._status = "SVG guide loaded — Place vertices along the path";
@@ -656,6 +805,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
   }
 
   private _clearGuide(): void {
+    this._recordUndo();
     this._guide = null;
     this._polylinePts = [];
     this._lineStart = null;
@@ -691,6 +841,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
         .map((s) => s.start ?? 0)
         .filter((n, i, arr) => arr.indexOf(n) === i)
         .sort((a, b) => a - b);
+      this._recordUndo();
       this._vertices = importSegmentStarts(this._vertices, starts, this._closed);
       this._status = `Imported ${starts.length} segment boundary(ies) from WLED`;
       void this._refreshPositions();
@@ -735,6 +886,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
         this.layoutId,
         file
       );
+      this._recordUndo();
       this._backgroundUrl = background_url;
       this._bgLayer = {
         ...layer,
@@ -760,6 +912,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
   }
 
   private _clearPhoto(): void {
+    this._recordUndo();
     this._bgLayer = null;
     this._backgroundUrl = null;
     this._bgImage = null;
@@ -787,6 +940,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _setAnchorLed(): void {
     const idx = this._selectedVtx;
     if (idx < 0) return;
+    this._recordUndo();
     const val = this._anchorInput.trim();
     const led = val === "" ? null : parseInt(val, 10);
     if (led !== null && (isNaN(led) || led < 0 || led >= this.pixelCount)) return;
@@ -804,7 +958,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const input = ev.target as HTMLInputElement;
     const mirrorAt = parseInt(input.value, 10);
     if (isNaN(mirrorAt) || this._vertices.length === 0) return;
-    // Mirror anchors: remap existing anchors so ledIndex 0..mirrorAt maps symmetrically
+    this._recordUndo();
     const verts = [...this._vertices];
     for (let i = 0; i < verts.length; i++) {
       const a = verts[i].anchorLed;
@@ -817,25 +971,82 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._syncStage();
   }
 
+  private _zoomLabel(): string {
+    if (this._tool === "photo" && this._bgLayer) {
+      return `${Math.round((this._bgLayer.scale ?? 1) * 100)}%`;
+    }
+    return `${Math.round((this._konva?.viewScale ?? 1) * 100)}%`;
+  }
+
   protected override render() {
     const sel = this._vertices[this._selectedVtx];
+    const zoomCaption =
+      this._tool === "photo" && this._bgLayer ? "Photo" : "View";
     return html`
-      <div class="designer">
-        <div class="canvas-wrap">
-          <div class="stage-toolbar">
+      <div class="designer" tabindex="0" @keydown=${this._onKeyDown}>
+        <div class="stage-column">
+          <aside class="zoom-rail" aria-label="Zoom">
             <button
               type="button"
-              class="secondary small"
-              @click=${() => {
-                this._fitView();
-                this._syncStage();
-              }}
+              class="zoom-btn"
+              title="Zoom in"
+              @click=${() => this._nudgeZoom(1.2)}
             >
-              Fit view
+              +
             </button>
-            <span class="zoom-hint">Scroll to zoom (Photo tool: zoom image)</span>
+            <input
+              type="range"
+              class="zoom-slider"
+              min="0"
+              max="100"
+              .value=${String(this._zoomSlider)}
+              @input=${this._onZoomSlider}
+              aria-label="${zoomCaption} zoom"
+            />
+            <button
+              type="button"
+              class="zoom-btn"
+              title="Zoom out"
+              @click=${() => this._nudgeZoom(1 / 1.2)}
+            >
+              −
+            </button>
+            <span class="zoom-pct">${this._zoomLabel()}</span>
+            <span class="zoom-cap">${zoomCaption}</span>
+          </aside>
+          <div class="canvas-wrap">
+            <div class="stage-toolbar">
+              <button
+                type="button"
+                class="secondary small"
+                ?disabled=${!this._canUndo}
+                title="Undo (Ctrl+Z)"
+                @click=${() => this._undo()}
+              >
+                Undo
+              </button>
+              <button
+                type="button"
+                class="secondary small"
+                ?disabled=${!this._canRedo}
+                title="Redo (Ctrl+Shift+Z)"
+                @click=${() => this._redo()}
+              >
+                Redo
+              </button>
+              <button
+                type="button"
+                class="secondary small"
+                @click=${() => {
+                  this._fitView();
+                  this._syncStage();
+                }}
+              >
+                Fit view
+              </button>
+            </div>
+            <div class="stage-mount"></div>
           </div>
-          <div class="stage-mount"></div>
         </div>
         <div class="sidebar">
           <div class="tool-group">
@@ -845,6 +1056,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 class=${this._tool === "select" ? "tool active" : "tool"}
                 @click=${() => {
                   this._tool = "select";
+                  this._syncZoomSliderFromView();
                 }}
               >
                 Select
@@ -862,6 +1074,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
                 ?disabled=${!this._bgLayer}
                 @click=${() => {
                   this._tool = "photo";
+                  this._syncZoomSliderFromView();
                 }}
               >
                 Photo
@@ -921,6 +1134,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
               type="checkbox"
               .checked=${this._closed}
               @change=${(e: Event) => {
+                this._recordUndo();
                 this._closed = (e.target as HTMLInputElement).checked;
                 this._syncStage();
                 void this._refreshPositions();
@@ -1174,13 +1388,69 @@ export class WledLayoutDesigner extends BasePoweredElement {
           grid-template-columns: 1fr 220px;
         }
       }
-      .canvas-wrap {
-        position: relative;
-        border-radius: 8px;
-        overflow: hidden;
-        background: #111827;
+      .designer:focus {
+        outline: none;
+      }
+      .stage-column {
+        display: flex;
+        flex-direction: row;
+        gap: 0;
         min-height: 320px;
         height: min(55vh, 480px);
+      }
+      .zoom-rail {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        width: 40px;
+        flex-shrink: 0;
+        padding: 8px 4px;
+        background: rgba(0, 0, 0, 0.45);
+        border-radius: 8px 0 0 8px;
+      }
+      .zoom-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        border: 1px solid var(--divider-color, #374151);
+        background: rgba(255, 255, 255, 0.06);
+        color: inherit;
+        cursor: pointer;
+        font-size: 1rem;
+        line-height: 1;
+        padding: 0;
+      }
+      .zoom-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .zoom-slider {
+        writing-mode: vertical-lr;
+        direction: rtl;
+        height: min(28vh, 200px);
+        width: 28px;
+        margin: 4px 0;
+        accent-color: var(--primary-color, #6366f1);
+      }
+      .zoom-pct {
+        font-size: 0.65rem;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.85;
+      }
+      .zoom-cap {
+        font-size: 0.6rem;
+        opacity: 0.5;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .canvas-wrap {
+        position: relative;
+        flex: 1;
+        border-radius: 0 8px 8px 0;
+        overflow: hidden;
+        background: #111827;
+        min-height: 0;
         display: flex;
         flex-direction: column;
       }
@@ -1191,9 +1461,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
         padding: 6px 8px;
         background: rgba(0, 0, 0, 0.35);
         font-size: 0.75rem;
-      }
-      .zoom-hint {
-        opacity: 0.55;
+        flex-wrap: wrap;
       }
       .stage-mount {
         flex: 1;
