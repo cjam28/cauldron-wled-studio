@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
-  nextPlacementAnchorLed,
+  ledIndexAlongGuide,
   penStrokeToGuide,
+  suggestPlacementAnchorLed,
 } from "../src/utils/draw-tools.js";
 
-describe("nextPlacementAnchorLed", () => {
-  it("starts at 0 and increments by placement order", () => {
-    expect(nextPlacementAnchorLed(0, 210)).toBe(0);
-    expect(nextPlacementAnchorLed(1, 210)).toBe(1);
-    expect(nextPlacementAnchorLed(3, 210)).toBe(3);
+describe("suggestPlacementAnchorLed", () => {
+  it("first vertex is always LED 0", () => {
+    expect(suggestPlacementAnchorLed(0, 0.75, 210)).toBe(0);
+    expect(suggestPlacementAnchorLed(0, 1, 210)).toBe(0);
   });
 
-  it("clamps to strip end", () => {
-    expect(nextPlacementAnchorLed(300, 210)).toBe(209);
+  it("later vertices use path fraction along the guide", () => {
+    expect(suggestPlacementAnchorLed(1, 0, 210)).toBe(0);
+    expect(suggestPlacementAnchorLed(1, 0.5, 210)).toBe(
+      ledIndexAlongGuide(0.5, 210)
+    );
+    expect(suggestPlacementAnchorLed(3, 1, 210)).toBe(209);
   });
 });
 

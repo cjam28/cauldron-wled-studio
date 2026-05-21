@@ -172,13 +172,17 @@ export function ledIndexAlongGuide(t: number, pixelCount: number): number {
   return Math.max(0, Math.min(max, Math.round(t * max)));
 }
 
-/** LED index for the next placed vertex: 0, 1, 2, … by placement order. */
-export function nextPlacementAnchorLed(
+/**
+ * Suggested anchor LED when placing a vertex on the guide.
+ * First vertex is always 0; later vertices use position along the path (t × strip length).
+ */
+export function suggestPlacementAnchorLed(
   placedVertexCount: number,
+  pathFraction: number,
   pixelCount: number
 ): number {
-  const max = Math.max(0, pixelCount - 1);
-  return Math.min(Math.max(0, placedVertexCount), max);
+  if (placedVertexCount <= 0) return 0;
+  return ledIndexAlongGuide(pathFraction, pixelCount);
 }
 
 /** Draw guide path (smooth purple dashed). */

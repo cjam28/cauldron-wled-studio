@@ -20,7 +20,7 @@ import {
   type DrawTool,
   type GuidePath,
   ellipseToGuide,
-  nextPlacementAnchorLed,
+  suggestPlacementAnchorLed,
   lineToGuide,
   penStrokeToGuide,
   polylineToGuide,
@@ -365,7 +365,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
         return;
       }
     }
-    const led = nextPlacementAnchorLed(this._vertices.length, this.pixelCount);
+    const led = suggestPlacementAnchorLed(
+      this._vertices.length,
+      snap.t,
+      this.pixelCount
+    );
     this._recordUndo();
     this._vertices = [
       ...this._vertices,
@@ -373,7 +377,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ];
     this._selectedVtx = this._vertices.length - 1;
     this._anchorInput = String(led);
-    this._status = `Placed v${this._selectedVtx} @ LED ${led} — add more or set anchors manually`;
+    this._status =
+      this._selectedVtx === 0
+        ? `Placed v0 @ LED 0 (start) — next clicks use position along guide`
+        : `Placed v${this._selectedVtx} @ LED ${led} (${Math.round(snap.t * 100)}% along guide)`;
     void this._refreshPositions();
     this._syncStage();
   }
@@ -1225,7 +1232,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
 
           <details class="help-details">
             <summary>Help</summary>
-            <p>Draw a purple guide → <strong>Place ●</strong> drops corners (LED 0, 1, 2…) → set anchors → Save.</p>
+            <p>Draw a purple guide → <strong>Place ●</strong>: first corner LED 0, then LED from click position along the path → Save.</p>
           </details>
 
           <button
