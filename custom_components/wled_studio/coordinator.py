@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -9,12 +10,16 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .attach import resolve_wled_entry
-from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY
+from .const import CONF_DEVICE_ID, CONF_HOST, CONF_WLED_CONFIG_ENTRY, DOMAIN
 from .layout_store import LayoutStore
 from .live_proxy import LiveProxy, get_live_proxy, shutdown_live_proxy
+from .scene_seed import build_starter_scenes
+from .scene_store import SceneRecord, SceneStore
 from .wled_client import WledClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,9 +40,13 @@ class WledStudioCoordinator:
         self.client: WledClient | None = None
         self.live_proxy: LiveProxy | None = None
         self.layout_store = LayoutStore(hass)
+        self.scene_store = SceneStore(hass)
         self._session: aiohttp.ClientSession | None = None
         self._master_entity_id: str | None = None
         self._segment_entities: list[dict[str, Any]] = []
+        self._scene_entities: dict[str, Any] = {}
+        self._async_add_scenes: AddEntitiesCallback | None = None
+        self._apply_abort: asyncio.Task[Any] | None = None
 
     async def async_setup(self) -> None:
         wled_entry = await resolve_wled_entry(self.hass, self.wled_entry_id)
@@ -110,6 +119,88 @@ class WledStudioCoordinator:
         segments.sort(key=lambda s: s["segment_index"])
         return segments
 
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Link scene entities to the stock WLED device."""
+        dev_reg = dr.async_get(self.hass)
+        if self.device_id and dev_reg:
+            device = dev_reg.async_get(self.device_id)
+            if device and device.identifiers:
+                return {"identifiers": device.identifiers}
+        return {"identifiers": {(DOMAIN, self.entry_id)}}
+
+    def register_scene_platform(self, async_add_entities: AddEntitiesCallback) -> None:
+        """Called from scene platform setup."""
+        self._async_add_scenes = async_add_entities
+
+    async def async_ensure_starter_scenes(self) -> None:
+        """Seed eight starter scenes once per controller."""
+        if self.client is None:
+            return
+        await self.scene_store.async_load()
+        if self.scene_store.is_seeded(self.entry_id):
+            return
+        starters = build_starter_scenes(self.entry_id, self.client)
+        await self.scene_store.async_save_many(starters)
+        self.scene_store.mark_seeded(self.entry_id)
+        for record in starters:
+            await self.async_register_scene_entity(record)
+
+    async def async_register_scene_entity(self, record: SceneRecord) -> None:
+        """Add or update a scene.* entity after save."""
+        from .scene import WledStudioStoredScene
+
+        existing = self._scene_entities.get(record.id)
+        if existing is not None:
+            existing.update_record(record)
+            self.hass.async_create_task(existing.async_update_ha_state())
+            return
+        if self._async_add_scenes is None:
+            return
+        entity = WledStudioStoredScene(self, record)
+        self._scene_entities[record.id] = entity
+        self._async_add_scenes([entity])
+
+    async def async_remove_scene_entity(self, scene_id: str) -> None:
+        entity = self._scene_entities.pop(scene_id, None)
+        if entity is not None:
+            await entity.async_remove()
+
+    def transition_tt(self, transition_ms: int | None, scene: SceneRecord) -> int:
+        """WLED tt field: tenths of a second."""
+        ms = transition_ms if transition_ms is not None else scene.transition_ms
+        return max(0, min(255, ms // 100))
+
+    async def async_apply_scene(
+        self,
+        scene_id: str,
+        *,
+        transition_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Apply stored state with device-side crossfade (tt)."""
+        if self.client is None:
+            raise RuntimeError("WLED client not ready")
+        scene = await self.scene_store.async_get(self.entry_id, scene_id)
+        if scene is None:
+            raise ValueError(f"Unknown scene {scene_id}")
+
+        if self._apply_abort and not self._apply_abort.done():
+            self._apply_abort.cancel()
+
+        patch = dict(scene.wled_state)
+        patch["tt"] = self.transition_tt(transition_ms, scene)
+
+        async def _run() -> dict[str, Any]:
+            result = await self.client.apply_state(patch, full_response=True)
+            return result or self.client.state
+
+        self._apply_abort = asyncio.create_task(_run())
+        try:
+            return await self._apply_abort
+        finally:
+            if self._apply_abort and self._apply_abort.done():
+                self._apply_abort = None
+
     def controller_info(self) -> dict[str, Any]:
         info = self.client.info if self.client else {}
         leds = info.get("leds") or {}
@@ -132,6 +223,9 @@ class WledStudioCoordinator:
         }
 
     async def async_shutdown(self) -> None:
+        if self._apply_abort and not self._apply_abort.done():
+            self._apply_abort.cancel()
+        await self.scene_store.async_flush()
         await shutdown_live_proxy(self.entry_id)
         if self._session:
             await self._session.close()

@@ -30,7 +30,7 @@ from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.SCENE]
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import re
+import uuid as uuid_mod
 from typing import Any
 
 import voluptuous as vol
@@ -14,6 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, SCHEMA_VERSION
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
+from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
 
 _LOGGER = logging.getLogger(__name__)
@@ -562,6 +565,260 @@ async def ws_layout_to_segments(
     )
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_list",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    await coord.async_ensure_starter_scenes()
+    scenes = await coord.scene_store.async_list(msg["controller_id"])
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "scenes": [s.to_dict() for s in scenes],
+            "seeded": coord.scene_store.is_seeded(msg["controller_id"]),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_get",
+        vol.Required("controller_id"): str,
+        vol.Required("scene_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_get(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    scene = await coord.scene_store.async_get(msg["controller_id"], msg["scene_id"])
+    if scene is None:
+        connection.send_error(msg["id"], "not_found", "Scene not found")
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "scene": scene.to_dict(),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_save",
+        vol.Required("controller_id"): str,
+        vol.Required("scene"): dict,
+        vol.Optional("if_match_etag"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    raw = dict(msg["scene"])
+    raw["controller_id"] = msg["controller_id"]
+    record = SceneRecord.from_dict(raw)
+    try:
+        saved = await coord.scene_store.async_save(
+            record, if_match_etag=msg.get("if_match_etag")
+        )
+    except SceneConflictError as err:
+        connection.send_error(
+            msg["id"],
+            "conflict",
+            "Scene was edited elsewhere",
+            {
+                "etag": err.etag,
+                "scene": err.remote.to_dict(),
+            },
+        )
+        return
+    await coord.async_register_scene_entity(saved)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "scene": saved.to_dict(),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_delete",
+        vol.Required("controller_id"): str,
+        vol.Required("scene_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    removed = await coord.scene_store.async_delete(
+        msg["controller_id"], msg["scene_id"]
+    )
+    if not removed:
+        connection.send_error(msg["id"], "not_found", "Scene not found")
+        return
+    await coord.async_remove_scene_entity(msg["scene_id"])
+    connection.send_result(
+        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_apply",
+        vol.Required("controller_id"): str,
+        vol.Required("scene_id"): str,
+        vol.Optional("transition_ms"): int,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_apply(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    scene = await coord.scene_store.async_get(msg["controller_id"], msg["scene_id"])
+    if scene is None:
+        connection.send_error(msg["id"], "not_found", "Scene not found")
+        return
+    try:
+        state = await coord.async_apply_scene(
+            msg["scene_id"],
+            transition_ms=msg.get("transition_ms"),
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+    except Exception as err:
+        connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "state": state,
+            "tt": coord.transition_tt(msg.get("transition_ms"), scene),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/scene_capture",
+        vol.Required("controller_id"): str,
+        vol.Required("name"): str,
+        vol.Optional("scene_id"): str,
+        vol.Optional("layout_id"): str,
+        vol.Optional("transition_ms", default=2500): int,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_scene_capture(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Save current WLED device state as a new scene."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    name = str(msg["name"]).strip() or "Scene"
+    scene_id = msg.get("scene_id") or re.sub(
+        r"[^a-z0-9]+", "_", name.lower()
+    ).strip("_")[:48]
+    if not scene_id:
+        scene_id = str(uuid_mod.uuid4())[:8]
+    await coord.client.get_state(refresh=True)
+    wled_state = dict(coord.client.state)
+    record = SceneRecord(
+        id=scene_id,
+        controller_id=msg["controller_id"],
+        name=name,
+        wled_state=wled_state,
+        layout_id=msg.get("layout_id"),
+        transition_ms=int(msg.get("transition_ms", 2500)),
+        seeded=False,
+    )
+    saved = await coord.scene_store.async_save(record)
+    await coord.async_register_scene_entity(saved)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "scene": saved.to_dict(),
+        },
+    )
+
+
 _WS_HANDLERS = (
     ws_ping,
     ws_list_controllers,
@@ -576,6 +833,12 @@ _WS_HANDLERS = (
     ws_layout_resolve,
     ws_layout_to_segments,
     ws_subscribe_live,
+    ws_scene_list,
+    ws_scene_get,
+    ws_scene_save,
+    ws_scene_delete,
+    ws_scene_apply,
+    ws_scene_capture,
 )
 
 

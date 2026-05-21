@@ -4,6 +4,9 @@ import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import "../components/segment-controls.js";
 import "./view-layout.js";
+import "./view-scenes.js";
+import "./view-devices.js";
+import "./view-effects.js";
 import { listControllers } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
@@ -72,7 +75,11 @@ export class WledStudioPanel extends BasePoweredElement {
             ${this._navItem("layout", "Layout", "mdi:vector-polygon")}
             ${this._navItem("scenes", "Scenes", "mdi:palette-swatch")}
             ${this._navItem("effects", "Effects", "mdi:auto-fix")}
+            ${this._navItem("paint", "Paint", "mdi:brush")}
             ${this._navItem("segments", "Segments", "mdi:vector-line")}
+            ${this._navItem("audio", "Audio", "mdi:music")}
+            ${this._navItem("voice", "Voice", "mdi:microphone-message")}
+            ${this._navItem("settings", "Settings", "mdi:cog")}
           </nav>
         </aside>
         <main class="stage">
@@ -92,29 +99,7 @@ export class WledStudioPanel extends BasePoweredElement {
               : null}
           </header>
           <section class="content" aria-live="polite">
-            ${this._view === "layout" && this._controllerId && this.hass?.connection
-              ? html`
-                  <wled-view-layout
-                    .connection=${this.hass.connection}
-                    .controllerId=${this._controllerId}
-                  ></wled-view-layout>
-                `
-              : this._view === "segments" && this._controllerId && this.hass?.connection
-                ? html`
-                    <wled-segment-controls
-                      .hass=${this.hass}
-                      .connection=${this.hass.connection}
-                      .controllerId=${this._controllerId}
-                    ></wled-segment-controls>
-                  `
-                : html`
-                  <p>
-                    View: <strong>${this._view}</strong>
-                    ${this._view === "segments"
-                      ? " — connect a WLED Studio controller first."
-                      : " — expanded in later phases."}
-                  </p>
-                `}
+            ${this._renderView()}
           </section>
         </main>
       </div>
@@ -132,6 +117,65 @@ export class WledStudioPanel extends BasePoweredElement {
         <ha-icon .icon=${icon}></ha-icon>
         <span>${label}</span>
       </button>
+    `;
+  }
+
+  private _renderView() {
+    const conn = this.hass?.connection;
+    const id = this._controllerId;
+    const needsController =
+      this._view !== "devices" && this._view !== "settings";
+
+    if (needsController && !id) {
+      return html`
+        <p>
+          Connect a WLED Studio controller under
+          <strong>Settings → Devices & services</strong>, then reload this panel.
+        </p>
+      `;
+    }
+
+    if (this._view === "devices" && conn) {
+      return html`
+        <wled-view-devices .connection=${conn}></wled-view-devices>
+      `;
+    }
+    if (this._view === "layout" && conn && id) {
+      return html`
+        <wled-view-layout .connection=${conn} .controllerId=${id}></wled-view-layout>
+      `;
+    }
+    if (this._view === "scenes" && conn && id) {
+      return html`
+        <wled-view-scenes .connection=${conn} .controllerId=${id}></wled-view-scenes>
+      `;
+    }
+    if (this._view === "effects" && conn && id) {
+      return html`
+        <wled-view-effects .connection=${conn} .controllerId=${id}></wled-view-effects>
+      `;
+    }
+    if (this._view === "segments" && conn && id) {
+      return html`
+        <wled-segment-controls
+          .hass=${this.hass}
+          .connection=${conn}
+          .controllerId=${id}
+        ></wled-segment-controls>
+      `;
+    }
+    const phaseLabels: Partial<Record<StudioView, string>> = {
+      paint: "Geometry-aware paint (DDP) — Phase 6",
+      audio: "AudioReactive surface — Phase 7",
+      voice: "Voice Assist aliases — Phase 8",
+      settings: "Controller settings — Phase 11",
+    };
+    const label = phaseLabels[this._view] ?? this._view;
+    return html`
+      <p>
+        <strong>${label}</strong> is not built yet. Use Layout, Scenes, Effects, or Segments
+        today.
+      </p>
     `;
   }
 
