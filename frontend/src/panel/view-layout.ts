@@ -3,19 +3,20 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
-import {
-  layoutList,
-  layoutSave,
-  layoutGet,
-  layoutToSegments,
-  type LayoutRecord,
-} from "../api/layout.js";
+import { layoutList, layoutSave, layoutToSegments, type LayoutRecord } from "../api/layout.js";
 import { kitchenIslandLayout } from "../data/kitchen-island-layout.js";
-import type { WledLayoutDesigner, LayoutFixture, LayoutChangeDetail } from "../components/layout-designer.js";
+import type { LiveFrameEvent } from "../api/live-stream.js";
+import { subscribeLive } from "../api/live-stream.js";
+import type { WledGeometryPreview } from "../components/geometry-preview.js";
+
+// Register sub-components eagerly (they are already registered by the imports
+// below, but we import them for their side-effects in the panel bundle).
 import "../components/layout-designer.js";
 import "../components/geometry-preview.js";
 
 export const VIEW_LAYOUT_TAG = "wled-view-layout";
+
+type ViewMode = "list" | "designer";
 
 @safeCustomElement(VIEW_LAYOUT_TAG)
 export class WledViewLayout extends BasePoweredElement {
@@ -25,16 +26,44 @@ export class WledViewLayout extends BasePoweredElement {
   @state() private _layouts: LayoutRecord[] = [];
   @state() private _status = "Loading layouts…";
   @state() private _busy = false;
-  @state() private _selectedId: string | null = null;
-  @state() private _selectedLayout: LayoutRecord | null = null;
-  @state() private _pendingFixture: LayoutFixture | null = null;
+  @state() private _viewMode: ViewMode = "list";
+  @state() private _activeLayoutId = "";
+  @state() private _activeFixtureId = "";
+  @state() private _activePixelCount = 210;
+
+  private _liveUnsub?: () => void;
 
   protected override onPoweredConnect(): void {
     void this._load();
+    this._attachLive();
   }
 
-  protected override willUpdate(): void {
-    if (this.connection && this.controllerId) void this._load();
+  protected override onPoweredDisconnect(): void {
+    this._liveUnsub?.();
+    this._liveUnsub = undefined;
+  }
+
+  protected override updated(changed: import("lit").PropertyValues): void {
+    super.updated(changed);
+    if (changed.has("connection") || changed.has("controllerId")) {
+      void this._load();
+      this._attachLive();
+    }
+  }
+
+  private _attachLive(): void {
+    this._liveUnsub?.();
+    if (!this.connection || !this.controllerId) return;
+    this._liveUnsub = subscribeLive(this.connection, this.controllerId, (frame) => {
+      this._forwardFrame(frame);
+    });
+  }
+
+  private _forwardFrame(frame: LiveFrameEvent): void {
+    const preview = this.renderRoot.querySelector<WledGeometryPreview>(
+      "wled-geometry-preview"
+    );
+    preview?.setFrame(frame);
   }
 
   private async _load(): Promise<void> {
@@ -43,32 +72,10 @@ export class WledViewLayout extends BasePoweredElement {
       this._layouts = await layoutList(this.connection, this.controllerId);
       this._status =
         this._layouts.length === 0
-          ? "No layouts yet — seed one below."
+          ? "No layouts yet — use the button below to seed the kitchen-island template."
           : `${this._layouts.length} layout(s) saved`;
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  private async _selectLayout(layoutId: string): Promise<void> {
-    if (!this.connection || !this.controllerId) return;
-    this._busy = true;
-    try {
-      this._selectedId = layoutId;
-      this._selectedLayout = await layoutGet(this.connection, this.controllerId, layoutId);
-      this._pendingFixture = null;
-
-      // Push fixture data into designer after render
-      await this.updateComplete;
-      const designer = this.renderRoot.querySelector<WledLayoutDesigner>("wled-layout-designer");
-      if (designer && this._selectedLayout) {
-        const fix = this._selectedLayout.fixtures[0] as unknown as LayoutFixture | undefined;
-        if (fix) designer.setFixture(fix);
-      }
-    } catch (err) {
-      this._status = err instanceof Error ? err.message : String(err);
-    } finally {
-      this._busy = false;
     }
   }
 
@@ -100,112 +107,133 @@ export class WledViewLayout extends BasePoweredElement {
     }
   }
 
-  private _onLayoutChange(e: Event): void {
-    const detail = (e as CustomEvent<LayoutChangeDetail>).detail;
-    if (!this._selectedLayout) return;
-    const existing = this._selectedLayout.fixtures[0] as unknown as
-      | LayoutFixture
+  private _openDesigner(layout: LayoutRecord): void {
+    this._activeLayoutId = String(layout.id);
+    const firstFixture = layout.fixtures[0] as
+      | Record<string, unknown>
       | undefined;
-    if (!existing) return;
-    this._pendingFixture = {
-      ...existing,
-      points: detail.points,
-      anchors: detail.anchors,
-    };
+    this._activeFixtureId = firstFixture
+      ? String(firstFixture.id ?? "fixture-0")
+      : "fixture-0";
+    this._activePixelCount = layout.pixel_count ?? 210;
+    this._viewMode = "designer";
   }
 
-  private async _onLayoutSave(e: Event): Promise<void> {
-    const fixture = (e as CustomEvent<LayoutFixture>).detail;
-    if (!this.connection || !this.controllerId || !this._selectedLayout) return;
-    this._busy = true;
-    try {
-      const updated: LayoutRecord = {
-        ...this._selectedLayout,
-        fixtures: [fixture as unknown as Record<string, unknown>],
-      };
-      this._selectedLayout = await layoutSave(this.connection, this.controllerId, updated);
-      this._pendingFixture = null;
-      this._status = "Layout saved";
-      await this._load();
-    } catch (err) {
-      this._status = err instanceof Error ? err.message : String(err);
-    } finally {
-      this._busy = false;
+  private _onDesignerSave = async (): Promise<void> => {
+    // After designer saves, reload the list and push segments
+    await this._load();
+    if (this._activeLayoutId) {
+      await this._applySegments(this._activeLayoutId);
     }
-  }
+  };
 
   protected override render() {
-    const hasSelection = this._selectedId !== null && this._selectedLayout !== null;
-    const firstFixture = this._selectedLayout?.fixtures?.[0] as unknown as LayoutFixture | undefined;
+    if (this._viewMode === "designer") {
+      return this._renderDesigner();
+    }
+    return this._renderList();
+  }
 
+  private _renderList() {
     return html`
       <div class="layout-view">
-        <div class="top-bar">
-          <p class="status">${this._status}</p>
-          <div class="actions">
-            <button
-              class="primary"
-              ?disabled=${this._busy}
-              @click=${() => this._seedKitchenIsland()}
-            >
-              Add kitchen-island template
-            </button>
+        <p class="status-line">${this._status}</p>
+
+        <div class="actions">
+          <button
+            class="primary"
+            ?disabled=${this._busy}
+            @click=${() => this._seedKitchenIsland()}
+          >
+            Add kitchen-island template
+          </button>
+        </div>
+
+        ${this._layouts.length > 0
+          ? html`
+              <ul class="layout-list">
+                ${this._layouts.map(
+                  (l) => html`
+                    <li class="layout-item">
+                      <div class="layout-info">
+                        <span class="layout-name">${l.name ?? l.id}</span>
+                        <span class="meta">${l.pixel_count} px</span>
+                      </div>
+                      <div class="layout-btns">
+                        <button
+                          class="small"
+                          ?disabled=${this._busy}
+                          @click=${() => this._openDesigner(l)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          class="small"
+                          ?disabled=${this._busy}
+                          @click=${() => this._applySegments(String(l.id))}
+                        >
+                          Apply segments
+                        </button>
+                      </div>
+                    </li>
+                  `
+                )}
+              </ul>
+            `
+          : null}
+      </div>
+    `;
+  }
+
+  private _renderDesigner() {
+    return html`
+      <div class="designer-view">
+        <div class="designer-header">
+          <button
+            class="back"
+            @click=${() => {
+              this._viewMode = "list";
+            }}
+          >
+            ← Back to layouts
+          </button>
+          <span class="layout-id-label">${this._activeLayoutId}</span>
+          <button
+            class="small"
+            ?disabled=${this._busy}
+            @click=${() => this._applySegments(this._activeLayoutId)}
+          >
+            Apply segments to WLED
+          </button>
+        </div>
+
+        <div class="designer-body">
+          <div class="designer-col">
+            <wled-layout-designer
+              .connection=${this.connection}
+              controllerId=${this.controllerId}
+              layoutId=${this._activeLayoutId}
+              fixtureId=${this._activeFixtureId}
+              pixelCount=${this._activePixelCount}
+              @layout-saved=${this._onDesignerSave}
+            ></wled-layout-designer>
+          </div>
+
+          <div class="preview-col">
+            <div class="preview-label">Live geometry preview</div>
+            <wled-geometry-preview
+              .connection=${this.connection}
+              controllerId=${this.controllerId}
+              layoutId=${this._activeLayoutId}
+              fixtureId=${this._activeFixtureId}
+              pixelCount=${this._activePixelCount}
+            ></wled-geometry-preview>
           </div>
         </div>
 
-        <div class="layout-list">
-          ${this._layouts.map(
-            (l) => html`
-              <div class="layout-item ${this._selectedId === String(l.id) ? "active" : ""}">
-                <button
-                  class="layout-name"
-                  @click=${() => this._selectLayout(String(l.id))}
-                >
-                  <span>${l.name ?? l.id}</span>
-                  <span class="meta">${l.pixel_count} px</span>
-                </button>
-                <button
-                  class="small"
-                  ?disabled=${this._busy}
-                  @click=${() => this._applySegments(String(l.id))}
-                >
-                  Apply to WLED
-                </button>
-              </div>
-            `
-          )}
-        </div>
-
-        ${hasSelection
-          ? html`
-              <div class="editor-row">
-                <div class="editor-col">
-                  <h3 class="col-label">Layout Designer</h3>
-                  <wled-layout-designer
-                    .fixtureId=${firstFixture?.id ?? "fixture"}
-                    .fixtureName=${firstFixture?.name ?? "Fixture"}
-                    @layout-change=${this._onLayoutChange}
-                    @layout-save=${this._onLayoutSave}
-                  ></wled-layout-designer>
-                </div>
-                <div class="editor-col">
-                  <h3 class="col-label">Live Preview</h3>
-                  <wled-geometry-preview
-                    .connection=${this.connection}
-                    .controllerId=${this.controllerId}
-                    .layoutId=${this._selectedId ?? ""}
-                    .fixtureId=${firstFixture?.id ?? ""}
-                    .pixelCount=${this._selectedLayout?.pixel_count ?? 210}
-                  ></wled-geometry-preview>
-                </div>
-              </div>
-              ${this._pendingFixture
-                ? html`<p class="hint unsaved">Unsaved changes — click Save layout in the designer.</p>`
-                : null}
-            `
-          : html`
-              <p class="hint">Select a layout above to open the editor.</p>
-            `}
+        ${this._status
+          ? html`<p class="status-line">${this._status}</p>`
+          : null}
       </div>
     `;
   }
@@ -213,117 +241,133 @@ export class WledViewLayout extends BasePoweredElement {
   static override styles = [
     ...sharedBaseStyles,
     css`
+      /* ── list view ─────────────────────────────────────── */
       .layout-view {
         padding: 8px 0;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
       }
-      .top-bar {
-        display: flex;
-        align-items: flex-start;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-      .status {
-        flex: 1;
-        margin: 0;
+      .status-line {
+        margin: 0 0 10px;
+        font-size: 0.85rem;
         opacity: 0.8;
       }
       .actions {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+        margin-bottom: 12px;
       }
-      .primary {
-        padding: 10px 14px;
+      .layout-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .layout-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--card-background-color, #1f2937);
+      }
+      .layout-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .layout-name {
+        font-weight: 500;
+      }
+      .meta {
+        font-size: 0.78rem;
+        opacity: 0.65;
+      }
+      .layout-btns {
+        display: flex;
+        gap: 6px;
+      }
+
+      /* ── designer view ──────────────────────────────────── */
+      .designer-view {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        height: 100%;
+      }
+      .designer-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .layout-id-label {
+        flex: 1;
+        font-size: 0.85rem;
+        opacity: 0.7;
+        font-family: monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .designer-body {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+        flex: 1;
+        min-height: 0;
+      }
+      @container wled-studio (min-width: 900px) {
+        .designer-body {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      .designer-col,
+      .preview-col {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-height: 400px;
+      }
+      .preview-label {
+        font-size: 0.8rem;
+        opacity: 0.65;
+      }
+      wled-layout-designer,
+      wled-geometry-preview {
+        flex: 1;
+        min-height: 0;
+      }
+
+      /* ── shared buttons ─────────────────────────────────── */
+      .primary,
+      .small,
+      .back {
+        padding: 8px 14px;
         border: none;
         border-radius: 8px;
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         cursor: pointer;
+        font-size: 0.85rem;
+        white-space: nowrap;
       }
       .small {
-        padding: 4px 8px;
-        font-size: 0.75rem;
-        border: none;
-        border-radius: 6px;
-        background: var(--secondary-background-color, #333);
-        color: var(--primary-text-color, #fff);
-        cursor: pointer;
-        margin-left: 8px;
+        padding: 5px 10px;
+        font-size: 0.78rem;
       }
-      .layout-list {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .layout-item {
-        display: flex;
-        align-items: center;
-        border-radius: 8px;
-        padding: 4px 8px;
-        background: var(--card-background-color, #1e1e2a);
-      }
-      .layout-item.active {
-        background: color-mix(in srgb, var(--primary-color) 20%, transparent);
-        border: 1px solid var(--primary-color);
-      }
-      .layout-name {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        border: none;
+      .back {
         background: transparent;
-        color: var(--primary-text-color, #fff);
-        cursor: pointer;
-        text-align: left;
-        padding: 6px 4px;
+        border: 1px solid var(--divider-color, #374151);
+        color: var(--primary-text-color);
       }
-      .meta {
-        opacity: 0.7;
-        font-size: 0.8rem;
-      }
-      .editor-row {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 12px;
-        min-height: 340px;
-      }
-      @container (min-width: 700px) {
-        .editor-row {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-      .editor-col {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        min-height: 300px;
-      }
-      .col-label {
-        margin: 0;
-        font-size: 0.85rem;
-        font-weight: 600;
-        opacity: 0.8;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-      }
-      .hint {
-        font-size: 0.85rem;
-        opacity: 0.7;
-      }
-      .unsaved {
-        color: var(--warning-color, #ff9800);
-        opacity: 1;
+      .primary:disabled,
+      .small:disabled {
+        opacity: 0.45;
+        cursor: default;
       }
     `,
   ];
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    [VIEW_LAYOUT_TAG]: WledViewLayout;
-  }
 }
