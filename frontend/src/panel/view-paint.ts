@@ -3,6 +3,7 @@ import { property, query, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { debounce } from "../utils/debounce.js";
 import { paintFrame, paintStart, paintStop } from "../api/paint.js";
 
 @safeCustomElement("wled-view-paint")
@@ -22,6 +23,7 @@ export class WledViewPaint extends BasePoweredElement {
   @query(".strip") private _canvas!: HTMLCanvasElement;
   private _ctx: CanvasRenderingContext2D | null = null;
   private _painting = false;
+  private _flushDebounced = debounce(() => void this._flushNow(), 33, 120);
 
   protected override updated(): void {
     if (this._canvas && !this._ctx) {
@@ -36,13 +38,17 @@ export class WledViewPaint extends BasePoweredElement {
       const res = await paintStart(this.connection, this.controllerId);
       this._active = true;
       this._warn = res.wifi_sleep_warning ?? "";
+      if (res.pixel_count) this._pixelCount = res.pixel_count;
+      if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
       this._allocBuffer();
+      this._status = "Paint ready";
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     }
   }
 
   protected override async onPoweredDisconnect(): Promise<void> {
+    this._flushDebounced.cancel();
     if (this._active && this.connection && this.controllerId) {
       try {
         await paintStop(this.connection, this.controllerId, true);
@@ -89,11 +95,11 @@ export class WledViewPaint extends BasePoweredElement {
       this._buffer[o + 2] = b;
       if (this._rgbw) this._buffer[o + 3] = 0;
     }
-    void this._flush();
+    this._flushDebounced();
     this._drawStrip();
   }
 
-  private async _flush(): Promise<void> {
+  private async _flushNow(): Promise<void> {
     if (!this._active || !this.connection || !this._buffer) return;
     try {
       await paintFrame(this.connection, this.controllerId, this._buffer, this._rgbw);
@@ -130,6 +136,8 @@ export class WledViewPaint extends BasePoweredElement {
 
   private async _commit(): Promise<void> {
     if (!this.connection) return;
+    this._flushDebounced.cancel();
+    await this._flushNow();
     await paintStop(this.connection, this.controllerId, true);
     this._active = false;
     this._status = "Committed";
@@ -139,7 +147,7 @@ export class WledViewPaint extends BasePoweredElement {
     return html`
       <section class="paint">
         <p class="lead">
-          1D strip paint over UDP DDP. Drag across the strip to set LED colors.
+          1D strip paint over UDP DDP (${this._pixelCount} LEDs). Drag across the strip.
         </p>
         ${this._warn
           ? html`<p class="warn">${this._warn}</p>`

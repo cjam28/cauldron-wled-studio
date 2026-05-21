@@ -25,7 +25,10 @@ export class WledViewSettings extends BasePoweredElement {
       (ev: { data?: Record<string, unknown> }) => {
         const d = ev.data ?? {};
         const st = String(d.status ?? "");
-        if (st === "progress") {
+        if (st === "started") {
+          this._thumbStatus = `Capturing 0/${d.total ?? "?"}`;
+          this._capturing = true;
+        } else if (st === "progress") {
           this._thumbStatus = `${d.done}/${d.total}: ${d.name}`;
           this._capturing = true;
         } else if (st === "complete" || st === "cancelled") {

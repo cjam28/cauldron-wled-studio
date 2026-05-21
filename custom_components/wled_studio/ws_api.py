@@ -134,6 +134,7 @@ async def ws_get_state(
             "led_order": client.led_bus_order() if client else 0,
             "rgbwm": client.led_bus_rgbwm(bus_index) if client else 0,
             "segment_entities": coord._segment_entities,
+            "fw_ver": client.fw_ver if client else "",
         },
     )
 
@@ -600,7 +601,10 @@ async def ws_layout_to_segments(
     if fixture is None:
         connection.send_error(msg["id"], "not_found", "No fixture in layout")
         return
-    seg_payload = fixture_to_wled_segments(fixture, layout.pixel_count)
+    prefix = (fixture.name or "Side").strip() or "Side"
+    seg_payload = fixture_to_wled_segments(
+        fixture, layout.pixel_count, name_prefix=prefix
+    )
     try:
         result = await coord.client.apply_state(
             {"seg": seg_payload}, full_response=True
@@ -902,6 +906,11 @@ async def ws_paint_start(
         session = coord.get_paint_session()
         await session.start()
         warn = session.wifi_sleep_warning()
+        info = coord.client.info if coord.client else {}
+        leds_raw = info.get("leds") if isinstance(info, dict) else {}
+        leds = leds_raw if isinstance(leds_raw, dict) else {}
+        pixel_count = int(leds.get("count") or 210)
+        rgbw = bool(leds.get("rgbw", True))
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return
@@ -911,6 +920,8 @@ async def ws_paint_start(
             "ok": True,
             "schema_version": SCHEMA_VERSION,
             "wifi_sleep_warning": warn,
+            "pixel_count": pixel_count,
+            "rgbw": rgbw,
         },
     )
 

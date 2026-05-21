@@ -83,16 +83,27 @@ export async function waitForConnection(connection: Connection): Promise<void> {
   });
 }
 
+export interface ControllerInfo {
+  entry_id: string;
+  controller_id?: string;
+  title?: string;
+  host?: string;
+  pixel_count?: number;
+  fw_ver?: string;
+  master_entity_id?: string;
+  [key: string]: unknown;
+}
+
 export async function listControllers(
   connection: Connection
-): Promise<Array<Record<string, unknown>>> {
+): Promise<ControllerInfo[]> {
   await waitForConnection(connection);
   try {
     const res = (await connection.sendMessagePromise({
       type: "wled_studio/list_controllers",
       schema_version: SCHEMA_VERSION,
     })) as { controllers?: Array<Record<string, unknown>> };
-    return res.controllers ?? [];
+    return (res.controllers ?? []) as unknown as ControllerInfo[];
   } catch (err: unknown) {
     const e = err as { code?: string; message?: string };
     const detail = e?.code

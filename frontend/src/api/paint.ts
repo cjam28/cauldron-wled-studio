@@ -13,10 +13,16 @@ async function ws<T>(
   }) as Promise<T>;
 }
 
+export interface PaintStartResult {
+  wifi_sleep_warning?: string | null;
+  pixel_count?: number;
+  rgbw?: boolean;
+}
+
 export async function paintStart(
   connection: Connection,
   controllerId: string
-): Promise<{ wifi_sleep_warning?: string | null }> {
+): Promise<PaintStartResult> {
   return ws(connection, {
     type: "wled_studio/paint_start",
     controller_id: controllerId,

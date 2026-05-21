@@ -16,7 +16,8 @@ import "./view-paint.js";
 import "./view-settings.js";
 import "./view-audio.js";
 import "./view-voice.js";
-import { listControllers } from "../api/live-stream.js";
+import "./view-schedules.js";
+import { listControllers, type ControllerInfo } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
 
@@ -29,16 +30,26 @@ type StudioView =
   | "segments"
   | "audio"
   | "voice"
+  | "schedules"
   | "settings";
+
+const ONBOARD_KEY = "wled_studio.onboarded";
 
 @safeCustomElement(PANEL_TAG)
 export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
   @state() private _controllerId = "";
+  @state() private _controllers: ControllerInfo[] = [];
   @state() private _drawerOpen = false;
   @state() private _previewSegId = -1;
+  @state() private _showOnboard = false;
 
   protected override onPoweredConnect(): void {
+    try {
+      this._showOnboard = !localStorage.getItem(ONBOARD_KEY);
+    } catch {
+      this._showOnboard = false;
+    }
     void this._loadController();
   }
 
@@ -46,6 +57,13 @@ export class WledStudioPanel extends BasePoweredElement {
     if (!this.hass?.connection) return;
     try {
       const controllers = await listControllers(this.hass.connection);
+      this._controllers = controllers;
+      if (
+        this._controllerId &&
+        controllers.some((c) => c.entry_id === this._controllerId)
+      ) {
+        return;
+      }
       const pick = controllers[0];
       if (pick?.entry_id) {
         this._controllerId = String(pick.entry_id);
@@ -53,6 +71,20 @@ export class WledStudioPanel extends BasePoweredElement {
     } catch {
       /* panel still usable */
     }
+  }
+
+  private _dismissOnboard(): void {
+    try {
+      localStorage.setItem(ONBOARD_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    this._showOnboard = false;
+  }
+
+  private _onControllerPick(ev: Event): void {
+    const v = (ev.target as HTMLSelectElement).value;
+    if (v) this._controllerId = v;
   }
 
   protected override render() {
@@ -89,6 +121,7 @@ export class WledStudioPanel extends BasePoweredElement {
             ${this._navItem("segments", "Segments", "mdi:vector-line")}
             ${this._navItem("audio", "Audio", "mdi:music")}
             ${this._navItem("voice", "Voice", "mdi:microphone-message")}
+            ${this._navItem("schedules", "Schedules", "mdi:clock-outline")}
             ${this._navItem("settings", "Settings", "mdi:cog")}
           </nav>
         </aside>
@@ -104,6 +137,28 @@ export class WledStudioPanel extends BasePoweredElement {
               <ha-icon icon="mdi:menu"></ha-icon>
             </button>
             <h1>WLED Studio</h1>
+            ${this._controllers.length > 1
+              ? html`
+                  <label class="controller-pick">
+                    <span class="sr-only">Controller</span>
+                    <select
+                      aria-label="WLED controller"
+                      @change=${this._onControllerPick}
+                    >
+                      ${this._controllers.map(
+                        (c) => html`
+                          <option
+                            value=${c.entry_id}
+                            ?selected=${c.entry_id === this._controllerId}
+                          >
+                            ${c.title ?? c.entry_id}
+                          </option>
+                        `
+                      )}
+                    </select>
+                  </label>
+                `
+              : null}
             ${remote.isRemote
               ? html`<span class="remote-pill">Remote preview</span>`
               : null}
@@ -113,6 +168,26 @@ export class WledStudioPanel extends BasePoweredElement {
             aria-live="polite"
             @wled-preview-refresh=${() => this.refreshLivePreview()}
           >
+            ${this._showOnboard
+              ? html`
+                  <div class="onboard" role="dialog" aria-label="Welcome">
+                    <h2>Welcome to WLED Studio</h2>
+                    <p>
+                      Draw your install in <strong>Layout</strong>, save
+                      <strong>Scenes</strong>, browse <strong>Effects</strong> with captured
+                      thumbnails, and paint in realtime over DDP.
+                    </p>
+                    <ol>
+                      <li>Pick your controller in the header (if you have several).</li>
+                      <li>Open Layout → apply segments from anchors.</li>
+                      <li>Settings → Recapture thumbnails once (takes several minutes).</li>
+                    </ol>
+                    <button type="button" @click=${() => this._dismissOnboard()}>
+                      Get started
+                    </button>
+                  </div>
+                `
+              : null}
             ${this._renderPreview()}
             ${this._renderView()}
           </section>
@@ -243,6 +318,11 @@ export class WledStudioPanel extends BasePoweredElement {
     if (this._view === "voice" && conn && id) {
       return html`
         <wled-view-voice .connection=${conn} .controllerId=${id}></wled-view-voice>
+      `;
+    }
+    if (this._view === "schedules" && conn && id) {
+      return html`
+        <wled-view-schedules .connection=${conn} .controllerId=${id}></wled-view-schedules>
       `;
     }
     if (this._view === "settings" && conn && id) {
@@ -413,6 +493,34 @@ export class WledStudioPanel extends BasePoweredElement {
           .hamburger {
             display: none;
           }
+        }
+        .controller-pick select {
+          max-width: 200px;
+          font-size: 0.85rem;
+        }
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          border: 0;
+        }
+        .onboard {
+          padding: 16px;
+          margin-bottom: 16px;
+          border-radius: 12px;
+          border: 1px solid var(--primary-color);
+          background: var(--secondary-background-color);
+        }
+        .onboard h2 {
+          margin: 0 0 8px;
+        }
+        .onboard ol {
+          margin: 8px 0 12px;
+          padding-left: 1.2rem;
         }
         .remote-pill {
           margin-left: auto;

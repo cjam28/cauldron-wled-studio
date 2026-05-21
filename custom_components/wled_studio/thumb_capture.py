@@ -153,6 +153,13 @@ class ThumbCaptureRunner:
             self._emit({"status": "error", "message": "Controller not ready"})
             return
 
+        saved_state: dict[str, Any] | None = None
+        try:
+            await client.get_state(refresh=True)
+            saved_state = dict(client.state)
+        except Exception:  # noqa: BLE001
+            saved_state = None
+
         items = sorted(client.effects_by_name.items(), key=lambda x: x[1])
         total = sum(1 for _, n in items if not should_skip_effect_name(n))
         done = 0
@@ -162,6 +169,11 @@ class ThumbCaptureRunner:
         for name, fx_id in items:
             if self._cancel.is_set():
                 self._emit({"status": "cancelled", "done": done, "total": total})
+                if saved_state:
+                    try:
+                        await client.apply_state(saved_state)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return
             if should_skip_effect_name(name):
                 continue
@@ -183,6 +195,11 @@ class ThumbCaptureRunner:
             )
 
         self._emit({"status": "complete", "done": done, "total": total})
+        if saved_state:
+            try:
+                await client.apply_state(saved_state)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("thumb capture restore failed", exc_info=True)
 
 
 @callback

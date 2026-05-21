@@ -70,7 +70,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         entry_id = ent.attributes.get("wled_studio_entry_id")
         if not entry_id:
             for coord in hass.data.get(DOMAIN, {}).values():
-                if getattr(coord, "client", None) and coord._master_entity_id == entity_id:
+                if (
+                    getattr(coord, "client", None)
+                    and coord.master_entity_id == entity_id
+                ):
                     entry_id = coord.entry_id
                     break
         coord = hass.data.get(DOMAIN, {}).get(entry_id) if entry_id else None
@@ -84,11 +87,15 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         pixel_count = int(leds.get("count") or 210)
         rgbw = bool(leds.get("rgbw", True))
         color = _hex_to_rgbw(str(call.data.get("color", "#ffffff")), rgbw)
+        off = _hex_to_rgbw("#000000", rgbw)
         count = int(call.data["count"])
         duration_ms = int(call.data["duration_ms"])
+        half = max(50, duration_ms // 2)
         for _ in range(count):
             await _flash_ddp(coord.host, pixel_count, color, rgbw)
-            await asyncio.sleep(duration_ms / 1000.0)
+            await asyncio.sleep(half / 1000.0)
+            await _flash_ddp(coord.host, pixel_count, off, rgbw)
+            await asyncio.sleep(half / 1000.0)
         if saved:
             await client.apply_state(saved)
 

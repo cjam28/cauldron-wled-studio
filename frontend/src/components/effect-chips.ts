@@ -26,6 +26,7 @@ export class WledEffectChips extends BasePoweredElement {
   @property({ type: Number }) selectedFx = 0;
   @property({ type: String }) filter = "";
   @property() controllerId = "";
+  @property() fwVer = "";
   @property({ type: Boolean }) toggleOff = true;
   @property({ type: Boolean }) showRecents = true;
 
@@ -154,7 +155,12 @@ export class WledEffectChips extends BasePoweredElement {
                 const id = this.effectsByName[name];
                 const flag = this.soundFlags[id];
                 const active = id === this.selectedFx;
-                const thumbUrl = thumbUrlForFx(this.controllerId, id);
+                const thumbUrl = thumbUrlForFx(
+                  this.controllerId,
+                  id,
+                  "strip",
+                  this.fwVer
+                );
                 const tileLabel =
                   name +
                   (flag === "v" ? " ♪" : "") +
