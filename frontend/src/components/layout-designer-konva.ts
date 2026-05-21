@@ -49,6 +49,14 @@ function guideToLinePoints(guide: GuidePath): number[] {
   return pts;
 }
 
+/** Font size (model units) so LED index fits inside anchor circle radius r. */
+function anchorLedFontSize(led: number, r: number): number {
+  const digits = String(led).length;
+  const maxByRadius = r * 1.05;
+  const maxByWidth = (r * 1.85) / (digits * 0.62);
+  return Math.max(4, Math.min(maxByRadius, maxByWidth));
+}
+
 function isClosingDuplicate(vertices: LayoutVertex[], i: number): boolean {
   if (i <= 0 || vertices.length < 3) return false;
   const last = vertices.length - 1;
@@ -327,19 +335,24 @@ export class LayoutDesignerKonvaStage {
       this._vertices.add(circle);
 
       if (isAnchor && v.anchorLed !== null) {
+        const label = String(v.anchorLed);
+        const fontSize = anchorLedFontSize(v.anchorLed, r);
+        const box = r * 2;
         this._vertices.add(
           new Konva.Text({
             x: v.x,
             y: v.y,
-            text: String(v.anchorLed),
-            fontSize: Math.max(9, r - 1) / this.viewScaleSafe,
+            width: box,
+            height: box,
+            offsetX: box / 2,
+            offsetY: box / 2,
+            text: label,
+            fontSize,
             fontStyle: "bold",
-            fontFamily: "monospace",
+            fontFamily: "system-ui, -apple-system, sans-serif",
             fill: "#111",
             align: "center",
             verticalAlign: "middle",
-            offsetX: 0,
-            offsetY: (Math.max(9, r - 1) / this.viewScaleSafe) * 0.35,
             listening: false,
           })
         );
