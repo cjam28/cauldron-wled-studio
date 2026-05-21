@@ -158,7 +158,6 @@ export class WledLayoutDesigner extends BasePoweredElement {
     const w = Math.max(1, Math.floor(rect.width));
     const h = Math.max(1, Math.floor(rect.height));
     stage.resize(w, h);
-    this._fitView();
     this._syncStage();
   }
 
@@ -192,7 +191,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       if (this._isClosingDuplicate(i)) continue;
       const v = this._vertices[i];
       const d = Math.hypot(mx - v.x, my - v.y);
-      if (d > HIT_R) continue;
+      if (d > hitR) continue;
       const anchored = this._vertices[i].anchorLed !== null;
       const bestAnchored = best >= 0 && this._vertices[best].anchorLed !== null;
       if (
