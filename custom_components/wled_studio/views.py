@@ -1,19 +1,27 @@
-"""HTTP views for WLED Studio (thumbnail cache with no-cache headers)."""
+"""HTTP views for WLED Studio (thumbnails, layout backgrounds)."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, THUMB_API_URL
+from .const import DOMAIN, LAYOUT_BG_API_URL, LAYOUT_BG_LOCAL_PREFIX, THUMB_API_URL
 from .thumbnails import controller_thumb_dir
 
 _LOGGER = logging.getLogger(__name__)
 
-_THUMB_REGISTERED_KEY = f"{DOMAIN}_thumb_view_registered"
+_VIEWS_REGISTERED_KEY = f"{DOMAIN}_http_views_registered"
+
+
+def layout_bg_dir(hass: HomeAssistant, controller_id: str) -> Path:
+    """Directory under config/www for layout floorplan images."""
+    directory = Path(hass.config.path) / "www" / "wled_studio" / "layouts" / controller_id
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def _safe_filename(filename: str) -> str | None:
@@ -63,10 +71,58 @@ class WledStudioThumbView(HomeAssistantView):
         )
 
 
+class WledStudioLayoutBgView(HomeAssistantView):
+    """POST floorplan image for a layout (stored under /config/www)."""
+
+    requires_auth = True
+    url = LAYOUT_BG_API_URL
+    name = "api:wled_studio:layout_bg"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(
+        self,
+        request: web.Request,
+        controller_id: str,
+        layout_id: str,
+    ) -> web.Response:
+        """POST /api/wled_studio/layout_bg/{controller_id}/{layout_id}."""
+        if not controller_id or not layout_id or ".." in controller_id or ".." in layout_id:
+            raise web.HTTPBadRequest
+
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None or field.name != "file":
+            raise web.HTTPBadRequest
+
+        raw = await field.read()
+        if not raw or len(raw) > 8 * 1024 * 1024:
+            raise web.HTTPBadRequest
+
+        ctype = (field.headers.get("Content-Type") or "").lower()
+        ext = "png" if "png" in ctype else "jpg"
+        directory = layout_bg_dir(self.hass, controller_id)
+        dest = (directory / f"{layout_id}.{ext}").resolve()
+        try:
+            dest.relative_to(directory.resolve())
+        except ValueError:
+            raise web.HTTPForbidden from None
+
+        dest.write_bytes(raw)
+        background_url = f"{LAYOUT_BG_LOCAL_PREFIX}/{controller_id}/{layout_id}.{ext}"
+        return web.json_response({"background_url": background_url})
+
+
 def async_register_views(hass: HomeAssistant) -> None:
     """Register HTTP views once per HA instance."""
-    if hass.data.get(_THUMB_REGISTERED_KEY):
+    if hass.data.get(_VIEWS_REGISTERED_KEY):
         return
     hass.http.register_view(WledStudioThumbView(hass))
-    hass.data[_THUMB_REGISTERED_KEY] = True
-    _LOGGER.debug("Registered WLED Studio thumbnail view at %s", THUMB_API_URL)
+    hass.http.register_view(WledStudioLayoutBgView(hass))
+    hass.data[_VIEWS_REGISTERED_KEY] = True
+    _LOGGER.debug(
+        "Registered WLED Studio HTTP views: %s, %s",
+        THUMB_API_URL,
+        LAYOUT_BG_API_URL,
+    )

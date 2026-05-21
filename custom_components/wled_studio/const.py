@@ -19,6 +19,8 @@ CONF_HOST = "host"
 
 STATIC_URL_PREFIX = "/wled_studio_static"
 THUMB_API_URL = "/api/wled_studio/thumb/{controller_id}/{filename}"
+LAYOUT_BG_API_URL = "/api/wled_studio/layout_bg/{controller_id}/{layout_id}"
+LAYOUT_BG_LOCAL_PREFIX = "/local/wled_studio/layouts"
 PANEL_URL_PATH = "wled-studio"
 PANEL_MODULE = "wled-studio-panel"
 

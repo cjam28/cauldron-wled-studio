@@ -3,6 +3,8 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { getStroke } from "perfect-freehand";
+import simplify from "simplify-js";
 import {
   layoutGet,
   layoutResolvePositions,
@@ -10,6 +12,9 @@ import {
   type LayoutRecord,
   type LedPosition,
 } from "../api/layout.js";
+import { uploadLayoutBackground } from "../api/layout-background.js";
+import { fetchDeviceState } from "../api/wled-state.js";
+import { importSegmentStarts } from "../utils/layout-tools.js";
 
 /** Vertex used internally while editing. */
 interface Vertex {
@@ -45,6 +50,17 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _anchorInput = "";
   @state() private _status = "";
   @state() private _busy = false;
+  @state() private _closed = false;
+  @state() private _tool: "select" | "pen" = "select";
+  @state() private _backgroundUrl: string | null = null;
+  @state() private _scalePxPerM: number | null = null;
+  @state() private _calibActive = false;
+  @state() private _calibMeters = "1";
+  @state() private _bgOpacity = 0.45;
+
+  private _calibPts: Array<[number, number]> = [];
+  private _penStroke: Array<[number, number]> = [];
+  private _bgImage: HTMLImageElement | null = null;
 
   private _canvas?: HTMLCanvasElement;
   private _canvasWrap?: HTMLElement;
@@ -219,19 +235,47 @@ export class WledLayoutDesigner extends BasePoweredElement {
   private _onPointerDown = (ev: PointerEvent): void => {
     ev.preventDefault();
     const [cx, cy] = this._canvasXY(ev);
+    const [mx, my] = this._canvasToModel(cx, cy);
+
+    if (this._calibActive) {
+      this._calibPts.push([mx, my]);
+      if (this._calibPts.length >= 2) this._applyCalibration();
+      this._paint();
+      return;
+    }
+
+    if (this._tool === "pen") {
+      this._penStroke = [[cx, cy]];
+      this._canvas?.setPointerCapture(ev.pointerId);
+      this._paint();
+      return;
+    }
+
     const idx = this._hitVertex(cx, cy);
     if (idx >= 0) {
       this._selectedVtx = idx;
       this._anchorInput = String(this._vertices[idx].anchorLed ?? "");
       this._drag = { idx, ox: cx, oy: cy };
       this._canvas?.setPointerCapture(ev.pointerId);
+    } else {
+      this._selectedVtx = -1;
     }
     this._paint();
   };
 
   private _onPointerMove = (ev: PointerEvent): void => {
-    if (!this._drag) return;
     const [cx, cy] = this._canvasXY(ev);
+
+    if (this._tool === "pen" && this._penStroke.length > 0) {
+      const last = this._penStroke[this._penStroke.length - 1];
+      if (Math.hypot(cx - last[0], cy - last[1]) > 2) {
+        this._penStroke = [...this._penStroke, [cx, cy]];
+        this._paint();
+      }
+      return;
+    }
+
+    if (!this._drag) return;
     const [mx, my] = this._canvasToModel(cx, cy);
     const verts = [...this._vertices];
     verts[this._drag.idx] = { ...verts[this._drag.idx], x: mx, y: my };
@@ -240,12 +284,53 @@ export class WledLayoutDesigner extends BasePoweredElement {
   };
 
   private _onPointerUp = (ev: PointerEvent): void => {
+    if (this._tool === "pen" && this._penStroke.length > 0) {
+      this._canvas?.releasePointerCapture(ev.pointerId);
+      this._finishPenStroke();
+      return;
+    }
     if (this._drag) {
       this._canvas?.releasePointerCapture(ev.pointerId);
       this._drag = null;
       void this._refreshPositions();
     }
   };
+
+  private _finishPenStroke(): void {
+    const stroke = this._penStroke;
+    this._penStroke = [];
+    if (stroke.length < 2) return;
+    const outline = getStroke(
+      stroke.map(([x, y]) => [x, y, 0.5] as [number, number, number]),
+      { size: 10, thinning: 0.6, smoothing: 0.5 }
+    );
+    const pts = simplify(
+      outline.map(([x, y]) => ({ x, y })),
+      2.5,
+      true
+    );
+    if (pts.length < 2) return;
+    this._vertices = pts.map((p) => {
+      const [mx, my] = this._canvasToModel(p.x, p.y);
+      return { x: mx, y: my, anchorLed: null };
+    });
+    this._selectedVtx = -1;
+    void this._refreshPositions();
+    this._paint();
+  }
+
+  private _applyCalibration(): void {
+    if (this._calibPts.length < 2) return;
+    const [a, b] = this._calibPts;
+    const px = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const meters = parseFloat(this._calibMeters);
+    if (px > 0 && meters > 0) {
+      this._scalePxPerM = px / meters;
+      this._status = `Scale: ${this._scalePxPerM.toFixed(1)} px/m`;
+    }
+    this._calibActive = false;
+    this._calibPts = [];
+  }
 
   private _onDblClick = (ev: MouseEvent): void => {
     const [cx, cy] = this._pointerCanvasXY(ev.clientX, ev.clientY);
@@ -282,6 +367,12 @@ export class WledLayoutDesigner extends BasePoweredElement {
     ctx.fillStyle = "#111827";
     ctx.fillRect(0, 0, w, h);
 
+    if (this._bgImage?.complete && this._bgImage.naturalWidth > 0) {
+      ctx.globalAlpha = this._bgOpacity;
+      ctx.drawImage(this._bgImage, 0, 0, w, h);
+      ctx.globalAlpha = 1;
+    }
+
     const verts = this._vertices;
     if (verts.length === 0) {
       ctx.fillStyle = "rgba(255,255,255,0.25)";
@@ -316,13 +407,28 @@ export class WledLayoutDesigner extends BasePoweredElement {
         const [vx, vy] = this._vtxToCanvas(drawVerts[i]);
         ctx.lineTo(vx, vy);
       }
-      const closed =
-        verts.length >= 3 &&
-        (this._isClosingDuplicate(verts.length - 1) ||
-          Math.hypot(verts[0].x - verts[verts.length - 1].x, verts[0].y - verts[verts.length - 1].y) <
-            0.5);
-      if (closed) ctx.closePath();
+      if (this._closed && drawVerts.length >= 3) ctx.closePath();
       ctx.stroke();
+    }
+
+    if (this._penStroke.length >= 2) {
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(168,85,247,0.8)";
+      ctx.lineWidth = 2;
+      const [px0, py0] = this._penStroke[0];
+      ctx.moveTo(px0, py0);
+      for (let i = 1; i < this._penStroke.length; i++) {
+        ctx.lineTo(this._penStroke[i][0], this._penStroke[i][1]);
+      }
+      ctx.stroke();
+    }
+
+    for (const [mx, my] of this._calibPts) {
+      const [cx, cy] = this._vtxToCanvas({ x: mx, y: my, anchorLed: null });
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#22d3ee";
+      ctx.fill();
     }
 
     // Draw vertices
@@ -395,6 +501,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
         }
       }
       this._vertices = vertices;
+      this._closed = Boolean(fixture.closed);
+      this._backgroundUrl = layout.background_url ?? null;
+      this._scalePxPerM = layout.scale_px_per_m ?? null;
+      this._loadBackgroundImage();
 
       this._fitView();
       await this._refreshPositions();
@@ -442,17 +552,81 @@ export class WledLayoutDesigner extends BasePoweredElement {
       controller_id: this.controllerId,
       name: "Layout",
       pixel_count: this.pixelCount,
+      background_url: this._backgroundUrl,
+      scale_px_per_m: this._scalePxPerM,
       fixtures: [
         {
           id: this.fixtureId || "fixture-0",
           name: "Fixture",
           kind: "polyline",
-          closed: false,
+          closed: this._closed,
           points: pts,
           anchors,
         },
       ],
     };
+  }
+
+  private _loadBackgroundImage(): void {
+    const url = this._backgroundUrl;
+    if (!url) {
+      this._bgImage = null;
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      this._bgImage = img;
+      this._paint();
+    };
+    img.onerror = () => {
+      this._bgImage = null;
+    };
+    img.src = url;
+  }
+
+  private async _importFromWled(): Promise<void> {
+    if (!this.connection || !this.controllerId) return;
+    this._busy = true;
+    this._status = "Reading WLED segments…";
+    try {
+      const snap = await fetchDeviceState(this.connection, this.controllerId);
+      const starts = snap.segments
+        .map((s) => s.start ?? 0)
+        .filter((n, i, arr) => arr.indexOf(n) === i)
+        .sort((a, b) => a - b);
+      this._vertices = importSegmentStarts(this._vertices, starts, this._closed);
+      this._status = `Imported ${starts.length} segment boundary(ies) from WLED`;
+      void this._refreshPositions();
+      this._paint();
+    } catch (err) {
+      this._status = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  private async _onBackgroundFile(ev: Event): Promise<void> {
+    const input = ev.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !this.controllerId || !this.layoutId) return;
+    this._busy = true;
+    this._status = "Uploading floorplan…";
+    try {
+      const { background_url } = await uploadLayoutBackground(
+        this.controllerId,
+        this.layoutId,
+        file
+      );
+      this._backgroundUrl = background_url;
+      this._loadBackgroundImage();
+      this._status = "Floorplan uploaded — Save layout to persist";
+    } catch (err) {
+      this._status = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = false;
+    }
   }
 
   private async _save(): Promise<void> {
@@ -463,6 +637,9 @@ export class WledLayoutDesigner extends BasePoweredElement {
       await layoutSave(this.connection, this.controllerId, this._buildLayout());
       this._status = "Saved";
       await this._refreshPositions();
+      this.dispatchEvent(
+        new CustomEvent("layout-saved", { bubbles: true, composed: true })
+      );
     } catch (err) {
       this._status = err instanceof Error ? err.message : String(err);
     } finally {
@@ -511,14 +688,109 @@ export class WledLayoutDesigner extends BasePoweredElement {
           <canvas></canvas>
         </div>
         <div class="sidebar">
+          <div class="tool-row">
+            <button
+              class=${this._tool === "select" ? "tool active" : "tool"}
+              @click=${() => {
+                this._tool = "select";
+              }}
+            >
+              Select
+            </button>
+            <button
+              class=${this._tool === "pen" ? "tool active" : "tool"}
+              @click=${() => {
+                this._tool = "pen";
+              }}
+            >
+              Pen
+            </button>
+          </div>
+
+          <label class="check-row">
+            <input
+              type="checkbox"
+              .checked=${this._closed}
+              @change=${(e: Event) => {
+                this._closed = (e.target as HTMLInputElement).checked;
+                this._paint();
+                void this._refreshPositions();
+              }}
+            />
+            Close path (wrap last LED → first)
+          </label>
+
           <div class="instructions">
-            <strong>Controls</strong>
+            <strong>Select tool</strong>
             <ul>
-              <li>Double-click canvas → add vertex</li>
-              <li>Drag vertex → move</li>
-              <li>Right-click vertex → delete</li>
               <li>Click vertex → select & set anchor LED</li>
+              <li>Drag vertex → move corner</li>
+              <li>Double-click empty → add vertex</li>
+              <li>Right-click vertex → delete</li>
             </ul>
+            <strong>Pen tool</strong>
+            <ul>
+              <li>Draw freehand → releases as vertices</li>
+            </ul>
+          </div>
+
+          <div class="action-stack">
+            <button class="secondary" ?disabled=${this._busy} @click=${() => this._importFromWled()}>
+              Import segments from WLED
+            </button>
+            <label class="file-btn secondary">
+              Upload floorplan
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/heic"
+                hidden
+                @change=${this._onBackgroundFile}
+              />
+            </label>
+            <label class="check-row">
+              Floorplan opacity
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.05"
+                .value=${String(this._bgOpacity)}
+                @input=${(e: Event) => {
+                  this._bgOpacity = parseFloat((e.target as HTMLInputElement).value);
+                  this._paint();
+                }}
+              />
+            </label>
+            <button
+              class="secondary"
+              ?disabled=${this._busy}
+              @click=${() => {
+                this._calibActive = true;
+                this._calibPts = [];
+                this._status = "Click two points on the floorplan, then enter real distance (m)";
+              }}
+            >
+              Calibrate scale
+            </button>
+            ${this._calibActive
+              ? html`
+                  <label>
+                    Distance between points (m)
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      .value=${this._calibMeters}
+                      @input=${(e: Event) => {
+                        this._calibMeters = (e.target as HTMLInputElement).value;
+                      }}
+                    />
+                  </label>
+                `
+              : null}
+            ${this._scalePxPerM
+              ? html`<p class="meta">Scale: ${this._scalePxPerM.toFixed(1)} layout px per meter</p>`
+              : null}
           </div>
 
           ${sel !== undefined
@@ -620,6 +892,58 @@ export class WledLayoutDesigner extends BasePoweredElement {
       .instructions ul {
         margin: 4px 0 0;
         padding-left: 1.1rem;
+      }
+      .tool-row {
+        display: flex;
+        gap: 6px;
+      }
+      .tool {
+        flex: 1;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--divider-color, #374151);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.8rem;
+      }
+      .tool.active {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        border-color: transparent;
+      }
+      .check-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.82rem;
+      }
+      .check-row input[type="range"] {
+        flex: 1;
+      }
+      .action-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .secondary,
+      .file-btn {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color, #374151);
+        background: var(--card-background-color, #1f2937);
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.8rem;
+        text-align: center;
+      }
+      .file-btn input {
+        display: none;
+      }
+      .meta {
+        margin: 0;
+        font-size: 0.75rem;
+        opacity: 0.7;
       }
       .anchor-panel {
         display: flex;
