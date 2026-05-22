@@ -13,6 +13,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .ddp import build_ddp_packets
+from .wled_client import is_client_unavailable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,7 +82,14 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("notify: no coordinator for %s", entity_id)
             return
         client = coord.client
-        await client.get_state(refresh=True)
+        try:
+            await client.get_state(refresh=True)
+        except Exception as err:
+            if is_client_unavailable(err):
+                _LOGGER.debug("notify skipped: client unavailable")
+            else:
+                _LOGGER.warning("notify: get_state failed", exc_info=True)
+            return
         saved = dict(client.state) if call.data.get("restore", True) else None
         leds = client.info.get("leds") or {}
         pixel_count = int(leds.get("count") or 210)
@@ -97,7 +105,13 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             await _flash_ddp(coord.host, pixel_count, off, rgbw)
             await asyncio.sleep(half / 1000.0)
         if saved:
-            await client.apply_state(saved)
+            try:
+                await client.apply_state(saved)
+            except Exception as err:
+                if is_client_unavailable(err):
+                    _LOGGER.debug("notify restore skipped: client unavailable")
+                else:
+                    _LOGGER.warning("notify: restore failed", exc_info=True)
 
     hass.services.async_register(
         DOMAIN,

@@ -1,0 +1,16 @@
+/* WLED Studio embed — selected segments: outline only (no fill) */
+#segcont .lstI.selected,
+.lstI.selected {
+  background: transparent !important;
+  border: 2px solid rgba(255, 255, 255, 0.88) !important;
+  box-shadow: none !important;
+}
+
+#segcont .selected,
+.selected {
+  background: transparent !important;
+}
+
+.lstI.sticky.selected {
+  box-shadow: none !important;
+}

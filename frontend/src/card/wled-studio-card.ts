@@ -1,14 +1,15 @@
 import { css, html, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import { safeCustomElement } from "../utils/safe-custom-element.js";
 import type { LovelaceCard } from "custom-card-helpers";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { isWledStudioStale } from "../utils/build-stamp.js";
 import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
 import { applyState, fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
 import type { WledViewPaint } from "../panel/view-paint.js";
+import { pctTo255, readBrightnessPct } from "../utils/ha-brightness.js";
 import "../components/geometry-preview.js";
 import "../components/segment-controls.js";
 import "../panel/view-scenes.js";
@@ -35,7 +36,6 @@ const MODE_TABS: Array<{ id: CardModeTab; label: string; icon: string }> = [
   { id: "paint", label: "Paint", icon: "mdi:brush" },
 ];
 
-@safeCustomElement(CARD_TAG)
 export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @property({ attribute: false }) public config?: WledStudioCardConfig;
 
@@ -85,14 +85,27 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     return { type: `custom:${CARD_TAG}`, controller: "Cloud", height: 200 };
   }
 
+  private _visibleModeTabs(): Array<{ id: CardModeTab; label: string; icon: string }> {
+    if (this.config?.show_scenes === false) {
+      return MODE_TABS.filter((t) => t.id !== "scenes");
+    }
+    return MODE_TABS;
+  }
+
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
+    if (this.config?.show_scenes === false && this._cardTab === "scenes") {
+      this._cardTab = "solid";
+    }
     this._syncSegmentsFromControls();
     if (changed.has("hass") && this._globalBriPct !== null) {
       const actual = this._readGlobalBrightnessPct();
-      if (Math.abs(actual - this._globalBriPct) <= 1) {
+      if (actual === 0 || Math.abs(actual - this._globalBriPct) <= 1) {
         this._globalBriPct = null;
       }
+    }
+    if (changed.has("hass") || changed.has("_globalBriPct")) {
+      this._syncGlobalBriToSegmentControls();
     }
     if (changed.has("_cardTab")) {
       void this._onCardTabChanged(
@@ -101,6 +114,12 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     }
     if (changed.has("_cardTab") || changed.has("_paintPanel")) {
       this._syncPaintPreview();
+    }
+    if (
+      changed.has("_cardTab") &&
+      (this._cardTab === "solid" || this._cardTab === "segments")
+    ) {
+      this.scheduleRaf(() => this._syncGlobalBriToSegmentControls());
     }
     if (changed.has("config")) {
       this._bindConnectionReady();
@@ -337,17 +356,16 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _readGlobalBrightnessPct(): number {
     if (!this.hass || !this._masterEntity) return 0;
-    const st = this.hass.states[this._masterEntity];
-    if (!st) return 0;
-    const pct = st.attributes.brightness_pct;
-    if (typeof pct === "number" && Number.isFinite(pct)) {
-      return Math.max(0, Math.min(100, Math.round(pct)));
+    return readBrightnessPct(this.hass.states[this._masterEntity]);
+  }
+
+  private _syncGlobalBriToSegmentControls(): void {
+    const bri = pctTo255(this._globalBrightnessPct());
+    for (const el of this.renderRoot.querySelectorAll("wled-segment-controls")) {
+      (el as import("../components/segment-controls.js").WledSegmentControls).applyGlobalBrightness(
+        bri
+      );
     }
-    const bri = st.attributes.brightness;
-    if (typeof bri === "number" && Number.isFinite(bri)) {
-      return Math.round((Math.max(0, Math.min(255, bri)) / 255) * 100);
-    }
-    return st.state === "on" ? 100 : 0;
   }
 
   private _globalBrightnessPct(): number {
@@ -357,13 +375,15 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _onGlobalBriInput(ev: Event): void {
     this._globalBriPct = Number((ev.target as HTMLInputElement).value);
+    this._syncGlobalBriToSegmentControls();
   }
 
   private _setGlobalBrightness(ev: Event): void {
     if (!this.hass || !this._masterEntity) return;
     const value = Number((ev.target as HTMLInputElement).value);
     this._globalBriPct = value;
-    const bri = Math.round((value / 100) * 255);
+    const bri = pctTo255(value);
+    this._syncGlobalBriToSegmentControls();
 
     void this.hass.callService("light", "turn_on", {
       entity_id: this._masterEntity,
@@ -381,9 +401,15 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   private _renderModeTabs(): import("lit").TemplateResult {
+    const tabs = this._visibleModeTabs();
     return html`
-      <div class="mode-tabs" role="tablist" aria-label="Control mode">
-        ${MODE_TABS.map(
+      <div
+        class="mode-tabs"
+        style=${`grid-template-columns: repeat(${tabs.length}, 1fr)`}
+        role="tablist"
+        aria-label="Control mode"
+      >
+        ${tabs.map(
           (t) => html`
             <button
               type="button"
@@ -414,6 +440,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
             .hass=${hass}
             .connection=${conn}
             .controllerId=${this._controllerId}
+            .masterEntity=${this._masterEntity}
             wholeMode
             compact
           ></wled-segment-controls>
@@ -425,6 +452,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
             .hass=${hass}
             .connection=${conn}
             .controllerId=${this._controllerId}
+            .masterEntity=${this._masterEntity}
             .selectedSegId=${this._selectedSegId}
             compact
             @segment-change=${this._onSegmentChange}
@@ -471,6 +499,13 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
     return html`
       <div class="card" role="region" aria-label="WLED Studio card">
+        ${isWledStudioStale()
+          ? html`
+              <ha-alert alert-type="warning" class="stale-banner">
+                WLED Studio updated — refresh this page to apply changes.
+              </ha-alert>
+            `
+          : null}
         <header class="header">
           <ha-icon icon="mdi:led-strip-variant"></ha-icon>
           <span class="title">${this.config?.controller ?? "WLED Studio"}</span>
@@ -488,7 +523,10 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         </header>
 
         <div class="controls">
-          <label class="bri-label" for="global-brightness">Brightness</label>
+          <div class="bri-row">
+            <label class="bri-label" for="global-brightness">Brightness</label>
+            <span class="bri-pct" aria-live="polite">${this._globalBrightnessPct()}%</span>
+          </div>
           <ha-slider
             id="global-brightness"
             min="0"
@@ -559,6 +597,10 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         border-radius: var(--ha-card-border-radius, 12px);
         box-shadow: var(--ha-card-box-shadow, none);
       }
+      .stale-banner {
+        display: block;
+        margin-bottom: 10px;
+      }
       .header {
         display: flex;
         align-items: center;
@@ -590,15 +632,24 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       .controls {
         margin: 0 0 10px;
       }
+      .bri-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
       .bri-label {
-        display: block;
         font-size: 0.8rem;
         opacity: 0.85;
-        margin-bottom: 4px;
+      }
+      .bri-pct {
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.85;
       }
       .mode-tabs {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
         gap: 6px;
         margin-bottom: 10px;
       }

@@ -17,6 +17,24 @@ class StateWriter:
         self._in_flight: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
         self._flush_event = asyncio.Event()
+        self._closed = False
+
+    async def shutdown_async(self) -> None:
+        """Cancel queued writes before the HTTP session is closed."""
+        self._closed = True
+        flight: asyncio.Task[Any] | None = None
+        async with self._lock:
+            if self._in_flight is not None and not self._in_flight.done():
+                flight = self._in_flight
+                flight.cancel()
+            self._pending = None
+            self._in_flight = None
+            self._flush_event.clear()
+        if flight is not None:
+            try:
+                await flight
+            except (asyncio.CancelledError, Exception):
+                pass
 
     async def apply(
         self,
@@ -26,7 +44,11 @@ class StateWriter:
         full_response: bool = False,
     ) -> dict[str, Any] | None:
         """Queue *patch*; merge with any pending payload; return last response if any."""
+        if self._closed:
+            return None
         async with self._lock:
+            if self._closed:
+                return None
             if self._pending is None:
                 self._pending = dict(patch)
             else:
@@ -39,7 +61,11 @@ class StateWriter:
     ) -> dict[str, Any] | None:
         last: dict[str, Any] | None = None
         while True:
+            if self._closed:
+                return last
             async with self._lock:
+                if self._closed:
+                    return last
                 if self._in_flight is not None and not self._in_flight.done():
                     flight = self._in_flight
                 elif self._pending is None:
@@ -55,7 +81,17 @@ class StateWriter:
 
             try:
                 last = await flight
-            except Exception:
+            except asyncio.CancelledError:
+                if self._closed:
+                    return last
+                raise
+            except Exception as err:
+                if self._closed:
+                    return last
+                from .wled_client import WledClientUnavailable, is_client_unavailable
+
+                if isinstance(err, WledClientUnavailable) or is_client_unavailable(err):
+                    raise
                 _LOGGER.exception("WLED state POST failed")
                 raise
             async with self._lock:

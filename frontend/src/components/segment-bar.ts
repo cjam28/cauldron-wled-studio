@@ -76,7 +76,9 @@ export class WledSegmentBar extends BasePoweredElement {
       }
       .btn.on {
         border-color: var(--primary-color);
-        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+        background: transparent;
+        outline: 2px solid var(--primary-color);
+        outline-offset: 1px;
       }
     `,
   ];

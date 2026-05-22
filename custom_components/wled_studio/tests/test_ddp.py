@@ -28,7 +28,7 @@ def test_single_rgbw_packet_push() -> None:
 
 
 def test_fragment_push_only_on_last() -> None:
-    payload = bytes(2000)
+    payload = bytes(1998)
     packets = build_ddp_packets(payload, rgbw=False, start_seq=3)
     assert len(packets) >= 2
     for pkt in packets[:-1]:

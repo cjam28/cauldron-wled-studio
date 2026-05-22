@@ -14,6 +14,7 @@ from .paint_commit import (
     live_frame_to_payload,
 )
 from .segments_restore import build_segment_restore_patch
+from .wled_client import is_client_unavailable
 
 if TYPE_CHECKING:
     from .coordinator import WledStudioCoordinator
@@ -103,12 +104,19 @@ class PaintSession:
                             self._transport.sendto(pkt, (self._host, DDP_PORT))
                     try:
                         await self._commit_buffer_to_state()
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.warning(
-                            "Paint commit to WLED state failed on %s",
-                            self._host,
-                            exc_info=True,
-                        )
+                    except Exception as err:  # noqa: BLE001
+                        if is_client_unavailable(err):
+                            _LOGGER.debug(
+                                "Paint commit to WLED state failed on %s (unavailable)",
+                                self._host,
+                                exc_info=True,
+                            )
+                        else:
+                            _LOGGER.warning(
+                                "Paint commit to WLED state failed on %s",
+                                self._host,
+                                exc_info=True,
+                            )
                         await self._client.apply_state({"live": False})
             elif was_active:
                 try:
@@ -116,12 +124,19 @@ class PaintSession:
                         await self._restore_segment_snapshot()
                     else:
                         await self._client.apply_state({"live": False})
-                except Exception:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Failed to restore layout after paint on %s",
-                        self._host,
-                        exc_info=True,
-                    )
+                except Exception as err:  # noqa: BLE001
+                    if is_client_unavailable(err):
+                        _LOGGER.debug(
+                            "Failed to restore layout after paint on %s (unavailable)",
+                            self._host,
+                            exc_info=True,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Failed to restore layout after paint on %s",
+                            self._host,
+                            exc_info=True,
+                        )
         finally:
             if self._transport:
                 self._transport.close()

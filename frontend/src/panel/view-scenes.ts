@@ -411,12 +411,13 @@ export class WledViewScenes extends BasePoweredElement {
         opacity: 0.5;
         cursor: not-allowed;
       }
-      .status,
-      .toast {
+      .status {
         font-size: 0.9rem;
         opacity: 0.85;
       }
       .toast {
+        font-size: 0.9rem;
+        opacity: 0.85;
         color: var(--primary-color);
       }
       .conflict {

@@ -57,6 +57,7 @@ class WledStudioCoordinator:
         self.audio_listener: AudioSyncListener | None = None
         self._applied_layout_id: str | None = None
         self._applied_layout_segments: list[dict[str, Any]] | None = None
+        self._shutting_down = False
 
     async def async_setup(self) -> None:
         wled_entry = await resolve_wled_entry(self.hass, self.wled_entry_id)
@@ -314,16 +315,40 @@ class WledStudioCoordinator:
         await self.paint_session.stop(commit=False)
         return True
 
+    async def async_apply_embed_skin(self) -> None:
+        """Upload skin.css and enable custom CSS for outline-only segment selection."""
+        from .embed_skin import embed_skin_bytes, embed_skin_cfg_patch
+
+        if self.client is None:
+            raise RuntimeError("WLED client not ready")
+        await self.client.upload_fs_file("skin.css", embed_skin_bytes())
+        await self.client.apply_cfg(embed_skin_cfg_patch())
+
     def get_thumb_runner(self) -> ThumbCaptureRunner:
         if self.thumb_runner is None:
             self.thumb_runner = ThumbCaptureRunner(self.hass, self)
         return self.thumb_runner
 
     async def async_shutdown(self) -> None:
+        if self._shutting_down:
+            return
+        self._shutting_down = True
         if self._apply_abort and not self._apply_abort.done():
             self._apply_abort.cancel()
+            try:
+                await self._apply_abort
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
         if self.thumb_runner and self.thumb_runner.running:
             self.thumb_runner.cancel()
+            task = self.thumb_runner._task
+            if task is not None and not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
         if self.paint_session:
             await self.paint_session.stop()
             self.paint_session = None
@@ -334,7 +359,9 @@ class WledStudioCoordinator:
         self.audio_listener = None
         await self.scene_store.async_flush()
         await shutdown_live_proxy(self.entry_id)
+        if self.client is not None:
+            await self.client.shutdown_writes()
+            self.client = None
         if self._session:
             await self._session.close()
         self._session = None
-        self.client = None

@@ -4,9 +4,26 @@ export function safeCustomElement(tag: string) {
     cls: T,
     _context?: ClassDecoratorContext
   ): T => {
-    if (!customElements.get(tag)) {
-      customElements.define(tag, cls);
+    const existing = customElements.get(tag);
+    if (existing) {
+      // Lovelace resource cache-bust can re-execute the module while the tag
+      // stays registered — always use the registry constructor.
+      return existing as T;
     }
+    customElements.define(tag, cls);
     return cls;
   };
+}
+
+/** Define a top-level tag once; return the registered constructor. */
+export function defineCustomElement(
+  tag: string,
+  cls: CustomElementConstructor
+): CustomElementConstructor {
+  const existing = customElements.get(tag);
+  if (existing) {
+    return existing;
+  }
+  customElements.define(tag, cls);
+  return cls;
 }

@@ -7,7 +7,8 @@ import binascii
 import logging
 import re
 import uuid as uuid_mod
-from typing import Any
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 import voluptuous as vol
 
@@ -20,10 +21,13 @@ from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
 from .thumbnails import list_thumbs
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
+from .wled_client import is_client_unavailable
 
 _LOGGER = logging.getLogger(__name__)
 
 _WS_REGISTERED_KEY = f"{DOMAIN}_ws_api_registered"
+
+_T = TypeVar("_T")
 
 
 def _check_schema(msg: dict[str, Any]) -> bool:
@@ -34,6 +38,66 @@ def _check_schema(msg: dict[str, Any]) -> bool:
 def _get_coordinator(hass: HomeAssistant, entry_id: str):
     coord = hass.data.get(DOMAIN, {}).get(entry_id)
     return coord
+
+
+def _ws_client_error(
+    connection: websocket_api.ActiveConnection,
+    msg_id: int,
+    err: BaseException,
+) -> bool:
+    """Send a websocket error for transient client failures. Returns True if handled."""
+    if not is_client_unavailable(err):
+        return False
+    _LOGGER.debug("WLED client unavailable during WS call: %s", err)
+    connection.send_error(
+        msg_id,
+        "not_ready",
+        "WLED client is reloading or unreachable — retry in a moment",
+    )
+    return True
+
+
+async def _ws_call(
+    connection: websocket_api.ActiveConnection,
+    msg_id: int,
+    coro: Coroutine[Any, Any, _T],
+) -> _T | None:
+    """Run *coro*; return result or None if a client-unavailable error was sent."""
+    try:
+        return await coro
+    except Exception as err:
+        if _ws_client_error(connection, msg_id, err):
+            return None
+        raise
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/apply_embed_skin",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_apply_embed_skin(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Controller not found")
+        return
+    try:
+        if await _ws_call(connection, msg["id"], coord.async_apply_embed_skin()) is None:
+            return
+    except Exception as err:
+        connection.send_error(msg["id"], "apply_failed", str(err))
+        return
+    connection.send_result(msg["id"], {"ok": True})
 
 
 @websocket_api.websocket_command(
@@ -115,8 +179,13 @@ async def ws_get_state(
         return
     client = coord.client
     if client:
-        await client.get_cfg(refresh=True)
-        await client.get_state(refresh=True)
+        try:
+            await client.get_cfg(refresh=True)
+            await client.get_state(refresh=True)
+        except Exception as err:
+            if _ws_client_error(connection, msg["id"], err):
+                return
+            raise
     state = client.state if client else {}
     seg = state.get("seg") if isinstance(state.get("seg"), list) else []
     bus_index = int(msg.get("bus_index", 0))
@@ -167,17 +236,18 @@ async def ws_apply_rgbwm(
     bus_index = int(msg.get("bus_index", 0))
     rgbwm = int(msg["rgbwm"])
     client = coord.client
+    ins = client.cfg.get("hw", {}).get("led", {}).get("ins", [])
+    if isinstance(ins, list) and ins and 0 <= bus_index < len(ins):
+        ins_patch = list(ins)
+        entry = dict(ins_patch[bus_index]) if isinstance(ins_patch[bus_index], dict) else {}
+        entry["rgbwm"] = rgbwm
+        ins_patch[bus_index] = entry
+        patch: dict[str, Any] = {"hw": {"led": {"ins": ins_patch}}}
+    else:
+        patch = {"hw": {"led": {"rgbwm": rgbwm}}}
     try:
-        ins = client.cfg.get("hw", {}).get("led", {}).get("ins", [])
-        if isinstance(ins, list) and ins and 0 <= bus_index < len(ins):
-            ins_patch = list(ins)
-            entry = dict(ins_patch[bus_index]) if isinstance(ins_patch[bus_index], dict) else {}
-            entry["rgbwm"] = rgbwm
-            ins_patch[bus_index] = entry
-            patch: dict[str, Any] = {"hw": {"led": {"ins": ins_patch}}}
-        else:
-            patch = {"hw": {"led": {"rgbwm": rgbwm}}}
-        await client.apply_cfg(patch)
+        if await _ws_call(connection, msg["id"], client.apply_cfg(patch)) is None:
+            return
     except Exception as err:
         connection.send_error(msg["id"], "wled_error", str(err))
         return
@@ -222,7 +292,16 @@ async def ws_apply_state(
             full_response=msg.get("full_response", False),
         )
     except Exception as err:
+        if _ws_client_error(connection, msg["id"], err):
+            return
         connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    if result is None:
+        connection.send_error(
+            msg["id"],
+            "not_ready",
+            "WLED client is reloading or unreachable — retry in a moment",
+        )
         return
     connection.send_result(
         msg["id"],
@@ -256,7 +335,9 @@ async def ws_get_presets(
             msg["id"], "not_found", f"Unknown controller {msg['controller_id']}"
         )
         return
-    presets = await coord.client.get_presets()
+    presets = await _ws_call(connection, msg["id"], coord.client.get_presets())
+    if presets is None:
+        return
     connection.send_result(
         msg["id"],
         {
@@ -608,14 +689,21 @@ async def ws_layout_to_segments(
     seg_payload = fixture_to_wled_segments(
         fixture, layout.pixel_count, name_prefix=prefix
     )
-    try:
+
+    async def _apply_layout() -> dict[str, Any] | None:
         await coord.async_abort_active_paint()
         result = await coord.client.apply_state(
             {"seg": seg_payload}, full_response=True
         )
         coord.note_applied_layout(msg["layout_id"], seg_payload)
+        return result
+
+    try:
+        result = await _ws_call(connection, msg["id"], _apply_layout())
     except Exception as err:
         connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    if result is None:
         return
     connection.send_result(
         msg["id"],
@@ -810,17 +898,23 @@ async def ws_scene_apply(
     segment_ids = msg.get("segment_ids")
     if segment_ids is not None:
         segment_ids = [int(i) for i in segment_ids]
-    try:
-        state = await coord.async_apply_scene(
+
+    async def _apply() -> dict[str, Any]:
+        return await coord.async_apply_scene(
             msg["scene_id"],
             transition_ms=msg.get("transition_ms"),
             segment_ids=segment_ids,
         )
+
+    try:
+        state = await _ws_call(connection, msg["id"], _apply())
     except ValueError as err:
         connection.send_error(msg["id"], "not_found", str(err))
         return
     except Exception as err:
         connection.send_error(msg["id"], "wled_error", str(err))
+        return
+    if state is None:
         return
     connection.send_result(
         msg["id"],
@@ -864,19 +958,26 @@ async def ws_scene_capture(
     ).strip("_")[:48]
     if not scene_id:
         scene_id = str(uuid_mod.uuid4())[:8]
-    await coord.client.get_state(refresh=True)
-    wled_state = dict(coord.client.state)
-    record = SceneRecord(
-        id=scene_id,
-        controller_id=msg["controller_id"],
-        name=name,
-        wled_state=wled_state,
-        layout_id=msg.get("layout_id"),
-        transition_ms=int(msg.get("transition_ms", 2500)),
-        seeded=False,
-    )
-    saved = await coord.scene_store.async_save(record)
-    await coord.async_register_scene_entity(saved)
+
+    async def _capture() -> SceneRecord:
+        await coord.client.get_state(refresh=True)
+        wled_state = dict(coord.client.state)
+        record = SceneRecord(
+            id=scene_id,
+            controller_id=msg["controller_id"],
+            name=name,
+            wled_state=wled_state,
+            layout_id=msg.get("layout_id"),
+            transition_ms=int(msg.get("transition_ms", 2500)),
+            seeded=False,
+        )
+        saved = await coord.scene_store.async_save(record)
+        await coord.async_register_scene_entity(saved)
+        return saved
+
+    saved = await _ws_call(connection, msg["id"], _capture())
+    if saved is None:
+        return
     connection.send_result(
         msg["id"],
         {
@@ -907,7 +1008,8 @@ async def ws_paint_start(
     if coord is None:
         connection.send_error(msg["id"], "not_found", "Unknown controller")
         return
-    try:
+
+    async def _start_paint() -> tuple[str | None, int, bool]:
         session = coord.get_paint_session()
         await session.start(coord)
         warn = session.wifi_sleep_warning()
@@ -916,9 +1018,16 @@ async def ws_paint_start(
         leds = leds_raw if isinstance(leds_raw, dict) else {}
         pixel_count = int(leds.get("count") or 210)
         rgbw = bool(leds.get("rgbw", True))
+        return warn, pixel_count, rgbw
+
+    try:
+        started = await _ws_call(connection, msg["id"], _start_paint())
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return
+    if started is None:
+        return
+    warn, pixel_count, rgbw = started
     connection.send_result(
         msg["id"],
         {
@@ -963,7 +1072,8 @@ async def ws_paint_frame(
     except (binascii.Error, ValueError) as err:
         connection.send_error(msg["id"], "invalid_payload", str(err))
         return
-    try:
+
+    async def _send_frame() -> None:
         session = coord.get_paint_session()
         await session.send_frame(
             payload,
@@ -974,6 +1084,10 @@ async def ws_paint_frame(
             brush=msg.get("brush"),
             fill=msg.get("fill"),
         )
+
+    try:
+        if await _ws_call(connection, msg["id"], _send_frame()) is None:
+            return
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return
@@ -1007,12 +1121,21 @@ async def ws_paint_stop(
         try:
             await coord.paint_session.stop(commit=bool(msg.get("commit", True)))
         except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("paint_stop failed: %s", err, exc_info=True)
+            if is_client_unavailable(err):
+                _LOGGER.debug("paint_stop failed (client unavailable): %s", err)
+            else:
+                _LOGGER.warning("paint_stop failed: %s", err, exc_info=True)
             try:
                 if coord.client:
                     await coord.client.apply_state({"live": False})
-            except Exception:  # noqa: BLE001
-                _LOGGER.warning("paint_stop live clear failed", exc_info=True)
+            except Exception as clear_err:  # noqa: BLE001
+                if is_client_unavailable(clear_err):
+                    _LOGGER.debug(
+                        "paint_stop live clear failed (client unavailable): %s",
+                        clear_err,
+                    )
+                else:
+                    _LOGGER.warning("paint_stop live clear failed", exc_info=True)
     connection.send_result(
         msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
     )
@@ -1108,6 +1231,7 @@ async def ws_register_lovelace_resource(
 
 _WS_HANDLERS = (
     ws_ping,
+    ws_apply_embed_skin,
     ws_list_controllers,
     ws_get_state,
     ws_apply_state,

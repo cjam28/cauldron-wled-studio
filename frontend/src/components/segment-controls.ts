@@ -33,6 +33,7 @@ import "./effect-chips.js";
 import "./effect-merge-toggle.js";
 import "./preset-bar.js";
 import type { PresetEntry } from "./preset-bar.js";
+import { readBrightness255 } from "../utils/ha-brightness.js";
 
 export const SEGMENT_CONTROLS_TAG = "wled-segment-controls";
 
@@ -56,6 +57,8 @@ export class WledSegmentControls extends BasePoweredElement {
   /** Apply color/effects to every segment (Govee “Whole” mode). */
   @property({ type: Boolean }) wholeMode = false;
   @property({ type: Number }) selectedSegId = -1;
+  /** Master HA light entity — when its brightness changes, segment sliders follow. */
+  @property() masterEntity = "";
 
   @state() private _loading = true;
   @state() private _error = "";
@@ -71,6 +74,35 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _mergeActive = false;
 
   private _optimistic?: OptimisticApplyHandle;
+  private _lastMasterBri255: number | null = null;
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    if (
+      (changed.has("hass") || changed.has("masterEntity")) &&
+      this.masterEntity &&
+      this.hass
+    ) {
+      this._syncFromMasterEntity();
+    }
+  }
+
+  /** Keep every segment brightness slider aligned with global/master brightness. */
+  applyGlobalBrightness(bri255: number): void {
+    const bri = Math.max(0, Math.min(255, Math.round(bri255)));
+    this._lastMasterBri255 = bri;
+    if (!this._segments.length) return;
+    this._segments = this._segments.map((s) => ({ ...s, bri }));
+    this.requestUpdate();
+  }
+
+  private _syncFromMasterEntity(): void {
+    if (!this.hass || !this.masterEntity) return;
+    const st = this.hass.states[this.masterEntity];
+    const bri = readBrightness255(st);
+    if (this._lastMasterBri255 === bri) return;
+    this.applyGlobalBrightness(bri);
+  }
 
   protected override onPoweredConnect(): void {
     this._mergeActive = isMergeForEffectsActive(this.controllerId);
@@ -170,6 +202,9 @@ export class WledSegmentControls extends BasePoweredElement {
       this._error = formatHaError(err);
     } finally {
       this._loading = false;
+      if (this._lastMasterBri255 !== null) {
+        this.applyGlobalBrightness(this._lastMasterBri255);
+      }
     }
   }
 
@@ -599,27 +634,12 @@ export class WledSegmentControls extends BasePoweredElement {
         font-size: 0.75rem;
         opacity: 0.72;
       }
-      .seg-tab.editing {
-        border-color: var(--primary-color);
-        background: color-mix(in srgb, var(--primary-color) 22%, transparent);
-      }
+      .seg-tab.editing,
       .seg-tab.focus {
+        background: transparent;
+        border-color: var(--primary-color);
         outline: 2px solid var(--primary-color);
         outline-offset: 1px;
-      }
-      .ql-row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      .ql {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        border: none;
-        background: var(--secondary-background-color, #333);
-        cursor: pointer;
-        font-size: 1rem;
       }
       .fx-search {
         width: 100%;

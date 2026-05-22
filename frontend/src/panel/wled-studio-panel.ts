@@ -1,7 +1,7 @@
 import { css, html } from "lit";
 import { state } from "lit/decorators.js";
-import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { isWledStudioStale } from "../utils/build-stamp.js";
 import "../components/segment-controls.js";
 import "../components/studio-live-preview.js";
 import type { WledStudioLivePreview } from "../components/studio-live-preview.js";
@@ -37,7 +37,6 @@ type StudioView =
 
 const ONBOARD_KEY = "wled_studio.onboarded";
 
-@safeCustomElement(PANEL_TAG)
 export class WledStudioPanel extends BasePoweredElement {
   @state() private _view: StudioView = "devices";
   @state() private _controllerId = "";
@@ -94,6 +93,13 @@ export class WledStudioPanel extends BasePoweredElement {
 
     return html`
       <div class="shell" role="application" aria-label="WLED Studio">
+        ${isWledStudioStale()
+          ? html`
+              <ha-alert alert-type="warning" class="stale-banner">
+                WLED Studio updated — refresh this page to apply changes.
+              </ha-alert>
+            `
+          : null}
         <div
           class="drawer-backdrop ${this._drawerOpen ? "visible" : ""}"
           aria-hidden=${this._drawerOpen ? "false" : "true"}
@@ -310,23 +316,32 @@ export class WledStudioPanel extends BasePoweredElement {
       `;
     }
     if (this._view === "segments" && conn && id) {
+      const masterEntity =
+        this._controllers.find((c) => c.entry_id === id)?.master_entity_id ?? "";
       return html`
         <wled-segment-controls
           .hass=${this.hass}
           .connection=${conn}
           .controllerId=${id}
+          .masterEntity=${masterEntity}
         ></wled-segment-controls>
       `;
     }
     if (this._view === "paint" && conn && id) {
       return html`
-        <wled-view-paint .connection=${conn} .controllerId=${id}></wled-view-paint>
+        <wled-view-paint
+          .hass=${this.hass}
+          .connection=${conn}
+          .controllerId=${id}
+        ></wled-view-paint>
       `;
     }
-    if (this._view === "firmware" && id) {
+    if (this._view === "firmware" && conn && id) {
       const ctrl = this._controllers.find((c) => c.entry_id === id);
       return html`
         <wled-view-firmware
+          .connection=${conn}
+          .controllerId=${id}
           .host=${ctrl?.host ?? ""}
           .controllerTitle=${ctrl?.title ?? id}
         ></wled-view-firmware>
@@ -390,6 +405,11 @@ export class WledStudioPanel extends BasePoweredElement {
           min-height: 100%;
           background: var(--primary-background-color);
           position: relative;
+        }
+        .stale-banner {
+          display: block;
+          margin: 8px 12px 0;
+          grid-column: 1 / -1;
         }
         @container wled-studio (min-width: 600px) {
           .shell {

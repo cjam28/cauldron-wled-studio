@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import WledStudioCoordinator
 from .scene_store import SceneRecord
+from .wled_client import is_client_unavailable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,9 +40,17 @@ class WledStudioStoredScene(Scene):
         transition_ms = None
         if isinstance(transition, (int, float)):
             transition_ms = int(transition * 1000)
-        await self.coordinator.async_apply_scene(
-            self.record.id, transition_ms=transition_ms
-        )
+        try:
+            await self.coordinator.async_apply_scene(
+                self.record.id, transition_ms=transition_ms
+            )
+        except Exception as err:
+            if is_client_unavailable(err):
+                _LOGGER.debug(
+                    "Scene %s activate skipped: client unavailable", self.record.id
+                )
+                return
+            raise
 
 
 async def async_setup_entry(

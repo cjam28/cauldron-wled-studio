@@ -18,6 +18,7 @@ from .thumbnails import (
     should_skip_effect_name,
     thumb_path,
 )
+from .wled_client import is_client_unavailable
 
 if TYPE_CHECKING:
     from .coordinator import WledStudioCoordinator
@@ -158,7 +159,9 @@ class ThumbCaptureRunner:
         try:
             await client.get_state(refresh=True)
             saved_state = dict(client.state)
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            if is_client_unavailable(err):
+                _LOGGER.debug("thumb capture state snapshot skipped (unavailable)")
             saved_state = None
 
         items = sorted(client.effects_by_name.items(), key=lambda x: x[1])
@@ -173,8 +176,15 @@ class ThumbCaptureRunner:
                 if saved_state:
                     try:
                         await client.apply_state(saved_state)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as err:  # noqa: BLE001
+                        if is_client_unavailable(err):
+                            _LOGGER.debug(
+                                "thumb capture restore on cancel failed (unavailable)"
+                            )
+                        else:
+                            _LOGGER.debug(
+                                "thumb capture restore on cancel failed", exc_info=True
+                            )
                 return
             if should_skip_effect_name(name):
                 continue
@@ -182,7 +192,14 @@ class ThumbCaptureRunner:
             try:
                 ok = await self._capture_one(fx_id, name, fw_ver)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("thumb capture failed for %s (%s): %s", name, fx_id, err)
+                if is_client_unavailable(err):
+                    _LOGGER.debug(
+                        "thumb capture failed for %s (%s): %s", name, fx_id, err
+                    )
+                else:
+                    _LOGGER.warning(
+                        "thumb capture failed for %s (%s): %s", name, fx_id, err
+                    )
             done += 1
             self._emit(
                 {
@@ -199,8 +216,11 @@ class ThumbCaptureRunner:
         if saved_state:
             try:
                 await client.apply_state(saved_state)
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("thumb capture restore failed", exc_info=True)
+            except Exception as err:  # noqa: BLE001
+                if is_client_unavailable(err):
+                    _LOGGER.debug("thumb capture restore failed (unavailable)")
+                else:
+                    _LOGGER.debug("thumb capture restore failed", exc_info=True)
 
 
 @callback

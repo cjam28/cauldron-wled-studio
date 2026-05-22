@@ -178,7 +178,8 @@ class LiveProxy:
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning(
+                log = _LOGGER.debug if self._reconnect_attempt >= 3 else _LOGGER.warning
+                log(
                     "live_proxy ws error entry=%s: %s",
                     self.entry_id,
                     err,

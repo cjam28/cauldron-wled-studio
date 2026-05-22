@@ -23,6 +23,31 @@ from .state_writer import StateWriter
 _LOGGER = logging.getLogger(__name__)
 
 
+class WledClientUnavailable(RuntimeError):
+    """HTTP session closed or device unreachable (reload / network)."""
+
+
+def is_client_unavailable(err: BaseException) -> bool:
+    """True when the error is expected during integration reload or WLED reboot."""
+    if isinstance(
+        err,
+        (
+            WledClientUnavailable,
+            asyncio.CancelledError,
+            aiohttp.ClientConnectionError,
+            ConnectionResetError,
+            TimeoutError,
+        ),
+    ):
+        return True
+    lowered = str(err).lower()
+    return (
+        "session is closed" in lowered
+        or "server disconnected" in lowered
+        or "connection reset" in lowered
+    )
+
+
 class TokenBucket:
     """Simple token bucket for WLED HTTP calls."""
 
@@ -81,40 +106,47 @@ class WledClient:
     async def _request(
         self, method: str, path: str, **kwargs: Any
     ) -> Any:
+        if self._session.closed:
+            raise WledClientUnavailable("Session is closed")
         await self._bucket.acquire()
         try:
             url = f"{self._base}{path}"
-            async with self._session.request(
-                method, url, timeout=aiohttp.ClientTimeout(total=10), **kwargs
-            ) as resp:
-                resp.raise_for_status()
-                if resp.content_type and "json" in resp.content_type:
-                    body = await resp.text()
-                    try:
-                        return json.loads(body)
-                    except json.JSONDecodeError:
-                        _LOGGER.debug(
-                            "JSON decode failed for %s (%d bytes), using raw text",
-                            path,
-                            len(body),
-                        )
-                        return body
-                return await resp.text()
+            try:
+                async with self._session.request(
+                    method, url, timeout=aiohttp.ClientTimeout(total=10), **kwargs
+                ) as resp:
+                    resp.raise_for_status()
+                    if resp.content_type and "json" in resp.content_type:
+                        body = await resp.text()
+                        try:
+                            return json.loads(body)
+                        except json.JSONDecodeError:
+                            _LOGGER.debug(
+                                "JSON decode failed for %s (%d bytes), using raw text",
+                                path,
+                                len(body),
+                            )
+                            return body
+                    return await resp.text()
+            except RuntimeError as err:
+                if "session is closed" in str(err).lower():
+                    raise WledClientUnavailable("Session is closed") from err
+                raise
+        except aiohttp.ClientError as err:
+            if is_client_unavailable(err):
+                raise WledClientUnavailable(str(err)) from err
+            raise
         finally:
             self._bucket.release()
 
     async def _get_text(self, path: str) -> str:
         """GET endpoint as raw text (avoids fragile JSON decode on fxdata)."""
-        await self._bucket.acquire()
-        try:
-            url = f"{self._base}{path}"
-            async with self._session.get(
-                url, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                resp.raise_for_status()
-                return await resp.text()
-        finally:
-            self._bucket.release()
+        result = await self._request("GET", path)
+        if isinstance(result, str):
+            return result
+        if result is None:
+            return ""
+        return str(result)
 
     async def _fetch_fxdata(self) -> str:
         """Load /json/fxdata; WLED often returns invalid JSON despite content-type."""
@@ -197,6 +229,10 @@ class WledClient:
             self._post_state_raw, patch, full_response=full_response
         )
 
+    async def shutdown_writes(self) -> None:
+        """Drain/cancel pending /json/state posts before closing the HTTP session."""
+        await self._state_writer.shutdown_async()
+
     def effect_meta(self, effect_id: int) -> dict[str, Any]:
         return effect_meta_for_id(self.fxdata, effect_id)
 
@@ -246,6 +282,17 @@ class WledClient:
         """POST /json/cfg and refresh cached config."""
         await self._request("POST", "/json/cfg", json=patch)
         return await self.get_cfg(refresh=True)
+
+    async def upload_fs_file(self, filename: str, content: bytes) -> None:
+        """Upload a file to WLED LittleFS via POST /edit (multipart)."""
+        data = aiohttp.FormData()
+        data.add_field(
+            "data",
+            content,
+            filename=filename,
+            content_type="text/css" if filename.endswith(".css") else "application/octet-stream",
+        )
+        await self._request("POST", "/edit", data=data)
 
     async def bootstrap(self) -> None:
         await self.get_info()

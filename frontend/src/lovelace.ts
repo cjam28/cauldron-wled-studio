@@ -1,6 +1,10 @@
 /** Lovelace-only entry (card + editor). Do not import the panel here. */
 import { CARD_TAG, WledStudioCard, getStubConfig } from "./card/wled-studio-card.js";
 import "./card/wled-studio-card-editor.js";
+import { stampWledStudioBuild } from "./utils/build-stamp.js";
+import { defineCustomElement } from "./utils/safe-custom-element.js";
+
+stampWledStudioBuild();
 
 declare global {
   interface Window {
@@ -13,9 +17,7 @@ declare global {
   }
 }
 
-if (!customElements.get(CARD_TAG)) {
-  customElements.define(CARD_TAG, WledStudioCard);
-}
+defineCustomElement(CARD_TAG, WledStudioCard);
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === CARD_TAG)) {
