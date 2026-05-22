@@ -67,6 +67,11 @@ class LiveProxy:
     def subscriber_count(self) -> int:
         return self._refcount
 
+    @property
+    def last_good_frame(self) -> dict[str, Any] | None:
+        """Latest coalesced live frame (for paint baseline capture)."""
+        return self._last_good_frame
+
     def subscribe(
         self, callback: FrameCallback, *, remote: bool = False
     ) -> Callable[[], None]:

@@ -906,7 +906,7 @@ async def ws_paint_start(
         return
     try:
         session = coord.get_paint_session()
-        await session.start()
+        await session.start(coord)
         warn = session.wifi_sleep_warning()
         info = coord.client.info if coord.client else {}
         leds_raw = info.get("leds") if isinstance(info, dict) else {}
@@ -934,6 +934,9 @@ async def ws_paint_start(
         vol.Required("controller_id"): str,
         vol.Required("data"): str,
         vol.Optional("rgbw", default=True): bool,
+        vol.Optional("touched"): [int],
+        vol.Optional("paint_mode", default="color"): vol.In(["color", "effect"]),
+        vol.Optional("effect_id"): int,
         vol.Optional("schema_version", default=SCHEMA_VERSION): int,
     }
 )
@@ -957,7 +960,13 @@ async def ws_paint_frame(
         return
     try:
         session = coord.get_paint_session()
-        await session.send_frame(payload, rgbw=bool(msg.get("rgbw", True)))
+        await session.send_frame(
+            payload,
+            rgbw=bool(msg.get("rgbw", True)),
+            touched=msg.get("touched"),
+            paint_mode=str(msg.get("paint_mode") or "color"),
+            effect_id=msg.get("effect_id"),
+        )
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return

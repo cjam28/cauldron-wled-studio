@@ -6,7 +6,12 @@ import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-eleme
 import { debounce } from "../utils/debounce.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { fetchDeviceState } from "../api/wled-state.js";
-import { paintFrame, paintStart, paintStop } from "../api/paint.js";
+import {
+  paintFrame,
+  paintStart,
+  paintStop,
+  type PaintMode,
+} from "../api/paint.js";
 
 @safeCustomElement("wled-view-paint")
 export class WledViewPaint extends BasePoweredElement {
@@ -20,8 +25,12 @@ export class WledViewPaint extends BasePoweredElement {
   @state() private _brush = 6;
   @state() private _status = "";
   @state() private _warn = "";
+  @state() private _paintMode: PaintMode = "color";
+  @state() private _effectId = 0;
+  @state() private _effectOptions: Array<{ id: number; name: string }> = [];
 
   private _buffer: Uint8Array | null = null;
+  private _touched = new Set<number>();
   @query(".strip") private _canvas!: HTMLCanvasElement;
   private _ctx: CanvasRenderingContext2D | null = null;
   private _painting = false;
@@ -41,6 +50,12 @@ export class WledViewPaint extends BasePoweredElement {
       const leds = snap.info?.leds as { count?: number; rgbw?: boolean } | undefined;
       if (leds?.count) this._pixelCount = leds.count;
       if (typeof leds?.rgbw === "boolean") this._rgbw = leds.rgbw;
+      this._effectOptions = Object.entries(snap.effects_by_name ?? {})
+        .map(([name, id]) => ({ name, id }))
+        .sort((a, b) => a.id - b.id);
+      if (this._effectOptions.length && !this._effectOptions.some((e) => e.id === this._effectId)) {
+        this._effectId = this._effectOptions[0]!.id;
+      }
       this._allocBuffer();
       this._status = "Drag the strip to start live paint";
     } catch (err) {
@@ -58,6 +73,7 @@ export class WledViewPaint extends BasePoweredElement {
       }
     }
     this._active = false;
+    this._touched.clear();
   }
 
   private async _ensureSession(): Promise<boolean> {
@@ -65,6 +81,7 @@ export class WledViewPaint extends BasePoweredElement {
     try {
       const res = await paintStart(this.connection, this.controllerId);
       this._active = true;
+      this._touched.clear();
       this._warn = res.wifi_sleep_warning ?? "";
       if (res.pixel_count) this._pixelCount = res.pixel_count;
       if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
@@ -112,6 +129,7 @@ export class WledViewPaint extends BasePoweredElement {
       this._buffer[o + 1] = g;
       this._buffer[o + 2] = b;
       if (this._rgbw) this._buffer[o + 3] = 0;
+      this._touched.add(idx);
     }
     this._flushDebounced();
     this._drawStrip();
@@ -120,8 +138,16 @@ export class WledViewPaint extends BasePoweredElement {
   private async _flushNow(): Promise<void> {
     if (!this._active || !this.connection || !this._buffer) return;
     try {
-      await paintFrame(this.connection, this.controllerId, this._buffer, this._rgbw);
-      this._status = "Live paint";
+      await paintFrame(this.connection, this.controllerId, this._buffer, {
+        rgbw: this._rgbw,
+        touched: [...this._touched],
+        paintMode: this._paintMode,
+        effectId: this._paintMode === "effect" ? this._effectId : undefined,
+      });
+      this._status =
+        this._paintMode === "effect"
+          ? `Live paint (${this._touched.size} LEDs; effect on commit)`
+          : `Live paint (${this._touched.size} LEDs)`;
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -159,11 +185,12 @@ export class WledViewPaint extends BasePoweredElement {
     await this._flushNow();
     try {
       await paintStop(this.connection, this.controllerId, true);
-      this._status = "Committed";
+      this._status = "Committed to WLED";
     } catch (err) {
       this._status = formatHaError(err);
     }
     this._active = false;
+    this._touched.clear();
   }
 
   private async _cancel(): Promise<void> {
@@ -176,30 +203,95 @@ export class WledViewPaint extends BasePoweredElement {
       this._status = formatHaError(err);
     }
     this._active = false;
+    this._touched.clear();
   }
 
   protected override render() {
+    const modeHint =
+      this._paintMode === "color"
+        ? "Commit writes per-LED colors (WLED segment i) for painted LEDs only; unpainted LEDs in the same segment keep their prior colors."
+        : "Live preview still shows brush color; commit splits the strip into segments by effect. Too many zones may hit the device segment limit.";
+
     return html`
       <section class="paint">
         <p class="lead">
           1D strip paint over UDP DDP (${this._pixelCount} LEDs). Drag across the strip.
-          Commit applies Solid colors per WLED segment (average of painted LEDs in each
-          segment).
+          ${modeHint}
         </p>
         ${this._warn
           ? html`<p class="warn">${this._warn}</p>`
           : null}
         <div class="tools">
-          <label>
-            Color
-            <input
-              type="color"
-              .value=${this._color}
-              @input=${(e: Event) => {
-                this._color = (e.target as HTMLInputElement).value;
-              }}
-            />
-          </label>
+          <fieldset class="mode">
+            <legend>Paint as</legend>
+            <label>
+              <input
+                type="radio"
+                name="paint-mode"
+                value="color"
+                .checked=${this._paintMode === "color"}
+                @change=${() => {
+                  this._paintMode = "color";
+                }}
+              />
+              Color
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="paint-mode"
+                value="effect"
+                .checked=${this._paintMode === "effect"}
+                @change=${() => {
+                  this._paintMode = "effect";
+                }}
+              />
+              Effect
+            </label>
+          </fieldset>
+          ${this._paintMode === "color"
+            ? html`
+                <label>
+                  Color
+                  <input
+                    type="color"
+                    .value=${this._color}
+                    @input=${(e: Event) => {
+                      this._color = (e.target as HTMLInputElement).value;
+                    }}
+                  />
+                </label>
+              `
+            : html`
+                <label>
+                  Effect
+                  <select
+                    .value=${String(this._effectId)}
+                    @change=${(e: Event) => {
+                      this._effectId = parseInt(
+                        (e.target as HTMLSelectElement).value,
+                        10
+                      );
+                    }}
+                  >
+                    ${this._effectOptions.map(
+                      (fx) => html`
+                        <option value=${String(fx.id)}>${fx.name}</option>
+                      `
+                    )}
+                  </select>
+                </label>
+                <label>
+                  Accent
+                  <input
+                    type="color"
+                    .value=${this._color}
+                    @input=${(e: Event) => {
+                      this._color = (e.target as HTMLInputElement).value;
+                    }}
+                  />
+                </label>
+              `}
           <label>
             Brush
             <input
@@ -254,6 +346,7 @@ export class WledViewPaint extends BasePoweredElement {
       .lead {
         margin: 0;
         opacity: 0.85;
+        font-size: 0.9rem;
       }
       .warn {
         color: var(--warning-color, #e6a700);
@@ -264,6 +357,18 @@ export class WledViewPaint extends BasePoweredElement {
         flex-wrap: wrap;
         gap: 12px;
         align-items: center;
+      }
+      .mode {
+        border: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .mode legend {
+        font-size: 0.85rem;
+        padding: 0 4px 0 0;
       }
       .strip {
         width: 100%;

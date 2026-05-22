@@ -2694,23 +2694,67 @@ function t(t,e,i,s){var n,r=arguments.length,o=r<3?e:null===s?s=Object.getOwnPro
         opacity: 0.6;
         margin: 8px 0 0;
       }
-    `]}};async function Vo(t,e){await wt(t);try{return await t.sendMessagePromise({...e,schema_version:1})}catch(t){throw new Error(Rt(t))}}async function Wo(t,e,i=!0){await Vo(t,{type:"wled_studio/paint_stop",controller_id:e,commit:i})}t([ct({attribute:!1})],Bo.prototype,"connection",void 0),t([ct()],Bo.prototype,"controllerId",void 0),t([dt()],Bo.prototype,"_snapshot",void 0),t([dt()],Bo.prototype,"_segments",void 0),t([dt()],Bo.prototype,"_editIds",void 0),t([dt()],Bo.prototype,"_focusSegId",void 0),t([dt()],Bo.prototype,"_filter",void 0),t([dt()],Bo.prototype,"_status",void 0),t([dt()],Bo.prototype,"_toast",void 0),t([dt()],Bo.prototype,"_meta",void 0),t([dt()],Bo.prototype,"_mergeActive",void 0),Bo=t([pt("wled-view-effects")],Bo);let Ho=class extends vt{constructor(){super(...arguments),this.controllerId="",this._pixelCount=210,this._rgbw=!0,this._active=!1,this._color="#ff3366",this._brush=6,this._status="",this._warn="",this._buffer=null,this._ctx=null,this._painting=!1,this._flushDebounced=Ct(()=>{this._flushNow()},33,120)}updated(){this._canvas&&!this._ctx&&(this._ctx=this._canvas.getContext("2d"),this._drawStrip())}async onPoweredConnect(){if(this.connection&&this.controllerId)try{const t=await kt(this.connection,this.controllerId),e=t.info?.leds;e?.count&&(this._pixelCount=e.count),"boolean"==typeof e?.rgbw&&(this._rgbw=e.rgbw),this._allocBuffer(),this._status="Drag the strip to start live paint"}catch(t){this._status=Rt(t)}}async onPoweredDisconnect(){if(this._flushDebounced.cancel(),this._active&&this.connection&&this.controllerId)try{await Wo(this.connection,this.controllerId,!1)}catch{}this._active=!1}async _ensureSession(){if(this._active||!this.connection||!this.controllerId)return this._active;try{const t=await async function(t,e){return Vo(t,{type:"wled_studio/paint_start",controller_id:e})}(this.connection,this.controllerId);return this._active=!0,this._warn=t.wifi_sleep_warning??"",t.pixel_count&&(this._pixelCount=t.pixel_count),"boolean"==typeof t.rgbw&&(this._rgbw=t.rgbw),this._allocBuffer(),this._status="Live paint",!0}catch(t){return this._status=Rt(t),!1}}_allocBuffer(){const t=this._rgbw?4:3;this._buffer=new Uint8Array(this._pixelCount*t);for(let e=0;e<this._pixelCount;e++){const i=e*t;this._buffer[i]=0,this._buffer[i+1]=0,this._buffer[i+2]=0,this._rgbw&&(this._buffer[i+3]=0)}}_parseColor(){const t=this._color.replace("#","");return t.length<6?[255,51,102]:[parseInt(t.slice(0,2),16),parseInt(t.slice(2,4),16),parseInt(t.slice(4,6),16)]}_strokeAt(t){if(!this._buffer)return;const[e,i,s]=this._parseColor(),n=this._rgbw?4:3,r=Math.max(1,Math.floor(this._brush/2));for(let o=-r;o<=r;o++){const r=t+o;if(r<0||r>=this._pixelCount)continue;const a=r*n;this._buffer[a]=e,this._buffer[a+1]=i,this._buffer[a+2]=s,this._rgbw&&(this._buffer[a+3]=0)}this._flushDebounced(),this._drawStrip()}async _flushNow(){if(this._active&&this.connection&&this._buffer)try{await async function(t,e,i,s=!0){let n="";for(let t=0;t<i.length;t++)n+=String.fromCharCode(i[t]);const r=btoa(n);await Vo(t,{type:"wled_studio/paint_frame",controller_id:e,data:r,rgbw:s})}(this.connection,this.controllerId,this._buffer,this._rgbw),this._status="Live paint"}catch(t){this._status=Rt(t)}}_drawStrip(){if(!this._ctx||!this._buffer)return;const t=this._canvas?.width??640,e=this._canvas?.height??48;this._ctx.clearRect(0,0,t,e);const i=this._rgbw?4:3,s=t/this._pixelCount;for(let t=0;t<this._pixelCount;t++){const n=t*i;this._ctx.fillStyle=`rgb(${this._buffer[n]},${this._buffer[n+1]},${this._buffer[n+2]})`,this._ctx.fillRect(t*s,0,Math.max(1,s),e)}}async _onPointer(t){if(!this._canvas)return;if(!await this._ensureSession())return;const e=this._canvas.getBoundingClientRect(),i=t.clientX-e.left,s=Math.min(this._pixelCount-1,Math.max(0,Math.floor(i/e.width*this._pixelCount)));this._strokeAt(s)}async _commit(){if(this.connection&&this._active){this._flushDebounced.cancel(),await this._flushNow();try{await Wo(this.connection,this.controllerId,!0),this._status="Committed"}catch(t){this._status=Rt(t)}this._active=!1}}async _cancel(){if(this.connection&&this._active){this._flushDebounced.cancel();try{await Wo(this.connection,this.controllerId,!1),this._status="Live mode released"}catch(t){this._status=Rt(t)}this._active=!1}}render(){return V`
+    `]}};async function Vo(t,e){await wt(t);try{return await t.sendMessagePromise({...e,schema_version:1})}catch(t){throw new Error(Rt(t))}}async function Wo(t,e,i=!0){await Vo(t,{type:"wled_studio/paint_stop",controller_id:e,commit:i})}t([ct({attribute:!1})],Bo.prototype,"connection",void 0),t([ct()],Bo.prototype,"controllerId",void 0),t([dt()],Bo.prototype,"_snapshot",void 0),t([dt()],Bo.prototype,"_segments",void 0),t([dt()],Bo.prototype,"_editIds",void 0),t([dt()],Bo.prototype,"_focusSegId",void 0),t([dt()],Bo.prototype,"_filter",void 0),t([dt()],Bo.prototype,"_status",void 0),t([dt()],Bo.prototype,"_toast",void 0),t([dt()],Bo.prototype,"_meta",void 0),t([dt()],Bo.prototype,"_mergeActive",void 0),Bo=t([pt("wled-view-effects")],Bo);let Ho=class extends vt{constructor(){super(...arguments),this.controllerId="",this._pixelCount=210,this._rgbw=!0,this._active=!1,this._color="#ff3366",this._brush=6,this._status="",this._warn="",this._paintMode="color",this._effectId=0,this._effectOptions=[],this._buffer=null,this._touched=new Set,this._ctx=null,this._painting=!1,this._flushDebounced=Ct(()=>{this._flushNow()},33,120)}updated(){this._canvas&&!this._ctx&&(this._ctx=this._canvas.getContext("2d"),this._drawStrip())}async onPoweredConnect(){if(this.connection&&this.controllerId)try{const t=await kt(this.connection,this.controllerId),e=t.info?.leds;e?.count&&(this._pixelCount=e.count),"boolean"==typeof e?.rgbw&&(this._rgbw=e.rgbw),this._effectOptions=Object.entries(t.effects_by_name??{}).map(([t,e])=>({name:t,id:e})).sort((t,e)=>t.id-e.id),this._effectOptions.length&&!this._effectOptions.some(t=>t.id===this._effectId)&&(this._effectId=this._effectOptions[0].id),this._allocBuffer(),this._status="Drag the strip to start live paint"}catch(t){this._status=Rt(t)}}async onPoweredDisconnect(){if(this._flushDebounced.cancel(),this._active&&this.connection&&this.controllerId)try{await Wo(this.connection,this.controllerId,!1)}catch{}this._active=!1,this._touched.clear()}async _ensureSession(){if(this._active||!this.connection||!this.controllerId)return this._active;try{const t=await async function(t,e){return Vo(t,{type:"wled_studio/paint_start",controller_id:e})}(this.connection,this.controllerId);return this._active=!0,this._touched.clear(),this._warn=t.wifi_sleep_warning??"",t.pixel_count&&(this._pixelCount=t.pixel_count),"boolean"==typeof t.rgbw&&(this._rgbw=t.rgbw),this._allocBuffer(),this._status="Live paint",!0}catch(t){return this._status=Rt(t),!1}}_allocBuffer(){const t=this._rgbw?4:3;this._buffer=new Uint8Array(this._pixelCount*t);for(let e=0;e<this._pixelCount;e++){const i=e*t;this._buffer[i]=0,this._buffer[i+1]=0,this._buffer[i+2]=0,this._rgbw&&(this._buffer[i+3]=0)}}_parseColor(){const t=this._color.replace("#","");return t.length<6?[255,51,102]:[parseInt(t.slice(0,2),16),parseInt(t.slice(2,4),16),parseInt(t.slice(4,6),16)]}_strokeAt(t){if(!this._buffer)return;const[e,i,s]=this._parseColor(),n=this._rgbw?4:3,r=Math.max(1,Math.floor(this._brush/2));for(let o=-r;o<=r;o++){const r=t+o;if(r<0||r>=this._pixelCount)continue;const a=r*n;this._buffer[a]=e,this._buffer[a+1]=i,this._buffer[a+2]=s,this._rgbw&&(this._buffer[a+3]=0),this._touched.add(r)}this._flushDebounced(),this._drawStrip()}async _flushNow(){if(this._active&&this.connection&&this._buffer)try{await async function(t,e,i,s){let n="";for(let t=0;t<i.length;t++)n+=String.fromCharCode(i[t]);const r={type:"wled_studio/paint_frame",controller_id:e,data:btoa(n),rgbw:s?.rgbw??!0,paint_mode:s?.paintMode??"color",...s?.touched?.length?{touched:s.touched}:{},..."effect"===s?.paintMode&&void 0!==s.effectId?{effect_id:s.effectId}:{}};await Vo(t,r)}(this.connection,this.controllerId,this._buffer,{rgbw:this._rgbw,touched:[...this._touched],paintMode:this._paintMode,effectId:"effect"===this._paintMode?this._effectId:void 0}),this._status="effect"===this._paintMode?`Live paint (${this._touched.size} LEDs; effect on commit)`:`Live paint (${this._touched.size} LEDs)`}catch(t){this._status=Rt(t)}}_drawStrip(){if(!this._ctx||!this._buffer)return;const t=this._canvas?.width??640,e=this._canvas?.height??48;this._ctx.clearRect(0,0,t,e);const i=this._rgbw?4:3,s=t/this._pixelCount;for(let t=0;t<this._pixelCount;t++){const n=t*i;this._ctx.fillStyle=`rgb(${this._buffer[n]},${this._buffer[n+1]},${this._buffer[n+2]})`,this._ctx.fillRect(t*s,0,Math.max(1,s),e)}}async _onPointer(t){if(!this._canvas)return;if(!await this._ensureSession())return;const e=this._canvas.getBoundingClientRect(),i=t.clientX-e.left,s=Math.min(this._pixelCount-1,Math.max(0,Math.floor(i/e.width*this._pixelCount)));this._strokeAt(s)}async _commit(){if(this.connection&&this._active){this._flushDebounced.cancel(),await this._flushNow();try{await Wo(this.connection,this.controllerId,!0),this._status="Committed to WLED"}catch(t){this._status=Rt(t)}this._active=!1,this._touched.clear()}}async _cancel(){if(this.connection&&this._active){this._flushDebounced.cancel();try{await Wo(this.connection,this.controllerId,!1),this._status="Live mode released"}catch(t){this._status=Rt(t)}this._active=!1,this._touched.clear()}}render(){const t="color"===this._paintMode?"Commit writes per-LED colors (WLED segment i) for painted LEDs only; unpainted LEDs in the same segment keep their prior colors.":"Live preview still shows brush color; commit splits the strip into segments by effect. Too many zones may hit the device segment limit.";return V`
       <section class="paint">
         <p class="lead">
           1D strip paint over UDP DDP (${this._pixelCount} LEDs). Drag across the strip.
-          Commit applies Solid colors per WLED segment (average of painted LEDs in each
-          segment).
+          ${t}
         </p>
         ${this._warn?V`<p class="warn">${this._warn}</p>`:null}
         <div class="tools">
-          <label>
-            Color
-            <input
-              type="color"
-              .value=${this._color}
-              @input=${t=>{this._color=t.target.value}}
-            />
-          </label>
+          <fieldset class="mode">
+            <legend>Paint as</legend>
+            <label>
+              <input
+                type="radio"
+                name="paint-mode"
+                value="color"
+                .checked=${"color"===this._paintMode}
+                @change=${()=>{this._paintMode="color"}}
+              />
+              Color
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="paint-mode"
+                value="effect"
+                .checked=${"effect"===this._paintMode}
+                @change=${()=>{this._paintMode="effect"}}
+              />
+              Effect
+            </label>
+          </fieldset>
+          ${"color"===this._paintMode?V`
+                <label>
+                  Color
+                  <input
+                    type="color"
+                    .value=${this._color}
+                    @input=${t=>{this._color=t.target.value}}
+                  />
+                </label>
+              `:V`
+                <label>
+                  Effect
+                  <select
+                    .value=${String(this._effectId)}
+                    @change=${t=>{this._effectId=parseInt(t.target.value,10)}}
+                  >
+                    ${this._effectOptions.map(t=>V`
+                        <option value=${String(t.id)}>${t.name}</option>
+                      `)}
+                  </select>
+                </label>
+                <label>
+                  Accent
+                  <input
+                    type="color"
+                    .value=${this._color}
+                    @input=${t=>{this._color=t.target.value}}
+                  />
+                </label>
+              `}
           <label>
             Brush
             <input
@@ -2749,6 +2793,7 @@ function t(t,e,i,s){var n,r=arguments.length,o=r<3?e:null===s?s=Object.getOwnPro
       .lead {
         margin: 0;
         opacity: 0.85;
+        font-size: 0.9rem;
       }
       .warn {
         color: var(--warning-color, #e6a700);
@@ -2759,6 +2804,18 @@ function t(t,e,i,s){var n,r=arguments.length,o=r<3?e:null===s?s=Object.getOwnPro
         flex-wrap: wrap;
         gap: 12px;
         align-items: center;
+      }
+      .mode {
+        border: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .mode legend {
+        font-size: 0.85rem;
+        padding: 0 4px 0 0;
       }
       .strip {
         width: 100%;
@@ -2771,7 +2828,7 @@ function t(t,e,i,s){var n,r=arguments.length,o=r<3?e:null===s?s=Object.getOwnPro
         font-size: 0.85rem;
         opacity: 0.8;
       }
-    `]}};t([ct({attribute:!1})],Ho.prototype,"connection",void 0),t([ct()],Ho.prototype,"controllerId",void 0),t([dt()],Ho.prototype,"_pixelCount",void 0),t([dt()],Ho.prototype,"_rgbw",void 0),t([dt()],Ho.prototype,"_active",void 0),t([dt()],Ho.prototype,"_color",void 0),t([dt()],Ho.prototype,"_brush",void 0),t([dt()],Ho.prototype,"_status",void 0),t([dt()],Ho.prototype,"_warn",void 0),t([ut(".strip")],Ho.prototype,"_canvas",void 0),Ho=t([pt("wled-view-paint")],Ho);let jo=class extends vt{constructor(){super(...arguments),this.controllerId="",this._thumbStatus="",this._capturing=!1}onPoweredConnect(){const t=this.hass?.connection;if(!t?.subscribeEvents)return;const e=t.subscribeEvents(t=>{const e=t.data??{},i=String(e.status??"");"started"===i?(this._thumbStatus=`Capturing 0/${e.total??"?"}`,this._capturing=!0):"progress"===i?(this._thumbStatus=`${e.done}/${e.total}: ${e.name}`,this._capturing=!0):"complete"===i||"cancelled"===i?(this._thumbStatus="complete"===i?"Thumbnails complete — open Effects to view tiles":"Cancelled",this._capturing=!1):"error"===i&&(this._thumbStatus=String(e.message??"Error"),this._capturing=!1),this.requestUpdate()},"wled_studio_thumb_progress");this.addUnsub(()=>{e.then(t=>t?.())})}async _recapture(){if(this.connection&&this.controllerId){this._capturing=!0,this._thumbStatus="Starting capture…";try{await async function(t,e){await Vo(t,{type:"wled_studio/thumb_capture_start",controller_id:e})}(this.connection,this.controllerId)}catch(t){this._capturing=!1,this._thumbStatus=Rt(t)}}}async _cancelCapture(){this.connection&&this.controllerId&&(await async function(t,e){await Vo(t,{type:"wled_studio/thumb_capture_cancel",controller_id:e})}(this.connection,this.controllerId),this._capturing=!1,this._thumbStatus="Cancel requested")}_clearOnboard(){localStorage.removeItem("wled_studio.onboarded"),this._thumbStatus="Onboarding flag cleared — reload Studio"}render(){return V`
+    `]}};t([ct({attribute:!1})],Ho.prototype,"connection",void 0),t([ct()],Ho.prototype,"controllerId",void 0),t([dt()],Ho.prototype,"_pixelCount",void 0),t([dt()],Ho.prototype,"_rgbw",void 0),t([dt()],Ho.prototype,"_active",void 0),t([dt()],Ho.prototype,"_color",void 0),t([dt()],Ho.prototype,"_brush",void 0),t([dt()],Ho.prototype,"_status",void 0),t([dt()],Ho.prototype,"_warn",void 0),t([dt()],Ho.prototype,"_paintMode",void 0),t([dt()],Ho.prototype,"_effectId",void 0),t([dt()],Ho.prototype,"_effectOptions",void 0),t([ut(".strip")],Ho.prototype,"_canvas",void 0),Ho=t([pt("wled-view-paint")],Ho);let jo=class extends vt{constructor(){super(...arguments),this.controllerId="",this._thumbStatus="",this._capturing=!1}onPoweredConnect(){const t=this.hass?.connection;if(!t?.subscribeEvents)return;const e=t.subscribeEvents(t=>{const e=t.data??{},i=String(e.status??"");"started"===i?(this._thumbStatus=`Capturing 0/${e.total??"?"}`,this._capturing=!0):"progress"===i?(this._thumbStatus=`${e.done}/${e.total}: ${e.name}`,this._capturing=!0):"complete"===i||"cancelled"===i?(this._thumbStatus="complete"===i?"Thumbnails complete — open Effects to view tiles":"Cancelled",this._capturing=!1):"error"===i&&(this._thumbStatus=String(e.message??"Error"),this._capturing=!1),this.requestUpdate()},"wled_studio_thumb_progress");this.addUnsub(()=>{e.then(t=>t?.())})}async _recapture(){if(this.connection&&this.controllerId){this._capturing=!0,this._thumbStatus="Starting capture…";try{await async function(t,e){await Vo(t,{type:"wled_studio/thumb_capture_start",controller_id:e})}(this.connection,this.controllerId)}catch(t){this._capturing=!1,this._thumbStatus=Rt(t)}}}async _cancelCapture(){this.connection&&this.controllerId&&(await async function(t,e){await Vo(t,{type:"wled_studio/thumb_capture_cancel",controller_id:e})}(this.connection,this.controllerId),this._capturing=!1,this._thumbStatus="Cancel requested")}_clearOnboard(){localStorage.removeItem("wled_studio.onboarded"),this._thumbStatus="Onboarding flag cleared — reload Studio"}render(){return V`
       <section class="settings">
         <h2>Settings</h2>
         <div class="card">

@@ -3,6 +3,8 @@ import { SCHEMA_VERSION } from "./types.js";
 import { waitForConnection } from "./live-stream.js";
 import { formatHaError } from "../utils/ha-error.js";
 
+export type PaintMode = "color" | "effect";
+
 async function ws<T>(
   connection: Connection,
   payload: { type: string } & Record<string, unknown>
@@ -38,19 +40,30 @@ export async function paintFrame(
   connection: Connection,
   controllerId: string,
   data: Uint8Array,
-  rgbw = true
+  options?: {
+    rgbw?: boolean;
+    touched?: number[];
+    paintMode?: PaintMode;
+    effectId?: number;
+  }
 ): Promise<void> {
   let binary = "";
   for (let i = 0; i < data.length; i++) {
     binary += String.fromCharCode(data[i]!);
   }
   const b64 = btoa(binary);
-  await ws(connection, {
-    type: "wled_studio/paint_frame",
+  const payload = {
+    type: "wled_studio/paint_frame" as const,
     controller_id: controllerId,
     data: b64,
-    rgbw,
-  });
+    rgbw: options?.rgbw ?? true,
+    paint_mode: options?.paintMode ?? "color",
+    ...(options?.touched?.length ? { touched: options.touched } : {}),
+    ...(options?.paintMode === "effect" && options.effectId !== undefined
+      ? { effect_id: options.effectId }
+      : {}),
+  };
+  await ws(connection, payload);
 }
 
 export async function paintStop(

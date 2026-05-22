@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 from .ddp import build_ddp_packets
-from .paint_commit import build_paint_commit_state
+from .paint_commit import (
+    build_paint_commit_state,
+    expand_segments_to_payload,
+    live_frame_to_payload,
+)
 
 if TYPE_CHECKING:
+    from .coordinator import WledStudioCoordinator
     from .wled_client import WledClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,14 +33,23 @@ class PaintSession:
         self._seq = 1
         self._last_payload: bytes | None = None
         self._last_rgbw = True
+        self._baseline_payload: bytes | None = None
+        self._segment_snapshot: list[dict[str, Any]] = []
+        self._touched: set[int] = set()
+        self._touched_fx: dict[int, int] = {}
+        self._paint_mode = "color"
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
         self._active = False
+        self._coordinator: WledStudioCoordinator | None = None
 
-    async def start(self) -> None:
+    async def start(self, coordinator: WledStudioCoordinator | None = None) -> None:
         if self._active:
             return
+        self._coordinator = coordinator
+        await self._client.get_state(refresh=True)
+        await self._capture_baseline(coordinator)
         loop = asyncio.get_running_loop()
         self._transport, _ = await loop.create_datagram_endpoint(
             asyncio.DatagramProtocol,
@@ -43,6 +57,9 @@ class PaintSession:
             family=2,  # AF_INET
         )
         self._active = True
+        self._touched.clear()
+        self._touched_fx.clear()
+        self._paint_mode = "color"
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         await self._client.apply_state({"live": True})
 
@@ -90,14 +107,77 @@ class PaintSession:
                 self._transport.close()
                 self._transport = None
 
+    async def send_frame(
+        self,
+        payload: bytes,
+        *,
+        rgbw: bool = True,
+        touched: list[int] | None = None,
+        paint_mode: str = "color",
+        effect_id: int | None = None,
+    ) -> None:
+        if not self._active or not self._transport:
+            await self.start(self._coordinator)
+        async with self._commit_lock:
+            self._last_payload = payload
+            self._last_rgbw = rgbw
+            if paint_mode in ("color", "effect"):
+                self._paint_mode = paint_mode
+            if touched:
+                for led in touched:
+                    if 0 <= led < len(payload) // (4 if rgbw else 3):
+                        self._touched.add(led)
+                        if paint_mode == "effect" and effect_id is not None:
+                            self._touched_fx[led] = int(effect_id)
+            packets = build_ddp_packets(
+                payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
+            )
+            self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
+            for pkt in packets:
+                self._transport.sendto(pkt, (self._host, DDP_PORT))
+
+    async def _capture_baseline(
+        self, coordinator: WledStudioCoordinator | None
+    ) -> None:
+        info = self._client.info if isinstance(self._client.info, dict) else {}
+        leds_raw = info.get("leds")
+        leds = leds_raw if isinstance(leds_raw, dict) else {}
+        pixel_count = int(leds.get("count") or 0)
+        rgbw = bool(leds.get("rgbw", True))
+        self._last_rgbw = rgbw
+
+        state = self._client.state or {}
+        segs_raw = state.get("seg")
+        self._segment_snapshot = (
+            copy.deepcopy(segs_raw) if isinstance(segs_raw, list) else []
+        )
+
+        baseline: bytes | None = None
+        proxy = coordinator.live_proxy if coordinator else None
+        if proxy is not None:
+            frame = proxy.last_good_frame
+            if isinstance(frame, dict):
+                baseline = live_frame_to_payload(
+                    frame, pixel_count, rgbw=rgbw
+                )
+        if baseline is None:
+            baseline = expand_segments_to_payload(
+                self._segment_snapshot, pixel_count, rgbw=rgbw
+            )
+        self._baseline_payload = baseline
+
     async def _commit_buffer_to_state(self) -> None:
-        """Push painted pixels into WLED segment colors and exit live mode."""
+        """Push painted pixels into WLED (per-LED or effect segments) and exit live."""
         if not self._last_payload:
             return
         await self._client.get_state(refresh=True)
         state = self._client.state or {}
         segs_raw = state.get("seg")
-        live_segments = segs_raw if isinstance(segs_raw, list) else []
+        live_segments = (
+            self._segment_snapshot
+            if self._segment_snapshot
+            else (segs_raw if isinstance(segs_raw, list) else [])
+        )
         info = self._client.info if isinstance(self._client.info, dict) else {}
         leds_raw = info.get("leds")
         leds = leds_raw if isinstance(leds_raw, dict) else {}
@@ -105,27 +185,20 @@ class PaintSession:
         bpp = 4 if self._last_rgbw else 3
         if pixel_count <= 0 and bpp > 0:
             pixel_count = len(self._last_payload) // bpp
+        max_seg = int(leds.get("maxseg") or 32)
         patch = build_paint_commit_state(
             payload=self._last_payload,
             rgbw=self._last_rgbw,
             live_segments=live_segments,
             pixel_count=pixel_count,
             effects_by_name=self._client.effects_by_name,
+            touched=self._touched,
+            baseline=self._baseline_payload,
+            paint_mode=self._paint_mode,
+            touched_fx=self._touched_fx,
+            max_segments=max_seg,
         )
         await self._client.apply_state(patch, full_response=True)
-
-    async def send_frame(self, payload: bytes, *, rgbw: bool = True) -> None:
-        if not self._active or not self._transport:
-            await self.start()
-        async with self._commit_lock:
-            self._last_payload = payload
-            self._last_rgbw = rgbw
-            packets = build_ddp_packets(
-                payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
-            )
-            self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
-            for pkt in packets:
-                self._transport.sendto(pkt, (self._host, DDP_PORT))
 
     async def _keepalive_loop(self) -> None:
         while self._active:
