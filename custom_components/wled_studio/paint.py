@@ -40,6 +40,7 @@ class PaintSession:
         self._paint_mode = "color"
         self._brush: dict[str, Any] = {}
         self._fill: dict[str, Any] = {"mode": "off"}
+        self._ddp_live = True
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
@@ -64,6 +65,7 @@ class PaintSession:
         self._paint_mode = "color"
         self._brush = {}
         self._fill = {"mode": "off"}
+        self._ddp_live = True
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         await self._client.apply_state({"live": True})
 
@@ -139,6 +141,12 @@ class PaintSession:
                         self._touched.add(led)
                         if paint_mode == "effect" and effect_id is not None:
                             self._touched_fx[led] = int(effect_id)
+            if self._paint_mode == "effect" and self._touched:
+                await self._apply_effect_preview()
+                return
+            if self._paint_mode == "color" and not self._ddp_live:
+                await self._client.apply_state({"live": True})
+                self._ddp_live = True
             packets = build_ddp_packets(
                 payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
             )
@@ -175,6 +183,35 @@ class PaintSession:
                 self._segment_snapshot, pixel_count, rgbw=rgbw
             )
         self._baseline_payload = baseline
+
+    async def _apply_effect_preview(self) -> None:
+        """Push segment effects to WLED (DDP cannot preview animated effects)."""
+        if not self._last_payload:
+            return
+        self._ddp_live = False
+        info = self._client.info if isinstance(self._client.info, dict) else {}
+        leds_raw = info.get("leds")
+        leds = leds_raw if isinstance(leds_raw, dict) else {}
+        pixel_count = int(leds.get("count") or 0)
+        bpp = 4 if self._last_rgbw else 3
+        if pixel_count <= 0 and bpp > 0:
+            pixel_count = len(self._last_payload) // bpp
+        max_seg = int(leds.get("maxseg") or 32)
+        patch = build_paint_commit_state(
+            payload=self._last_payload,
+            rgbw=self._last_rgbw,
+            live_segments=self._segment_snapshot,
+            pixel_count=pixel_count,
+            effects_by_name=self._client.effects_by_name,
+            touched=self._touched,
+            baseline=self._baseline_payload,
+            paint_mode="effect",
+            touched_fx=self._touched_fx,
+            max_segments=max_seg,
+            brush=self._brush,
+            fill=self._fill,
+        )
+        await self._client.apply_state(patch)
 
     async def _commit_buffer_to_state(self) -> None:
         """Push painted pixels into WLED (per-LED or effect segments) and exit live."""
@@ -216,6 +253,12 @@ class PaintSession:
         while self._active:
             await asyncio.sleep(KEEPALIVE_SEC)
             if not self._active or not self._last_payload or not self._transport:
+                continue
+            if self._paint_mode == "effect":
+                try:
+                    await self._apply_effect_preview()
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("paint effect keepalive failed", exc_info=True)
                 continue
             try:
                 packets = build_ddp_packets(

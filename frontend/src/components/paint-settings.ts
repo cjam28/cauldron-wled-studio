@@ -96,11 +96,13 @@ export class WledPaintSettings extends BasePoweredElement {
 
   private _onColor(ev: CustomEvent<{ rgb: [number, number, number]; white: number }>): void {
     const { rgb, white } = ev.detail;
-    const solidId = solidEffectId(this._snapshot?.effects_by_name ?? {});
-    this._emit({
+    const patch: Partial<PaintBrushSettings> = {
       col: [rgb[0], rgb[1], rgb[2], white],
-      fx: solidId,
-    });
+    };
+    if (this.heading !== "Fill look") {
+      patch.fx = solidEffectId(this._snapshot?.effects_by_name ?? {});
+    }
+    this._emit(patch);
   }
 
   private async _onEffectSelect(ev: CustomEvent<{ effectId: number }>): Promise<void> {

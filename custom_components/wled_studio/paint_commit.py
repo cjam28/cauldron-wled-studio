@@ -445,12 +445,14 @@ def _brush_assignment(
     touched_fx: dict[int, int],
     paint_mode: str,
 ) -> _LedPaint:
-    col = _read_led_color(payload, rgbw=rgbw, led=led)
     settings = dict(brush)
     if paint_mode == "effect" and led in touched_fx:
         settings["fx"] = touched_fx[led]
     elif paint_mode == "effect" and "fx" not in settings:
         settings["fx"] = solid_fx
+    if paint_mode == "effect":
+        return _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw)
+    col = _read_led_color(payload, rgbw=rgbw, led=led)
     return _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw, col_override=col)
 
 

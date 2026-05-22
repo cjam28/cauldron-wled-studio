@@ -46,13 +46,15 @@ export function defaultBrushSettings(
 export function defaultFillSettings(
   mode: UnpaintedFillMode = "off"
 ): UnpaintedFillSettings {
+  const col: [number, number, number, number] =
+    mode === "custom" ? [72, 72, 72, 0] : [0, 0, 0, 0];
   return {
     mode,
     on: mode !== "off",
     bri: mode === "off" ? 0 : 128,
     fx: 0,
     pal: 0,
-    col: [0, 0, 0, 0],
+    col,
     sx: 128,
     ix: 128,
     c1: 128,

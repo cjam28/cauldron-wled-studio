@@ -90,6 +90,24 @@ def test_custom_fill_applies_effect() -> None:
     assert 7 in fx_vals
 
 
+def test_effect_brush_uses_brush_color_not_ddp_pixel() -> None:
+    """Effect strokes use brush palette colors, not solid RGB from the DDP buffer."""
+    from wled_studio.paint_commit import _brush_assignment
+
+    payload = bytes([255, 0, 0, 0] * 10)
+    paint = _brush_assignment(
+        0,
+        payload=payload,
+        rgbw=True,
+        brush={"fx": 7, "col": [0, 255, 0, 0], "bri": 200, "on": True},
+        solid_fx=0,
+        touched_fx={0: 7},
+        paint_mode="effect",
+    )
+    assert paint.fx == 7
+    assert paint.col == [0, 255, 0, 0]
+
+
 def test_build_segment_individual_i_sparse() -> None:
     payload = bytes([255, 0, 0, 0] * 10)
     baseline = bytes([0, 0, 255, 0] * 10)

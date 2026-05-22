@@ -10,6 +10,7 @@ import { fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
 import { paintFrame, paintStart, paintStop } from "../api/paint.js";
 import {
+  brushToPaintMode,
   defaultBrushSettings,
   defaultFillSettings,
   type PaintBrushSettings,
@@ -44,6 +45,10 @@ export class WledViewPaint extends BasePoweredElement {
   @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
   private _flushDebounced = debounce(() => void this._flushNow(), 33, 120);
 
+  private _brushIsEffect(): boolean {
+    return brushToPaintMode(this._brush, this._effectsByName) === "effect";
+  }
+
   protected override updated(changed: import("lit").PropertyValues): void {
     if (
       changed.has("_fill") ||
@@ -52,7 +57,14 @@ export class WledViewPaint extends BasePoweredElement {
       changed.has("_layoutId")
     ) {
       this._applyFillToBuffer();
-      this._syncPreviewPixels();
+      if (this._brushIsEffect()) {
+        this._preview?.setPaintPixels(null);
+      } else {
+        this._syncPreviewPixels();
+      }
+    }
+    if (changed.has("_brush")) {
+      this.requestUpdate();
     }
   }
 
@@ -188,12 +200,20 @@ export class WledViewPaint extends BasePoweredElement {
 
   private _strokeLeds(leds: number[]): void {
     if (!this._buffer || !leds.length) return;
-    const rgb = this._brushRgb();
-    for (const idx of leds) {
-      this._writeLed(idx, rgb);
-      this._touched.add(idx);
+    const effectBrush = this._brushIsEffect();
+    if (!effectBrush) {
+      const rgb = this._brushRgb();
+      for (const idx of leds) {
+        this._writeLed(idx, rgb);
+        this._touched.add(idx);
+      }
+      this._syncPreviewPixels();
+    } else {
+      for (const idx of leds) {
+        this._touched.add(idx);
+      }
+      this._preview?.setPaintPixels(null);
     }
-    this._syncPreviewPixels();
     this._flushDebounced();
   }
 
@@ -212,7 +232,8 @@ export class WledViewPaint extends BasePoweredElement {
         fill: this._fill,
         effectsByName: this._effectsByName,
       });
-      this._status = `Live paint · ${this._touched.size} LEDs · fill: ${this._fill.mode}`;
+      const modeLabel = this._brushIsEffect() ? "effect (device preview)" : "color";
+      this._status = `Live paint · ${this._touched.size} LEDs · ${modeLabel} · fill: ${this._fill.mode}`;
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -231,13 +252,7 @@ export class WledViewPaint extends BasePoweredElement {
   }
 
   private _onFillModeChange(mode: UnpaintedFillMode): void {
-    const next = { ...this._fill, mode };
-    if (mode === "off") {
-      next.on = false;
-      next.bri = 0;
-      next.col = [0, 0, 0, 0];
-    }
-    this._fill = next;
+    this._fill = defaultFillSettings(mode);
     this._applyFillToBuffer();
     this._syncPreviewPixels();
     if (this._active) void this._flushNow();
@@ -307,13 +322,11 @@ export class WledViewPaint extends BasePoweredElement {
               `
             : null}
 
-        <div
-          class="layout-canvas"
-          style="--wled-paint-height: 360px; --wled-preview-height: 360px"
-        >
+        <div class="layout-canvas">
           <wled-geometry-preview
             paintMode
-            externalLive
+            .externalLive=${!this._brushIsEffect()}
+            .paintLivePreview=${this._brushIsEffect()}
             .connection=${this.connection}
             .controllerId=${this.controllerId}
             .layoutId=${this._layoutId}
@@ -421,6 +434,7 @@ export class WledViewPaint extends BasePoweredElement {
       }
       .layout-canvas {
         width: 100%;
+        max-height: min(70vh, 480px);
         border-radius: 8px;
         overflow: hidden;
         border: 1px solid var(--divider-color);

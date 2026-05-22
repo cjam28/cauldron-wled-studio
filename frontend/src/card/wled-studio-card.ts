@@ -5,13 +5,7 @@ import type { LovelaceCard } from "custom-card-helpers";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { onHaConnectionReady } from "../api/reconnect.js";
 import { listControllers, subscribeLive } from "../api/live-stream.js";
-import {
-  applyState,
-  buildSegmentPatch,
-  entityForWledSegment,
-  fetchDeviceState,
-} from "../api/wled-state.js";
-import { labelForSegment } from "../utils/segment-edit.js";
+import { applyState, fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
 import "../components/geometry-preview.js";
@@ -45,13 +39,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @query("wled-segment-controls") private _segmentControls?: import("../components/segment-controls.js").WledSegmentControls;
 
   @state() private _selectedSegId = -1;
+  /** Optimistic global brightness (0–100) while dragging until HA state catches up. */
+  @state() private _globalBriPct: number | null = null;
   @state() private _segments: import("../api/wled-state.js").WledSegment[] = [];
-  @state() private _segmentEntities: Array<{
-    entity_id: string;
-    segment_index: number;
-    wled_segment_id?: number;
-    name: string;
-  }> = [];
 
   private _unsubLive?: () => void;
   private _bootstrapGen = 0;
@@ -84,6 +74,12 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
     this._syncSegmentsFromControls();
+    if (changed.has("hass") && this._globalBriPct !== null) {
+      const actual = this._readGlobalBrightnessPct();
+      if (Math.abs(actual - this._globalBriPct) <= 1) {
+        this._globalBriPct = null;
+      }
+    }
     if (changed.has("config")) {
       this._bindConnectionReady();
       void this._bootstrap(true);
@@ -268,7 +264,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     try {
       const snap = await fetchDeviceState(this.hass.connection, this._controllerId);
       this._segments = snap.segments ?? [];
-      this._segmentEntities = snap.segment_entities ?? [];
       if (this._segments.length && this._selectedSegId < 0) {
         this._selectedSegId = this._segments[0].id;
       }
@@ -283,59 +278,49 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     if (segs?.length) this._segments = segs;
   }
 
-  private _activeSegId(): number {
-    if (this._selectedSegId >= 0) return this._selectedSegId;
-    return this._segments[0]?.id ?? 0;
+  private _readGlobalBrightnessPct(): number {
+    if (!this.hass || !this._masterEntity) return 0;
+    const st = this.hass.states[this._masterEntity];
+    if (!st) return 0;
+    const pct = st.attributes.brightness_pct;
+    if (typeof pct === "number" && Number.isFinite(pct)) {
+      return Math.max(0, Math.min(100, Math.round(pct)));
+    }
+    const bri = st.attributes.brightness;
+    if (typeof bri === "number" && Number.isFinite(bri)) {
+      return Math.round((Math.max(0, Math.min(255, bri)) / 255) * 100);
+    }
+    return st.state === "on" ? 100 : 0;
   }
 
-  private _activeSegment(): import("../api/wled-state.js").WledSegment | undefined {
-    const id = this._activeSegId();
-    return this._segments.find((s) => s.id === id);
+  private _globalBrightnessPct(): number {
+    if (this._globalBriPct !== null) return this._globalBriPct;
+    return this._readGlobalBrightnessPct();
   }
 
-  private _brightnessPct(): number {
-    const bri = this._activeSegment()?.bri ?? 255;
-    return Math.round((Math.max(0, Math.min(255, bri)) / 255) * 100);
+  private _onGlobalBriInput(ev: Event): void {
+    this._globalBriPct = Number((ev.target as HTMLInputElement).value);
   }
 
-  private _brightnessEntity(): string | undefined {
-    const segId = this._activeSegId();
-    const segmentEntity = entityForWledSegment(segId, this._segmentEntities);
-    return segmentEntity ?? this._masterEntity ?? undefined;
+  private _setGlobalBrightness(ev: Event): void {
+    if (!this.hass || !this._masterEntity) return;
+    const value = Number((ev.target as HTMLInputElement).value);
+    this._globalBriPct = value;
+    const bri = Math.round((value / 100) * 255);
+
+    void this.hass.callService("light", "turn_on", {
+      entity_id: this._masterEntity,
+      brightness_pct: value,
+    });
+
+    if (this.hass.connection && this._controllerId) {
+      void applyState(this.hass.connection, this._controllerId, { bri, on: true });
+    }
   }
 
   private _togglePower(): void {
     if (!this.hass || !this._masterEntity) return;
     this.hass.callService("light", "toggle", { entity_id: this._masterEntity });
-  }
-
-  private _setBrightness(ev: Event): void {
-    if (!this.hass) return;
-    const entityId = this._brightnessEntity();
-    if (!entityId) return;
-    const value = Number((ev.target as HTMLInputElement).value);
-    const segId = this._activeSegId();
-    const bri = Math.round((value / 100) * 255);
-
-    const idx = this._segments.findIndex((s) => s.id === segId);
-    if (idx >= 0) {
-      const next = [...this._segments];
-      next[idx] = { ...next[idx], bri, on: true };
-      this._segments = next;
-    }
-
-    void this.hass.callService("light", "turn_on", {
-      entity_id: entityId,
-      brightness_pct: value,
-    });
-
-    if (this.hass.connection && this._controllerId) {
-      void applyState(
-        this.hass.connection,
-        this._controllerId,
-        buildSegmentPatch(segId, { bri, on: true }, this._segments)
-      );
-    }
   }
 
   protected override render() {
@@ -378,22 +363,16 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         ></wled-geometry-preview>
 
         <div class="controls">
-          <label class="bri-label" for="brightness">
-            ${this._segments.length
-              ? labelForSegment(
-                  this._activeSegment() ?? this._segments[0],
-                  this._segmentEntities
-                )
-              : "Brightness"}
-          </label>
+          <label class="bri-label" for="global-brightness">Global brightness</label>
           <ha-slider
-            id="brightness"
+            id="global-brightness"
             min="0"
             max="100"
             step="1"
-            .value=${this._brightnessPct()}
-            ?disabled=${!this._brightnessEntity()}
-            @change=${this._setBrightness}
+            .value=${this._globalBrightnessPct()}
+            ?disabled=${!this._masterEntity}
+            @input=${this._onGlobalBriInput}
+            @change=${this._setGlobalBrightness}
           ></ha-slider>
         </div>
 

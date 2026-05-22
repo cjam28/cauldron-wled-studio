@@ -1,4 +1,4 @@
-import { css, html } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
 import iro from "@jaames/iro";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
@@ -21,10 +21,31 @@ export class WledColorWheelRgbw extends BasePoweredElement {
   private _picker?: iro.ColorPicker;
   private _suppress = false;
 
-  protected override updated(): void {
-    if (!this._host || this._picker) return;
-    this._picker = iro.ColorPicker(this._host, {
-      width: 140,
+  protected override firstUpdated(): void {
+    this._ensurePicker();
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    if (!this._picker) {
+      this._ensurePicker();
+      return;
+    }
+    if (changed.has("rgb")) {
+      this._syncPicker();
+    }
+  }
+
+  private _ensurePicker(): void {
+    const host = this._host;
+    if (!host || this._picker) return;
+    const rect = host.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) {
+      queueMicrotask(() => this._ensurePicker());
+      return;
+    }
+    this._picker = iro.ColorPicker(host, {
+      width: Math.max(120, Math.min(160, Math.floor(rect.width) || 140)),
       color: {
         r: this.rgb[0],
         g: this.rgb[1],
@@ -48,10 +69,6 @@ export class WledColorWheelRgbw extends BasePoweredElement {
       );
     });
     this._syncPicker();
-  }
-
-  protected override willUpdate(): void {
-    if (this._picker) this._syncPicker();
   }
 
   private _syncPicker(): void {
@@ -153,6 +170,11 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         width: 100%;
+      }
+      .wheel-host {
+        min-width: 140px;
+        min-height: 140px;
+        flex-shrink: 0;
       }
       .wrap {
         display: flex;

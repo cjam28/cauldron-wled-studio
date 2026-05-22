@@ -34,6 +34,8 @@ export class WledGeometryPreview extends BasePoweredElement {
   @property({ type: Boolean }) externalLive = false;
   /** Paint tool: layout canvas drives brush strokes via ``paint-stroke`` events. */
   @property({ type: Boolean, reflect: true }) paintMode = false;
+  /** Effect brush: show device live stream instead of solid DDP buffer overlay. */
+  @property({ type: Boolean }) paintLivePreview = false;
   @property({ type: Number }) paintBrushSize = 6;
   @property({ type: Array }) segments: WledSegment[] = [];
   @property({ type: Number }) selectedSegId = -1;
@@ -51,12 +53,13 @@ export class WledGeometryPreview extends BasePoweredElement {
   private _paintPixels?: Uint8ClampedArray;
   private _raf = 0;
   private _resizeObs?: ResizeObserver;
+  private _unsubLive?: () => void;
   private _hoverLed = -1;
   private _painting = false;
 
   /** Called externally (e.g. by view-layout) when a live frame arrives. */
   setFrame(frame: LiveFrameEvent | null): void {
-    if (!frame || this.paintMode) return;
+    if (!frame || (this.paintMode && !this.paintLivePreview)) return;
     this._pixels = expandToFixture(frame, this.pixelCount);
     this._status = "live";
     this._schedPaint();
@@ -83,15 +86,28 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   protected override onPoweredConnect(): void {
     void this._resolvePositions();
-    if (!this.externalLive && !this.paintMode) {
-      this._attachLiveStream();
-    }
+    this._syncLiveSubscription();
   }
 
   protected override onPoweredDisconnect(): void {
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = 0;
     this._resizeObs?.disconnect();
+    this._unsubLive?.();
+    this._unsubLive = undefined;
+  }
+
+  private _wantsLiveStream(): boolean {
+    return !this.externalLive || (this.paintMode && this.paintLivePreview);
+  }
+
+  private _syncLiveSubscription(): void {
+    if (this._wantsLiveStream()) {
+      if (!this._unsubLive) this._attachLiveStream();
+      return;
+    }
+    this._unsubLive?.();
+    this._unsubLive = undefined;
   }
 
   protected override updated(changed: import("lit").PropertyValues): void {
@@ -103,25 +119,32 @@ export class WledGeometryPreview extends BasePoweredElement {
       changed.has("fixtureId")
     ) {
       void this._resolvePositions();
-      if (!this.externalLive && !this.paintMode) {
-        this._attachLiveStream();
-      }
+      this._syncLiveSubscription();
+    }
+    if (
+      changed.has("externalLive") ||
+      changed.has("paintLivePreview") ||
+      changed.has("paintMode")
+    ) {
+      this._syncLiveSubscription();
     }
     if (changed.has("selectedSegId") || changed.has("segments") || changed.has("paintMode")) {
       this._schedPaint();
       if (changed.has("paintMode") && this._canvas) {
         this._canvas.style.cursor = this.paintMode ? "crosshair" : "pointer";
+        if (this.paintMode) {
+          queueMicrotask(() => this._onResize());
+        }
       }
     }
   }
 
   protected override firstUpdated(): void {
     this._canvas = this.renderRoot.querySelector("canvas") ?? undefined;
-    const wrap = this.renderRoot.querySelector(".wrap");
-    if (this._canvas && wrap) {
+    if (this._canvas) {
       this._ctx = this._canvas.getContext("2d", { alpha: true }) ?? undefined;
       this._resizeObs = new ResizeObserver(() => this._onResize());
-      this._resizeObs.observe(wrap);
+      this._resizeObs.observe(this._canvas);
       const c = this._canvas;
       c.style.touchAction = "none";
       c.addEventListener("pointerdown", this._onPaintPointerDown);
@@ -206,7 +229,6 @@ export class WledGeometryPreview extends BasePoweredElement {
   };
 
   private _onCanvasMove = (ev: MouseEvent): void => {
-    if (this.paintMode) return;
     const led = this._ledAtEvent(ev);
     if (led !== this._hoverLed) {
       this._hoverLed = led;
@@ -245,15 +267,34 @@ export class WledGeometryPreview extends BasePoweredElement {
     return hit?.led ?? -1;
   }
 
+  /** Logical draw size (matches ctx after DPR transform). */
+  private _logicalCanvasSize(): { w: number; h: number } {
+    const canvas = this._canvas;
+    if (!canvas) return { w: 0, h: 0 };
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    return { w: canvas.width / dpr, h: canvas.height / dpr };
+  }
+
+  /** Map screen pointer to layout canvas coordinates (handles CSS scaling). */
+  private _pointerToLogical(clientX: number, clientY: number): [number, number] | null {
+    const canvas = this._canvas;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    const { w, h } = this._logicalCanvasSize();
+    return [
+      ((clientX - rect.left) / rect.width) * w,
+      ((clientY - rect.top) / rect.height) * h,
+    ];
+  }
+
   private _hitTest(clientX: number, clientY: number): LedPosition | null {
     const canvas = this._canvas;
     if (!canvas || this._positions.length === 0) return null;
-    const rect = canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = canvas.width / dpr;
-    const h = canvas.height / dpr;
+    const logical = this._pointerToLogical(clientX, clientY);
+    if (!logical) return null;
+    const [x, y] = logical;
+    const { w, h } = this._logicalCanvasSize();
     const map = this._layoutMap(w, h);
     if (!map) return null;
     const { toCanvas, hitR } = map;
@@ -272,6 +313,50 @@ export class WledGeometryPreview extends BasePoweredElement {
     return best;
   }
 
+  private _positionExtents(): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    rangeX: number;
+    rangeY: number;
+  } | null {
+    if (this._positions.length === 0) return null;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const p of this._positions) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return {
+      minX,
+      maxX,
+      minY,
+      maxY,
+      rangeX: maxX - minX || 1,
+      rangeY: maxY - minY || 1,
+    };
+  }
+
+  private _applyLayoutAspectCss(): void {
+    if (!this.paintMode) {
+      this.style.removeProperty("--wled-layout-aspect");
+      return;
+    }
+    const ext = this._positionExtents();
+    if (!ext) {
+      this.style.removeProperty("--wled-layout-aspect");
+      return;
+    }
+    const aspect = Math.max(0.35, Math.min(3.5, ext.rangeX / ext.rangeY));
+    this.style.setProperty("--wled-layout-aspect", String(aspect));
+    queueMicrotask(() => this._onResize());
+  }
+
   private _layoutMap(
     w: number,
     h: number
@@ -280,22 +365,11 @@ export class WledGeometryPreview extends BasePoweredElement {
     hitR: number;
     lineW: number;
   } | null {
-    const positions = this._positions;
-    if (positions.length === 0) return null;
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    for (const p of positions) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    }
-    const rangeX = maxX - minX || 1;
-    const rangeY = maxY - minY || 1;
+    const ext = this._positionExtents();
+    if (!ext) return null;
+    const { minX, minY, rangeX, rangeY } = ext;
     const r = this.dotRadius;
-    const pad = r * 3;
+    const pad = this.paintMode ? r * 2 : r * 3;
     const scaleX = (w - pad * 2) / rangeX;
     const scaleY = (h - pad * 2) / rangeY;
     const scale = Math.min(scaleX, scaleY);
@@ -315,9 +389,8 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   private _onResize(): void {
     const canvas = this._canvas;
-    const wrap = this.renderRoot.querySelector(".wrap");
-    if (!canvas || !wrap) return;
-    const rect = wrap.getBoundingClientRect();
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return;
     // Cap bitmap size — canvas width/height attrs affect layout in some browsers.
     const cssW = Math.min(1200, Math.max(1, Math.floor(rect.width)));
@@ -366,9 +439,12 @@ export class WledGeometryPreview extends BasePoweredElement {
         this.fixtureId,
         this.layoutId || undefined
       );
+      this._applyLayoutAspectCss();
+      queueMicrotask(() => this._onResize());
       this._schedPaint();
     } catch {
       this._positions = [];
+      this._applyLayoutAspectCss();
     }
   }
 
@@ -390,11 +466,14 @@ export class WledGeometryPreview extends BasePoweredElement {
   }
 
   private _attachLiveStream(): void {
-    if (!this.connection || !this.controllerId) return;
-    const unsub = subscribeLive(this.connection, this.controllerId, (frame) => {
+    if (!this.connection || !this.controllerId || this._unsubLive) return;
+    this._unsubLive = subscribeLive(this.connection, this.controllerId, (frame) => {
       this.setFrame(frame);
     });
-    this.addUnsub(unsub);
+    this.addUnsub(() => {
+      this._unsubLive?.();
+      this._unsubLive = undefined;
+    });
   }
 
   private _schedPaint(): void {
@@ -419,9 +498,8 @@ export class WledGeometryPreview extends BasePoweredElement {
     const canvas = this._canvas;
     if (!ctx || !canvas) return;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = canvas.width / dpr;
-    const h = canvas.height / dpr;
+    const { w, h } = this._logicalCanvasSize();
+    if (w < 1 || h < 1) return;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#0d0d0d";
     ctx.fillRect(0, 0, w, h);
@@ -430,7 +508,10 @@ export class WledGeometryPreview extends BasePoweredElement {
       drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
     }
 
-    const pixels = this.paintMode ? this._paintPixels : this._pixels;
+    const pixels =
+      this.paintMode && this._paintPixels && !this.paintLivePreview
+        ? this._paintPixels
+        : this._pixels;
     const positions = [...this._positions].sort((a, b) => a.led - b.led);
     const r = this.dotRadius;
     const map = this._layoutMap(w, h);
@@ -492,6 +573,8 @@ export class WledGeometryPreview extends BasePoweredElement {
 
       if (!this.paintMode) {
         this._paintSegmentSelection(ctx, positions, toCanvas, lineW);
+      } else if (this._hoverLed >= 0) {
+        this._paintBrushHover(ctx, positions, toCanvas);
       }
     } else {
       // Linear fallback
@@ -512,6 +595,33 @@ export class WledGeometryPreview extends BasePoweredElement {
         ctx.fill();
       }
     }
+  }
+
+  /** Paint mode: ring at hovered LED so crosshair aligns with the stroke target. */
+  private _paintBrushHover(
+    ctx: CanvasRenderingContext2D,
+    positions: LedPosition[],
+    toCanvas: (x: number, y: number) => [number, number]
+  ): void {
+    const pt = positions.find((p) => p.led === this._hoverLed);
+    if (!pt) return;
+    const [cx, cy] = toCanvas(pt.x, pt.y);
+    const r = Math.max(8, this.dotRadius * 2.5);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = this._accentStroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - r - 4, cy);
+    ctx.lineTo(cx + r + 4, cy);
+    ctx.moveTo(cx, cy - r - 4);
+    ctx.lineTo(cx, cy + r + 4);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Accent border along the selected segment path (no per-LED white overlay). */
@@ -617,6 +727,12 @@ export class WledGeometryPreview extends BasePoweredElement {
         max-height: 100%;
         overflow: hidden;
       }
+      :host([paintmode]) {
+        display: block;
+        flex: none;
+        max-height: none;
+        overflow: visible;
+      }
       :host([compact]) {
         display: block;
         flex: none;
@@ -646,15 +762,20 @@ export class WledGeometryPreview extends BasePoweredElement {
       .mode-toggle input {
         margin: 0;
       }
-      .preview-shell.compact .wrap,
-      .preview-shell.paint .wrap {
+      .preview-shell.compact .wrap {
         min-height: var(--wled-preview-height, 200px);
         aspect-ratio: 16 / 9;
         max-height: none;
         flex: none;
       }
       .preview-shell.paint .wrap {
-        min-height: var(--wled-paint-height, 320px);
+        width: 100%;
+        max-width: 100%;
+        max-height: min(70vh, 480px);
+        aspect-ratio: var(--wled-layout-aspect, 1);
+        min-height: 120px;
+        flex: none;
+        height: auto;
       }
       .wrap {
         position: relative;
@@ -665,6 +786,10 @@ export class WledGeometryPreview extends BasePoweredElement {
         flex: 1;
         min-height: 160px;
         max-height: 100%;
+      }
+      .preview-shell.paint {
+        height: auto;
+        max-height: none;
       }
       canvas {
         display: block;
