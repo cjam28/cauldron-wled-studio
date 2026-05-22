@@ -23,6 +23,7 @@ export class WledEffectMergeToggle extends BasePoweredElement {
   @property({ type: Array }) segments: WledSegment[] = [];
   @property({ type: Array }) editIds: number[] = [];
   @property({ type: Number }) pixelCount = 210;
+  @property({ type: Boolean, reflect: true }) compact = false;
 
   @state() private _merged = false;
   @state() private _busy = false;
@@ -48,7 +49,7 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         : null;
 
     return html`
-      <label class="merge-row ${this._merged ? "on" : ""}">
+      <label class="merge-row ${this._merged ? "on" : ""} ${this.compact ? "compact" : ""}">
         <input
           type="checkbox"
           .checked=${this._merged}
@@ -57,11 +58,16 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         />
         <span class="merge-label">
           <strong>Merge for effects</strong>
-          <span class="sub">
-            Combine highlighted segments into one span so chase-style effects run
-            across LED indices. Uncheck to restore the layout saved when you merged.
-          </span>
-          ${span ? html`<span class="saved">${span}</span>` : null}
+          ${this.compact
+            ? null
+            : html`
+                <span class="sub">
+                  Combine highlighted segments into one span so chase-style effects
+                  run across LED indices. Uncheck to restore the layout saved when
+                  you merged.
+                </span>
+              `}
+          ${span && !this.compact ? html`<span class="saved">${span}</span>` : null}
         </span>
       </label>
       ${this._error ? html`<p class="err">${this._error}</p>` : null}
@@ -141,6 +147,14 @@ export class WledEffectMergeToggle extends BasePoweredElement {
       .merge-row.on {
         border-color: var(--primary-color);
         background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+      }
+      .merge-row.compact {
+        padding: 6px 10px;
+        margin-bottom: 8px;
+        align-items: center;
+      }
+      .merge-row.compact .merge-label {
+        font-size: 0.8rem;
       }
       .merge-row input {
         margin-top: 4px;

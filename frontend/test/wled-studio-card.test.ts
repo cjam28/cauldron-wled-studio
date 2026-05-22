@@ -84,19 +84,28 @@ describe("WledStudioCard mode tabs", () => {
     el.remove();
   });
 
-  it("renders Color, Effects, Scenes, Segments, and Paint tabs", async () => {
+  it("renders Color, Effects, Scenes, and Paint tabs by default", async () => {
     await el.updateComplete;
     expect(tabLabels(el)).toEqual([
       "Color",
       "Effects",
       "Scenes",
-      "Segments",
       "Paint",
     ]);
   });
 
   it("hides Scenes tab when show_scenes is false", async () => {
     el.setConfig({ type: "custom:wled-studio-card", show_scenes: false });
+    await el.updateComplete;
+    expect(tabLabels(el)).toEqual(["Color", "Effects", "Paint"]);
+  });
+
+  it("shows Segments tab only when show_segments is true", async () => {
+    el.setConfig({
+      type: "custom:wled-studio-card",
+      show_scenes: false,
+      show_segments: true,
+    });
     await el.updateComplete;
     expect(tabLabels(el)).toEqual(["Color", "Effects", "Segments", "Paint"]);
   });
@@ -192,7 +201,6 @@ describe("WledStudioCard mode tabs", () => {
       "Color",
       "Effects",
       "Scenes",
-      "Segments",
       "Paint",
     ]);
 

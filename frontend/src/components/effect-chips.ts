@@ -15,6 +15,11 @@ import {
   pushRecentEffect,
   type RecentEffectEntry,
 } from "../utils/recent-store.js";
+import {
+  getPinnedEffects,
+  togglePinnedEffect,
+  type PinnedEffectEntry,
+} from "../utils/favorites-store.js";
 import "./effect-tile.js";
 
 export const EFFECT_CHIPS_TAG = "wled-effect-chips";
@@ -35,6 +40,7 @@ export class WledEffectChips extends BasePoweredElement {
 
   @state() private _category: EffectCategory = "all";
   @state() private _recentEntries: RecentEffectEntry[] = [];
+  @state() private _pinnedEntries: PinnedEffectEntry[] = [];
   @state() private _recentVisible = 6;
 
   private _ro?: ResizeObserver;
@@ -58,6 +64,23 @@ export class WledEffectChips extends BasePoweredElement {
 
   private _loadRecents(): void {
     this._recentEntries = getRecentEffects(this.controllerId);
+    this._pinnedEntries = getPinnedEffects(this.controllerId);
+    if (this.soundFlags.length && !this.soundFlags.some((f) => f === "v" || f === "f")) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[wled-studio] sound_flags for ${this.controllerId} contain no v/f entries — Music filter will rely on name heuristics`
+      );
+    }
+  }
+
+  private _togglePin(id: number, ev: Event): void {
+    ev.stopPropagation();
+    if (!this.controllerId) return;
+    this._pinnedEntries = togglePinnedEffect(
+      this.controllerId,
+      id,
+      this._effectName(id)
+    );
   }
 
   private _measureRecents(): void {
@@ -101,9 +124,35 @@ export class WledEffectChips extends BasePoweredElement {
     const showRecentRow =
       this.showRecents && !q && this._recentEntries.length > 0;
     const recentVisible = this._recentEntries.slice(0, this._recentVisible);
+    const showLibraryRow = !q && this._pinnedEntries.length > 0;
 
     return html`
       <div class="wrap ${this.tileGrid ? "tile-grid" : ""}">
+        ${showLibraryRow
+          ? html`
+              <div class="recent-block">
+                <span class="recent-label">Library</span>
+                <div class="recent-row" role="group" aria-label="Pinned effects">
+                  ${this._pinnedEntries.map((entry) => {
+                    const id = entry.id;
+                    const name = entry.name;
+                    const active = id === this.selectedFx;
+                    return html`
+                      <button
+                        type="button"
+                        class="recent-chip library ${active ? "active" : ""}"
+                        aria-label=${`Apply pinned effect ${name}`}
+                        aria-pressed=${active ? "true" : "false"}
+                        @click=${() => this._pick(id, solidId)}
+                      >
+                        ${name}
+                      </button>
+                    `;
+                  })}
+                </div>
+              </div>
+            `
+          : null}
         ${showRecentRow
           ? html`
               <div class="recent-block">
@@ -208,7 +257,26 @@ export class WledEffectChips extends BasePoweredElement {
                 `;
               })}
         </div>
-        <p class="count">${visible.length} effects</p>
+        <div class="footer-row">
+          <p class="count">${visible.length} effects</p>
+          ${this.controllerId && this.selectedFx >= 0
+            ? html`
+                <button
+                  type="button"
+                  class="pin-btn"
+                  title="Pin to library"
+                  aria-label="Pin current effect to library"
+                  @click=${(ev: Event) => this._togglePin(this.selectedFx, ev)}
+                >
+                  <ha-icon
+                    .icon=${this._pinnedEntries.some((e) => e.id === this.selectedFx)
+                      ? "mdi:star"
+                      : "mdi:star-outline"}
+                  ></ha-icon>
+                </button>
+              `
+            : null}
+        </div>
       </div>
     `;
   }
@@ -284,6 +352,24 @@ export class WledEffectChips extends BasePoweredElement {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         border-color: transparent;
+      }
+      .recent-chip.library {
+        border-color: color-mix(in srgb, var(--primary-color) 40%, var(--divider-color));
+      }
+      .footer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .pin-btn {
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        padding: 4px 8px;
+        line-height: 0;
       }
       .filters {
         display: flex;

@@ -39,6 +39,8 @@ export class WledGeometryPreview extends BasePoweredElement {
   @property({ type: Number }) paintBrushSize = 6;
   @property({ type: Array }) segments: WledSegment[] = [];
   @property({ type: Number }) selectedSegId = -1;
+  /** When set, outlines each segment id along the fixture path (preferred over selectedSegId). */
+  @property({ type: Array }) highlightSegIds: number[] = [];
 
   @state() private _positions: LedPosition[] = [];
   @state() private _status = "waiting";
@@ -134,7 +136,12 @@ export class WledGeometryPreview extends BasePoweredElement {
     ) {
       this._syncLiveSubscription();
     }
-    if (changed.has("selectedSegId") || changed.has("segments") || changed.has("paintMode")) {
+    if (
+      changed.has("selectedSegId") ||
+      changed.has("highlightSegIds") ||
+      changed.has("segments") ||
+      changed.has("paintMode")
+    ) {
       this._schedPaint();
       if (changed.has("paintMode") && this._canvas) {
         this._canvas.style.cursor = this.paintMode ? "crosshair" : "pointer";
@@ -634,28 +641,42 @@ export class WledGeometryPreview extends BasePoweredElement {
     ctx.restore();
   }
 
-  /** Accent border along the selected segment path (no per-LED white overlay). */
+  private _highlightIds(): number[] {
+    if (this.highlightSegIds.length) {
+      return [...new Set(this.highlightSegIds)];
+    }
+    if (this.selectedSegId >= 0) return [this.selectedSegId];
+    if (this._hoverLed >= 0) {
+      const id = this._segmentForLed(this._hoverLed);
+      return id >= 0 ? [id] : [];
+    }
+    return [];
+  }
+
+  /** Thin accent stroke along segment path edges — does not cover LED pixels. */
   private _paintSegmentSelection(
     ctx: CanvasRenderingContext2D,
     positions: LedPosition[],
     toCanvas: (x: number, y: number) => [number, number],
     lineW: number
   ): void {
-    const highlightId =
-      this.selectedSegId >= 0
-        ? this.selectedSegId
-        : this._hoverLed >= 0
-          ? this._segmentForLed(this._hoverLed)
-          : -1;
-    if (highlightId < 0 || this.segments.length === 0) return;
-
-    const segPts = positions
-      .filter((p) => this._ledInSegment(p.led, highlightId))
-      .sort((a, b) => a.led - b.led);
-    if (segPts.length < 2) return;
+    const ids = this._highlightIds();
+    if (!ids.length || this.segments.length === 0) return;
 
     const accent = this._accentStroke();
-    const drawPath = (): void => {
+    const strokeW = Math.max(1.25, Math.min(2.5, lineW * 0.45));
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowBlur = 0;
+
+    for (const highlightId of ids) {
+      const segPts = positions
+        .filter((p) => this._ledInSegment(p.led, highlightId))
+        .sort((a, b) => a.led - b.led);
+      if (segPts.length < 2) continue;
+
       const [x0, y0] = toCanvas(segPts[0].x, segPts[0].y);
       ctx.beginPath();
       ctx.moveTo(x0, y0);
@@ -663,27 +684,15 @@ export class WledGeometryPreview extends BasePoweredElement {
         const [xi, yi] = toCanvas(segPts[i].x, segPts[i].y);
         ctx.lineTo(xi, yi);
       }
-    };
 
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
+      ctx.lineWidth = strokeW + 1.5;
+      ctx.stroke();
 
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
-    ctx.lineWidth = lineW + 6;
-    drawPath();
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-    ctx.lineWidth = lineW + 3;
-    drawPath();
-    ctx.stroke();
-
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 2;
-    drawPath();
-    ctx.stroke();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = strokeW;
+      ctx.stroke();
+    }
 
     ctx.restore();
   }

@@ -5,6 +5,7 @@ import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { showToast } from "../utils/toast.js";
+import { sceneCapture } from "../api/scenes.js";
 import {
   applyRgbwm,
   applyState,
@@ -24,15 +25,16 @@ import { formatHaError } from "../utils/ha-error.js";
 import { solidEffectId } from "../utils/effect-categories.js";
 import {
   isMergeForEffectsActive,
-  setMergeForEffectsActive,
+  isWledLayoutMerged,
+  mergedEffectTargetIds,
 } from "../utils/effect-merge.js";
-import { mergedEffectTargetIds } from "../utils/effect-merge.js";
 import { createOptimisticApply } from "../api/state-writer.js";
 import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
 import "./effect-merge-toggle.js";
 import "./preset-bar.js";
+import "./segment-advanced.js";
 import "./wled-skeleton.js";
 import type { PresetEntry } from "./preset-bar.js";
 import { readBrightness255, readEntityColor } from "../utils/ha-brightness.js";
@@ -76,6 +78,8 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _presets: PresetEntry[] = [];
   @state() private _colorSlot = 0;
   @state() private _mergeActive = false;
+  @state() private _saveSceneOpen = false;
+  @state() private _saveSceneName = "";
 
   private _optimistic?: OptimisticApplyHandle;
   private _lastMasterBri255: number | null = null;
@@ -194,6 +198,32 @@ export class WledSegmentControls extends BasePoweredElement {
     this._optimistic = undefined;
   }
 
+  get highlightSegmentIds(): number[] {
+    return this._targetIds();
+  }
+
+  private _emitTargetsChanged(): void {
+    this.dispatchEvent(
+      new CustomEvent("segment-targets-changed", {
+        detail: {
+          segmentId: this._segId,
+          editIds: [...this._editIds],
+          mergeActive: this._mergeActive,
+          highlightIds: this.highlightSegmentIds,
+        },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    this.dispatchEvent(
+      new CustomEvent("segment-change", {
+        detail: { segmentId: this._segId, editIds: [...this._editIds] },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   /** Called from parent when strip preview selects a segment (focus + ensure editing). */
   selectSegment(id: number): void {
     if (this._mergeActive) {
@@ -208,13 +238,7 @@ export class WledSegmentControls extends BasePoweredElement {
     this._colorSlot = 0;
     void this._refreshMeta();
     void this._syncSelToDevice();
-    this.dispatchEvent(
-      new CustomEvent("segment-change", {
-        detail: { segmentId: id, editIds: [...this._editIds] },
-        bubbles: true,
-        composed: true,
-      })
-    );
+    this._emitTargetsChanged();
   }
 
   private async _load(): Promise<void> {
@@ -237,22 +261,7 @@ export class WledSegmentControls extends BasePoweredElement {
       await this._loadPresets();
       this._mergeActive = isMergeForEffectsActive(this.controllerId);
       const pixelCount = this._pixelCount();
-      const seg0 = this._segments.find((s) => s.id === 0);
-      const span0 = (seg0?.stop ?? 0) - (seg0?.start ?? 0);
-      if (
-        this._mergeActive &&
-        this._segments.length > 1 &&
-        pixelCount > 0 &&
-        span0 < pixelCount * 0.9
-      ) {
-        setMergeForEffectsActive(this.controllerId, false);
-        this._mergeActive = false;
-        showToast(
-          this,
-          "Merge for effects was turned off — WLED is using a multi-segment layout."
-        );
-      }
-      if (this._mergeActive) {
+      if (this._mergeActive && isWledLayoutMerged(this._segments, pixelCount)) {
         this._editIds = mergedEffectTargetIds(this._segments, true);
         this._segId = this._editIds[0] ?? 0;
       }
@@ -260,6 +269,7 @@ export class WledSegmentControls extends BasePoweredElement {
         this._editIds = this._segments.map((s) => s.id);
         this._segId = this._segments[0].id;
       }
+      this._emitTargetsChanged();
     } catch (err) {
       this._error = formatHaError(err);
     } finally {
@@ -432,13 +442,7 @@ export class WledSegmentControls extends BasePoweredElement {
     this._colorSlot = 0;
     void this._refreshMeta();
     void this._syncSelToDevice();
-    this.dispatchEvent(
-      new CustomEvent("segment-change", {
-        detail: { segmentId: id, editIds: [...this._editIds] },
-        bubbles: true,
-        composed: true,
-      })
-    );
+    this._emitTargetsChanged();
   }
 
   /** Visual-only reorder stub — WLED segment order API not wired yet. */
@@ -578,6 +582,8 @@ export class WledSegmentControls extends BasePoweredElement {
         ${!this.wholeMode && this.connection && this.controllerId
           ? html`
               <wled-effect-merge-toggle
+                ?compact=${this.compact}
+                class=${this.compact ? "compact-merge" : ""}
                 .connection=${this.connection}
                 .controllerId=${this.controllerId}
                 .segments=${this._segments}
@@ -605,18 +611,22 @@ export class WledSegmentControls extends BasePoweredElement {
                 @dragover=${(ev: DragEvent) => this._onSegDragOver(s.id, ev)}
                 @drop=${(ev: DragEvent) => this._onSegDrop(s.id, ev)}
               >
-                <span
-                  class="seg-drag-handle"
-                  draggable="true"
-                  aria-hidden="true"
-                  title="Drag to reorder (preview only)"
-                  @dragstart=${(ev: DragEvent) => this._onSegDragStart(s.id, ev)}
-                  @dragend=${() => this._onSegDragEnd()}
-                  @click=${(ev: Event) => ev.stopPropagation()}
-                  @mousedown=${(ev: Event) => ev.stopPropagation()}
-                >
-                  <ha-icon icon="mdi:drag-vertical"></ha-icon>
-                </span>
+                ${this.compact
+                  ? null
+                  : html`
+                      <span
+                        class="seg-drag-handle"
+                        draggable="true"
+                        aria-hidden="true"
+                        title="Drag to reorder (preview only)"
+                        @dragstart=${(ev: DragEvent) => this._onSegDragStart(s.id, ev)}
+                        @dragend=${() => this._onSegDragEnd()}
+                        @click=${(ev: Event) => ev.stopPropagation()}
+                        @mousedown=${(ev: Event) => ev.stopPropagation()}
+                      >
+                        <ha-icon icon="mdi:drag-vertical"></ha-icon>
+                      </span>
+                    `}
                 <span class="seg-label">${labelForSegment(s, this._snapshot?.segment_entities ?? [])}</span>
               </button>
             `
@@ -679,6 +689,14 @@ export class WledSegmentControls extends BasePoweredElement {
           @awm-change=${this._onAwm}
         ></wled-color-wheel-rgbw>
 
+        <wled-segment-advanced
+          .segment=${seg}
+          .meta=${meta}
+          ?compact=${this.compact}
+          @segment-patch=${(ev: CustomEvent<Partial<WledSegment>>) =>
+            this._patchSeg(ev.detail)}
+        ></wled-segment-advanced>
+
         ${!this.compact
           ? html`
               <input
@@ -727,8 +745,67 @@ export class WledSegmentControls extends BasePoweredElement {
             `;
           })}
         </div>
+
+        ${this.compact && this.connection && this.controllerId
+          ? html`
+              <div class="scene-row">
+                ${this._saveSceneOpen
+                  ? html`
+                      <input
+                        type="text"
+                        class="scene-input"
+                        placeholder="Scene name"
+                        .value=${this._saveSceneName}
+                        @input=${(e: Event) => {
+                          this._saveSceneName = (e.target as HTMLInputElement).value;
+                        }}
+                      />
+                      <button
+                        type="button"
+                        class="scene-primary"
+                        @click=${() => void this._confirmSaveScene()}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        class="scene-ghost"
+                        @click=${() => {
+                          this._saveSceneOpen = false;
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    `
+                  : html`
+                      <button
+                        type="button"
+                        class="scene-ghost"
+                        @click=${() => {
+                          this._saveSceneName = "Color scene";
+                          this._saveSceneOpen = true;
+                        }}
+                      >
+                        <ha-icon icon="mdi:content-save-outline"></ha-icon>
+                        Save as scene
+                      </button>
+                    `}
+              </div>
+            `
+          : null}
       </div>
     `;
+  }
+
+  private async _confirmSaveScene(): Promise<void> {
+    if (!this.connection || !this.controllerId || !this._saveSceneName.trim()) return;
+    try {
+      await sceneCapture(this.connection, this.controllerId, this._saveSceneName.trim());
+      this._saveSceneOpen = false;
+      showToast(this, `Scene "${this._saveSceneName.trim()}" saved`);
+    } catch (err) {
+      showToast(this, err instanceof Error ? err.message : String(err));
+    }
   }
 
   get segments(): WledSegment[] {
@@ -785,6 +862,41 @@ export class WledSegmentControls extends BasePoweredElement {
         margin: 0;
         font-size: 0.75rem;
         opacity: 0.72;
+      }
+      .scene-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+      .scene-input {
+        flex: 1 1 140px;
+        min-width: 120px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+        color: inherit;
+        font-size: 0.78rem;
+      }
+      .scene-primary,
+      .scene-ghost {
+        font-size: 0.78rem;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .scene-primary {
+        background: var(--primary-color);
+        border-color: var(--primary-color);
+        color: var(--text-primary-color, #fff);
       }
       .seg-tab.editing,
       .seg-tab.focus {

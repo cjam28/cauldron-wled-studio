@@ -15,7 +15,7 @@ type TabToggleKey = "show_scenes" | "show_paint" | "show_segments" | "show_effec
 const TAB_TOGGLES: Array<{ key: TabToggleKey; label: string }> = [
   { key: "show_effects", label: "Show Effects tab" },
   { key: "show_scenes", label: "Show Scenes tab" },
-  { key: "show_segments", label: "Show Segments tab" },
+  { key: "show_segments", label: "Show Segments tab (legacy)" },
   { key: "show_paint", label: "Show Paint tab" },
 ];
 
@@ -60,7 +60,9 @@ export class WledStudioCardEditor extends LitElement {
               <label class="toggle">
                 <input
                   type="checkbox"
-                  .checked=${config[key] !== false}
+                  .checked=${key === "show_segments"
+                    ? config[key] === true
+                    : config[key] !== false}
                   @change=${(ev: Event) => this._onTabToggle(key, ev)}
                 />
                 <span>${label}</span>

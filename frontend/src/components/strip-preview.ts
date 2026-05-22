@@ -13,6 +13,7 @@ export class WledStripPreview extends BasePoweredElement {
   @property({ type: Number }) pixelCount = 210;
   @property({ type: Array }) segments: WledSegment[] = [];
   @property({ type: Number }) selectedSegId = -1;
+  @property({ type: Array }) highlightSegIds: number[] = [];
 
   @state() private _status = "waiting";
   @state() private _hoverLed = -1;
@@ -123,12 +124,20 @@ export class WledStripPreview extends BasePoweredElement {
   }
 
   private _ledInSelectedSeg(led: number): boolean {
-    if (this.selectedSegId < 0) return false;
-    const seg = this.segments.find((s) => s.id === this.selectedSegId);
-    if (!seg) return false;
-    const start = seg.start ?? 0;
-    const stop = seg.stop ?? seg.len ?? this.pixelCount;
-    return led >= start && led < stop;
+    const ids =
+      this.highlightSegIds.length > 0
+        ? this.highlightSegIds
+        : this.selectedSegId >= 0
+          ? [this.selectedSegId]
+          : [];
+    for (const segId of ids) {
+      const seg = this.segments.find((s) => s.id === segId);
+      if (!seg) continue;
+      const start = seg.start ?? 0;
+      const stop = seg.stop ?? seg.len ?? this.pixelCount;
+      if (led >= start && led < stop) return true;
+    }
+    return false;
   }
 
   private _surfaceFill(): string {

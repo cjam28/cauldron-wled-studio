@@ -1,12 +1,15 @@
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import "../components/audio-reactive-controls.js";
 
 const WLED_AUDIO_DOCS = "https://www.home-assistant.io/integrations/wled/#audio-reactive";
 
 @safeCustomElement("wled-view-audio")
 export class WledViewAudio extends BasePoweredElement {
+  @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
   @state() private _fft: number[] = Array(16).fill(0);
   @state() private _peak = 0;
@@ -39,6 +42,16 @@ export class WledViewAudio extends BasePoweredElement {
     return Math.min(100, Math.round((this._peak / 255) * 100));
   }
 
+  private _renderReactiveCtl() {
+    if (!this.connection || !this.controllerId) return null;
+    return html`
+      <wled-audio-reactive-controls
+        .connection=${this.connection}
+        .controllerId=${this.controllerId}
+      ></wled-audio-reactive-controls>
+    `;
+  }
+
   protected override render() {
     if (!this._hasData) {
       return html`
@@ -63,6 +76,7 @@ export class WledViewAudio extends BasePoweredElement {
           >
             WLED audio sync docs
           </a>
+          ${this._renderReactiveCtl()}
         </section>
       `;
     }
@@ -101,6 +115,7 @@ export class WledViewAudio extends BasePoweredElement {
             `
           )}
         </div>
+        ${this._renderReactiveCtl()}
       </section>
     `;
   }

@@ -30,7 +30,37 @@ export interface WledSegment {
   rev?: boolean;
   mi?: boolean;
   awm?: number;
+  /** Sound simulation mode (0=off, 1=GEQ, 2=WaveSin, 3=Sweep). */
   si?: number;
+  /** Freeze: pauses the effect on this segment (true=paused). */
+  frz?: boolean;
+  /** 1D-in-2D expansion mode (0=for each, 1=bar, 2=arc, 3=corner). */
+  m12?: number;
+  /** Blend mode (0=replace, 1=add, 2=subtract, 3=multiply, 4=lighten, 5=darken). */
+  bm?: number;
+  /** Transition time (segment-local, ms). */
+  tt?: number;
+}
+
+export interface AudioReactiveConfig {
+  inputLevel?: number;
+  squelch?: number;
+  gain?: number;
+  AGC?: number;
+  sync?: number;
+  port?: number;
+  freqDist?: number;
+  limiterRise?: number;
+  limiterFall?: number;
+  PalAR?: boolean;
+}
+
+export async function applyAudioReactive(
+  connection: Connection,
+  controllerId: string,
+  patch: AudioReactiveConfig
+): Promise<Record<string, unknown>> {
+  return applyState(connection, controllerId, { AudioReactive: patch });
 }
 
 export interface EffectMeta {

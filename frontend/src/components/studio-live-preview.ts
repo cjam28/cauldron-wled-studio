@@ -17,6 +17,7 @@ export class WledStudioLivePreview extends BasePoweredElement {
   @property() controllerId = "";
   @property({ type: Number }) heightPx = 56;
   @property({ type: Number }) selectedSegId = -1;
+  @property({ type: Array }) highlightSegIds: number[] = [];
 
   @state() private _pixelCount = 210;
   @state() private _segments: WledSegment[] = [];
@@ -117,6 +118,7 @@ export class WledStudioLivePreview extends BasePoweredElement {
           .pixelCount=${this._pixelCount}
           .segments=${this._segments}
           .selectedSegId=${this.selectedSegId}
+          .highlightSegIds=${this.highlightSegIds}
           @segment-select=${this._onSegmentSelect}
         ></wled-strip-preview>
         ${this._status !== "live"

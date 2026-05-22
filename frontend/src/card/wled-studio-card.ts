@@ -56,9 +56,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
   @query("wled-segment-controls") private _segmentControls?: import("../components/segment-controls.js").WledSegmentControls;
+  @query("wled-view-effects") private _effectsView?: import("../panel/view-effects.js").WledViewEffects;
   @query("wled-view-paint") private _paintPanel?: WledViewPaint;
 
   @state() private _selectedSegId = -1;
+  @state() private _highlightSegIds: number[] = [];
   /** Optimistic global brightness (0–100) while dragging until HA state catches up. */
   @state() private _globalBriPct: number | null = null;
   /** Last non-zero brightness for restore when dragging up from off. */
@@ -93,14 +95,19 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   public static getStubConfig(): WledStudioCardConfig {
-    return { type: `custom:${CARD_TAG}`, controller: "Cloud", height: 200 };
+    return {
+      type: `custom:${CARD_TAG}`,
+      controller: "Cloud",
+      height: 200,
+      show_segments: false,
+    };
   }
 
   private _visibleModeTabs(): Array<{ id: CardModeTab; label: string; icon: string }> {
     return MODE_TABS.filter((t) => {
       if (t.id === "scenes" && this.config?.show_scenes === false) return false;
       if (t.id === "paint" && this.config?.show_paint === false) return false;
-      if (t.id === "segments" && this.config?.show_segments === false) return false;
+      if (t.id === "segments" && this.config?.show_segments !== true) return false;
       if (t.id === "effects" && this.config?.show_effects === false) return false;
       return true;
     });
@@ -424,13 +431,40 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   private _onStripSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
-    if (this._cardTab !== "segments") return;
+    if (this._cardTab === "paint") return;
     this._selectedSegId = ev.detail.segmentId;
-    this._segmentControls?.selectSegment(ev.detail.segmentId);
+    if (this._cardTab === "color") {
+      this._segmentControls?.selectSegment(ev.detail.segmentId);
+    } else if (this._cardTab === "effects") {
+      this._effectsView?.selectSegmentFromPreview(ev.detail.segmentId);
+    } else if (this._cardTab === "segments") {
+      this._segmentControls?.selectSegment(ev.detail.segmentId);
+    }
   }
 
-  private _onSegmentChange(ev: CustomEvent<{ segmentId: number }>): void {
+  private _onSegmentTargetsChanged(
+    ev: CustomEvent<{
+      segmentId: number;
+      editIds?: number[];
+      highlightIds?: number[];
+    }>
+  ): void {
     this._selectedSegId = ev.detail.segmentId;
+    if (ev.detail.highlightIds?.length) {
+      this._highlightSegIds = ev.detail.highlightIds;
+    } else if (ev.detail.editIds?.length) {
+      this._highlightSegIds = ev.detail.editIds;
+    } else {
+      this._highlightSegIds = [ev.detail.segmentId];
+    }
+    this.requestUpdate();
+  }
+
+  private _onSegmentChange(ev: CustomEvent<{ segmentId: number; editIds?: number[] }>): void {
+    this._selectedSegId = ev.detail.segmentId;
+    if (ev.detail.editIds?.length) {
+      this._highlightSegIds = ev.detail.editIds;
+    }
     this.requestUpdate();
   }
 
@@ -580,9 +614,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
               .connection=${conn}
               .controllerId=${this._controllerId}
               .masterEntity=${this._masterEntity}
-              wholeMode
+              .selectedSegId=${this._selectedSegId}
               compact
               hideSegmentBrightness
+              @segment-change=${this._onSegmentChange}
+              @segment-targets-changed=${this._onSegmentTargetsChanged}
             ></wled-segment-controls>
           </div>
         `;
@@ -600,6 +636,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
               .hass=${hass}
               .connection=${conn}
               .controllerId=${this._controllerId}
+              @segment-targets-changed=${this._onSegmentTargetsChanged}
             ></wled-view-effects>
           </div>
         `;
@@ -636,6 +673,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
               .selectedSegId=${this._selectedSegId}
               compact
               @segment-change=${this._onSegmentChange}
+              @segment-targets-changed=${this._onSegmentTargetsChanged}
             ></wled-segment-controls>
           </div>
         `;
@@ -714,6 +752,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           .pixelCount=${this._pixelCount}
           .segments=${this._segments}
           .selectedSegId=${paintTab ? -1 : this._selectedSegId}
+          .highlightSegIds=${paintTab ? [] : this._highlightSegIds}
           .paintMode=${paintTab}
           .paintBrushSize=${paintBrush}
           .paintLivePreview=${paintLivePreview}
@@ -807,6 +846,8 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         padding: 2px 8px;
         border-radius: 999px;
         background: var(--warning-color, orange);
+        color: var(--primary-text-color, #1a1200);
+        font-weight: 600;
       }
       .icon-btn {
         border: none;
@@ -956,5 +997,5 @@ declare global {
 }
 
 export function getStubConfig(): WledStudioCardConfig {
-  return { type: `custom:${CARD_TAG}`, controller: "", height: 200 };
+  return { type: `custom:${CARD_TAG}`, controller: "", height: 200, show_segments: false };
 }

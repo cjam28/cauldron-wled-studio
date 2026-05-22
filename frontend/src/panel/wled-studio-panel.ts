@@ -45,7 +45,6 @@ const PRIMARY_NAV: Array<{ id: StudioView; label: string; icon: string }> = [
   { id: "color", label: "Color", icon: "mdi:palette" },
   { id: "effects", label: "Effects", icon: "mdi:auto-fix" },
   { id: "scenes", label: "Scenes", icon: "mdi:palette-swatch" },
-  { id: "segments", label: "Segments", icon: "mdi:vector-line" },
   { id: "paint", label: "Paint", icon: "mdi:brush" },
 ];
 
@@ -71,6 +70,7 @@ export class WledStudioPanel extends BasePoweredElement {
   @state() private _drawerOpen = false;
   @state() private _moreExpanded = false;
   @state() private _previewSegId = -1;
+  @state() private _previewHighlightIds: number[] = [];
   @state() private _showOnboard = false;
 
   private _onboardKeyHandler?: (e: KeyboardEvent) => void;
@@ -81,10 +81,19 @@ export class WledStudioPanel extends BasePoweredElement {
     } catch {
       this._showOnboard = false;
     }
+    if ((this._view as string) === "segments") {
+      this._view = "color";
+    }
     if (isMoreView(this._view)) {
       this._moreExpanded = true;
     }
     void this._loadController();
+  }
+
+  protected override willUpdate(changed: PropertyValues): void {
+    if (changed.has("_view") && (this._view as string) === "segments") {
+      this._view = "color";
+    }
   }
 
   protected override onPoweredDisconnect(): void {
@@ -361,8 +370,7 @@ export class WledStudioPanel extends BasePoweredElement {
     return (
       this._view === "color" ||
       this._view === "scenes" ||
-      this._view === "effects" ||
-      this._view === "segments"
+      this._view === "effects"
     );
   }
 
@@ -375,6 +383,7 @@ export class WledStudioPanel extends BasePoweredElement {
         .connection=${conn}
         .controllerId=${id}
         .selectedSegId=${this._previewSegId}
+        .highlightSegIds=${this._previewHighlightIds}
         @segment-select=${this._onPreviewSegmentSelect}
       ></wled-studio-live-preview>
     `;
@@ -383,7 +392,7 @@ export class WledStudioPanel extends BasePoweredElement {
   private _onPreviewSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
     const id = ev.detail.segmentId;
     this._previewSegId = id;
-    if (this._view === "color" || this._view === "segments") {
+    if (this._view === "color") {
       this.renderRoot
         .querySelector<WledSegmentControls>("wled-segment-controls")
         ?.selectSegment(id);
@@ -395,6 +404,19 @@ export class WledStudioPanel extends BasePoweredElement {
       this.renderRoot
         .querySelector<WledViewScenes>("wled-view-scenes")
         ?.selectSegmentFromPreview(id);
+    }
+  }
+
+  private _onPreviewTargetsChanged(
+    ev: CustomEvent<{ segmentId: number; highlightIds?: number[]; editIds?: number[] }>
+  ): void {
+    this._previewSegId = ev.detail.segmentId;
+    if (ev.detail.highlightIds?.length) {
+      this._previewHighlightIds = ev.detail.highlightIds;
+    } else if (ev.detail.editIds?.length) {
+      this._previewHighlightIds = ev.detail.editIds;
+    } else {
+      this._previewHighlightIds = [ev.detail.segmentId];
     }
   }
 
@@ -472,10 +494,11 @@ export class WledStudioPanel extends BasePoweredElement {
           .hass=${this.hass}
           .connection=${conn}
           .controllerId=${id}
+          @segment-targets-changed=${this._onPreviewTargetsChanged}
         ></wled-view-effects>
       `;
     }
-    if ((this._view === "color" || this._view === "segments") && conn && id) {
+    if (this._view === "color" && conn && id) {
       const masterEntity = this._masterEntityForController();
       return html`
         <wled-segment-controls
@@ -483,7 +506,8 @@ export class WledStudioPanel extends BasePoweredElement {
           .connection=${conn}
           .controllerId=${id}
           .masterEntity=${masterEntity}
-          .compact=${this._view === "color"}
+          compact
+          @segment-targets-changed=${this._onPreviewTargetsChanged}
         ></wled-segment-controls>
       `;
     }
@@ -504,7 +528,10 @@ export class WledStudioPanel extends BasePoweredElement {
       return this._renderFirmwareView(conn, id);
     }
     if (this._view === "audio" && id) {
-      return html`<wled-view-audio .controllerId=${id}></wled-view-audio>`;
+      return html`<wled-view-audio
+        .connection=${conn}
+        .controllerId=${id}
+      ></wled-view-audio>`;
     }
     if (this._view === "voice" && conn && id) {
       return html`

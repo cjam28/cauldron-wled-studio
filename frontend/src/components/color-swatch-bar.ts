@@ -180,16 +180,16 @@ export class WledColorSwatchBar extends BasePoweredElement {
     return html`
       <section class="swatches" aria-label="Saved color swatches">
         <div class="head">
-          <span class="label">Saved colors</span>
+          <span class="label">Color library</span>
           <button
             type="button"
             class="save-btn"
             ?disabled=${this._saving}
             @click=${() => this._openSave()}
-            aria-label="Save current color as swatch"
+            aria-label="Save current color to library"
           >
             <ha-icon icon="mdi:bookmark-plus-outline"></ha-icon>
-            Save swatch
+            Save to library
           </button>
         </div>
 

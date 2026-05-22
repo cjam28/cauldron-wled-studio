@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.11.3
+
+### Audio reactive
+- New AudioReactive control panel on the Audio view: GEQ input level, squelch, gain, AGC mode (Off/Normal/Vivid/Lazy), frequency scale (Linear/Sqrt/Log), limiter rise/fall, sync mode (Off/Send/Receive), sync port, palette injection toggle — writes to the WLED AudioReactive usermod via `apply_state`
+
+### Per-segment advanced options
+- New `wled-segment-advanced` disclosure on the Color and Effects tabs: grouping/spacing/offset, reverse, mirror, freeze, selected, sound simulation (Off/GEQ/WaveSin/Sweep), 1D-in-2D mode (For each/Bar/Arc/Corner), blend mode (Replace/Add/Subtract/Multiply/Lighten/Darken)
+- Effect option checkboxes O1/O2/O3 surface when the current effect's metadata advertises them (and use the effect's defaults string for the label)
+
+### API
+- `WledSegment` extended with `frz`, `m12`, `bm`, `tt`
+- New `applyAudioReactive()` helper that wraps `apply_state({ AudioReactive: … })`
+
+## 0.11.2
+
+### Segment targeting UX
+- Segments tab hidden by default (opt-in via card editor); segment bar + merge toggle on Color and Effects tabs
+- Merge for effects checked by default for new controllers — Studio no longer mutates device segments on load; instead it prompts to apply merge when WLED has a multi-segment layout
+- **Breaking:** existing cards that relied on the Segments tab now need `show_segments: true` set in the card editor
+
+### Color
+- Save current state as a scene from the Color tab (compact card mode)
+
+### Effects
+- Card Effects tab: search, merge toggle, segment chips, Speed/Intensity/Custom sliders (compact mode)
+- Save as default, save named copy to library, save as scene; pinned effects library row + star toggle
+- Sound filter matches reactive effects by fxdata flags and name heuristics (e.g. DJ Light)
+
+### Preview
+- Segment highlight follows all targeted segments; thinner path-edge outline that no longer covers LEDs
+- Remote badge uses dark text on warning background for readability
+
+### Color
+- Saved swatches renamed to Color library with Save to library action
+
+### Tests
+- 115 vitest
+
 ## 0.11.1
 
 ### UX polish

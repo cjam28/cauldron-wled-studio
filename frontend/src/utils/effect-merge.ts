@@ -58,7 +58,21 @@ function writeJson<T>(key: string, map: Record<string, T>): void {
 }
 
 export function isMergeForEffectsActive(controllerId: string): boolean {
-  return Boolean(readJson<boolean>(MERGE_FLAG_KEY)[controllerId]);
+  if (!controllerId) return false;
+  const map = readJson<boolean>(MERGE_FLAG_KEY);
+  if (!(controllerId in map)) return true;
+  return Boolean(map[controllerId]);
+}
+
+/** True when segment 0 spans most of the strip (merge already applied on device). */
+export function isWledLayoutMerged(
+  segments: WledSegment[],
+  pixelCount: number
+): boolean {
+  const seg0 = segments.find((s) => s.id === 0);
+  if (!seg0 || pixelCount <= 0) return false;
+  const span = (seg0.stop ?? 0) - (seg0.start ?? 0);
+  return span >= pixelCount * 0.9;
 }
 
 export function setMergeForEffectsActive(

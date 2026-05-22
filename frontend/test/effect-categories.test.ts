@@ -20,5 +20,6 @@ describe("effect categories", () => {
   it("filters sound", () => {
     expect(matchesEffectCategory("Beat", 3, "sound", flags, map)).toBe(true);
     expect(matchesEffectCategory("Solid", 0, "sound", flags, map)).toBe(false);
+    expect(matchesEffectCategory("DJ Light", 159, "sound", flags, map)).toBe(true);
   });
 });
