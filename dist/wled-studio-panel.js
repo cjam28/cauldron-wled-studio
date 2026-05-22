@@ -2698,6 +2698,8 @@ function t(t,e,i,s){var n,r=arguments.length,o=r<3?e:null===s?s=Object.getOwnPro
       <section class="paint">
         <p class="lead">
           1D strip paint over UDP DDP (${this._pixelCount} LEDs). Drag across the strip.
+          Commit applies Solid colors per WLED segment (average of painted LEDs in each
+          segment).
         </p>
         ${this._warn?V`<p class="warn">${this._warn}</p>`:null}
         <div class="tools">

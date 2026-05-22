@@ -183,6 +183,8 @@ export class WledViewPaint extends BasePoweredElement {
       <section class="paint">
         <p class="lead">
           1D strip paint over UDP DDP (${this._pixelCount} LEDs). Drag across the strip.
+          Commit applies Solid colors per WLED segment (average of painted LEDs in each
+          segment).
         </p>
         ${this._warn
           ? html`<p class="warn">${this._warn}</p>`

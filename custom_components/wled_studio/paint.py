@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .ddp import build_ddp_packets
+from .paint_commit import build_paint_commit_state
 
 if TYPE_CHECKING:
     from .wled_client import WledClient
@@ -56,9 +57,9 @@ class PaintSession:
                 pass
         self._keepalive_task = None
         try:
-            if was_active:
+            if was_active and commit and self._last_payload:
                 async with self._commit_lock:
-                    if commit and self._last_payload and self._transport:
+                    if self._transport:
                         packets = build_ddp_packets(
                             self._last_payload,
                             rgbw=self._last_rgbw,
@@ -68,17 +69,50 @@ class PaintSession:
                         self._seq = (self._seq + len(packets)) & 0x0F or 1
                         for pkt in packets:
                             self._transport.sendto(pkt, (self._host, DDP_PORT))
-        finally:
-            if was_active:
+                    try:
+                        await self._commit_buffer_to_state()
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "Paint commit to WLED state failed on %s",
+                            self._host,
+                            exc_info=True,
+                        )
+                        await self._client.apply_state({"live": False})
+            elif was_active:
                 try:
                     await self._client.apply_state({"live": False})
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning(
                         "Failed to clear WLED live mode on %s", self._host, exc_info=True
                     )
+        finally:
             if self._transport:
                 self._transport.close()
                 self._transport = None
+
+    async def _commit_buffer_to_state(self) -> None:
+        """Push painted pixels into WLED segment colors and exit live mode."""
+        if not self._last_payload:
+            return
+        await self._client.get_state(refresh=True)
+        state = self._client.state or {}
+        segs_raw = state.get("seg")
+        live_segments = segs_raw if isinstance(segs_raw, list) else []
+        info = self._client.info if isinstance(self._client.info, dict) else {}
+        leds_raw = info.get("leds")
+        leds = leds_raw if isinstance(leds_raw, dict) else {}
+        pixel_count = int(leds.get("count") or 0)
+        bpp = 4 if self._last_rgbw else 3
+        if pixel_count <= 0 and bpp > 0:
+            pixel_count = len(self._last_payload) // bpp
+        patch = build_paint_commit_state(
+            payload=self._last_payload,
+            rgbw=self._last_rgbw,
+            live_segments=live_segments,
+            pixel_count=pixel_count,
+            effects_by_name=self._client.effects_by_name,
+        )
+        await self._client.apply_state(patch, full_response=True)
 
     async def send_frame(self, payload: bytes, *, rgbw: bool = True) -> None:
         if not self._active or not self._transport:
