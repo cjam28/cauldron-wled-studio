@@ -19,6 +19,10 @@ import {
 } from "../api/wled-state.js";
 import { toggleEditId } from "../utils/segment-edit.js";
 import { pushRecentScene } from "../utils/recent-store.js";
+import {
+  sceneHasThumb,
+  scenePreviewGradientStyle,
+} from "../utils/scene-gradient.js";
 import "../components/segment-bar.js";
 import "../components/recent-scenes-row.js";
 import type { WledRecentScenesRow } from "../components/recent-scenes-row.js";
@@ -206,6 +210,8 @@ export class WledViewScenes extends BasePoweredElement {
 
   private _sceneTile(scene: SceneRecord) {
     const ms = scene.transition_ms ?? 2500;
+    const gradientStyle = scenePreviewGradientStyle(scene);
+    const thumbUrl = sceneHasThumb(scene) ? scene.scene_thumb_url!.trim() : "";
     return html`
       <article class="tile" role="listitem">
         <button
@@ -215,11 +221,33 @@ export class WledViewScenes extends BasePoweredElement {
           ?disabled=${this._busy}
           @click=${() => this._apply(scene)}
         >
-          <span class="tile-name">${scene.name}</span>
-          ${scene.seeded
-            ? html`<span class="badge">Starter</span>`
-            : null}
-          <span class="tile-meta">${(ms / 1000).toFixed(1)}s fade</span>
+          <div class="tile-visual">
+            <div
+              class="tile-gradient"
+              style="background:${gradientStyle}"
+              aria-hidden="true"
+            ></div>
+            ${thumbUrl
+              ? html`<img
+                  class="tile-thumb"
+                  src=${thumbUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  @error=${(e: Event) => {
+                    const img = e.target as HTMLImageElement;
+                    img.style.display = "none";
+                  }}
+                />`
+              : null}
+            <div class="tile-scrim">
+              <span class="tile-name">${scene.name}</span>
+              ${scene.seeded
+                ? html`<span class="badge">Starter</span>`
+                : null}
+              <span class="tile-meta">${(ms / 1000).toFixed(1)}s fade</span>
+            </div>
+          </div>
         </button>
         ${scene.seeded
           ? null
@@ -361,11 +389,11 @@ export class WledViewScenes extends BasePoweredElement {
         font-size: 0.85rem;
       }
       .wrap.compact .grid {
-        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         gap: 8px;
       }
       .wrap.compact .tile-main {
-        padding: 10px 8px;
+        padding: 0;
       }
       .head {
         display: flex;
@@ -438,64 +466,113 @@ export class WledViewScenes extends BasePoweredElement {
       .grid {
         display: grid;
         gap: 10px;
-        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
       }
       @container wled-studio (min-width: 600px) {
         .grid {
-          grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
         }
       }
       @container wled-studio (min-width: 900px) {
         .grid {
-          grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
         }
       }
       .tile {
         display: flex;
         align-items: stretch;
-        border-radius: 10px;
+        min-height: 120px;
+        border-radius: var(--wled-radius-sm);
         overflow: hidden;
-        border: 1px solid var(--divider-color);
-        background: var(--card-background-color);
+        border: 1px solid var(--wled-border);
+        background: var(--wled-surface);
+        transition: border-color var(--wled-transition-fast);
+      }
+      .tile:hover {
+        border-color: color-mix(in srgb, var(--wled-accent) 35%, var(--wled-border));
       }
       .tile-main {
         flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-        padding: 14px 12px;
+        display: block;
+        min-width: 0;
+        padding: 0;
         border: none;
         background: transparent;
         color: inherit;
         cursor: pointer;
         text-align: left;
-        transition: background var(--m-scene-confirm) ease;
       }
       .tile-main:hover:not(:disabled) {
-        background: var(--secondary-background-color);
+        background: transparent;
+      }
+      .tile-main:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      .tile-visual {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        min-height: 72px;
+        overflow: hidden;
+        background: var(--wled-surface-elevated);
+      }
+      .tile-gradient,
+      .tile-thumb {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .tile-thumb {
+        object-fit: cover;
+        z-index: 1;
+      }
+      .tile-scrim {
+        position: absolute;
+        inset: auto 0 0;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 18px 10px 8px;
+        background: linear-gradient(
+          180deg,
+          transparent 0%,
+          color-mix(in srgb, rgb(0 0 0) 72%, transparent) 100%
+        );
+        color: var(--wled-text);
+        pointer-events: none;
       }
       .tile-name {
         font-weight: 600;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
+        line-height: 1.2;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
       }
       .badge {
-        font-size: 0.7rem;
-        opacity: 0.65;
+        font-size: 0.62rem;
+        opacity: 0.85;
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
       .tile-meta {
-        font-size: 0.75rem;
-        opacity: 0.6;
+        font-size: 0.68rem;
+        opacity: 0.8;
       }
       .icon-btn {
+        align-self: stretch;
         border: none;
-        border-left: 1px solid var(--divider-color);
+        border-left: 1px solid var(--wled-border);
         background: transparent;
-        color: inherit;
+        color: var(--wled-text-muted);
         padding: 0 10px;
         cursor: pointer;
+        transition: background var(--wled-transition-fast);
+      }
+      .icon-btn:hover:not(:disabled) {
+        background: var(--wled-surface-elevated);
+        color: var(--wled-text);
       }
     `,
   ];

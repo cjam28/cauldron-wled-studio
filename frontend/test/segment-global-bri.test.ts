@@ -74,4 +74,64 @@ describe("segment global brightness sync", () => {
 
     expect(el.segments.map((s) => s.bri)).toEqual([128, 128]);
   });
+
+  it("syncs color from master entity when hass updates", async () => {
+    const el = new WledSegmentControls();
+    el.connection = {} as Connection;
+    el.controllerId = "test-controller";
+    el.masterEntity = "light.master";
+    el.wholeMode = true;
+    el["_segments"] = [{ id: 0, bri: 255, col: [[255, 0, 0, 0]] }];
+    el["_segId"] = 0;
+    el["_loading"] = false;
+
+    el.hass = {
+      states: {
+        "light.master": {
+          state: "on",
+          attributes: { rgb_color: [12, 34, 56] },
+        },
+      },
+    } as unknown as import("custom-card-helpers").HomeAssistant;
+
+    (el as unknown as { _syncColorFromHaEntity(): void })._syncColorFromHaEntity();
+
+    expect(el.segments[0].col?.[0]).toEqual([12, 34, 56, 0]);
+  });
+
+  it("updates segment color when HA entity rgb changes externally", async () => {
+    const el = new WledSegmentControls();
+    el.connection = {} as Connection;
+    el.controllerId = "test-controller";
+    el.masterEntity = "light.master";
+    el.wholeMode = true;
+    el["_segments"] = [{ id: 0, bri: 255, col: [[255, 0, 0, 0]] }];
+    el["_segId"] = 0;
+    el["_loading"] = false;
+    el["_lastHaColorKey"] = "light.master:255,0,0,0";
+
+    el.hass = {
+      states: {
+        "light.master": {
+          state: "on",
+          attributes: { rgb_color: [12, 34, 56] },
+        },
+      },
+    } as unknown as import("custom-card-helpers").HomeAssistant;
+
+    (el as unknown as { _syncColorFromHaEntity(): void })._syncColorFromHaEntity();
+    expect(el.segments[0].col?.[0]).toEqual([12, 34, 56, 0]);
+
+    el.hass = {
+      states: {
+        "light.master": {
+          state: "on",
+          attributes: { rgb_color: [99, 88, 77] },
+        },
+      },
+    } as unknown as import("custom-card-helpers").HomeAssistant;
+
+    (el as unknown as { _syncColorFromHaEntity(): void })._syncColorFromHaEntity();
+    expect(el.segments[0].col?.[0]).toEqual([99, 88, 77, 0]);
+  });
 });

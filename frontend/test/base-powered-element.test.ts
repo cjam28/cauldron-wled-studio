@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HomeAssistant } from "custom-card-helpers";
 import { WledStudioCard, CARD_TAG } from "../src/card/wled-studio-card.js";
 import { defineCustomElement } from "../src/utils/safe-custom-element.js";
@@ -44,6 +44,61 @@ describe("WledStudioCard", () => {
     document.body.appendChild(el);
     await el.updateComplete;
     expect(el.shadowRoot?.querySelector(".bri-pct")?.textContent).toBe("67%");
+    el.remove();
+  });
+
+  it("turn_off at brightness 0 and turn_on when non-zero", async () => {
+    const callService = vi.fn().mockResolvedValue(undefined);
+    const el = new WledStudioCard();
+    el.setConfig({ type: "custom:wled-studio-card" });
+    el["_masterEntity"] = "light.wled";
+    el["_globalBriPct"] = 55;
+    document.body.appendChild(el);
+    el.hass = {
+      callService,
+      states: {
+        "light.wled": { state: "on", attributes: { brightness_pct: 55 } },
+      },
+    } as unknown as HomeAssistant;
+    await el.updateComplete;
+
+    (el as unknown as { _setGlobalBrightness(ev: Event): void })._setGlobalBrightness({
+      target: { value: "0" },
+    } as unknown as Event);
+
+    expect(callService).toHaveBeenCalledWith("light", "turn_off", {
+      entity_id: "light.wled",
+    });
+    expect(el["_lastNonZeroBri"]).toBe(55);
+
+    callService.mockClear();
+    (el as unknown as { _setGlobalBrightness(ev: Event): void })._setGlobalBrightness({
+      target: { value: "40" },
+    } as unknown as Event);
+
+    expect(callService).toHaveBeenCalledWith("light", "turn_on", {
+      entity_id: "light.wled",
+      brightness_pct: 40,
+    });
+    el.remove();
+  });
+
+  it("restores last non-zero brightness when dragging up from 0", async () => {
+    const el = new WledStudioCard();
+    el.setConfig({ type: "custom:wled-studio-card" });
+    el["_globalBriPct"] = 0;
+    el["_lastNonZeroBri"] = 72;
+    document.body.appendChild(el);
+    await el.updateComplete;
+    const input = document.createElement("input");
+    input.value = "3";
+
+    (el as unknown as { _onGlobalBriInput(ev: Event): void })._onGlobalBriInput({
+      target: input,
+    } as unknown as Event);
+
+    expect(el["_globalBriPct"]).toBe(72);
+    expect(input.value).toBe("72");
     el.remove();
   });
 });

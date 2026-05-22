@@ -14,6 +14,12 @@ function rgbEqual(
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
+/** Responsive wheel diameter: clamp(180, containerWidth * 0.7, 280). */
+export function computeWheelSize(containerWidth: number): number {
+  const scaled = Math.floor(containerWidth * 0.7);
+  return Math.max(180, Math.min(280, scaled || 180));
+}
+
 @safeCustomElement(COLOR_WHEEL_TAG)
 export class WledColorWheelRgbw extends BasePoweredElement {
   @property({
@@ -117,12 +123,29 @@ export class WledColorWheelRgbw extends BasePoweredElement {
       width = parseFloat(cs.width) || 0;
       height = parseFloat(cs.height) || 0;
     }
+    if (width < 8 || height < 8) {
+      const root = this.getBoundingClientRect();
+      width = root.width || this.offsetWidth;
+      height = root.height || this.offsetHeight;
+    }
+    // aspect-ratio hosts may report width before height is computed
+    if (width >= 8 && height < 8) {
+      height = width;
+    }
+    if (width < 8 && height >= 8) {
+      width = height;
+    }
+    if (width < 8 && height < 8) {
+      const rootW = this.offsetWidth || 280;
+      width = Math.min(280, rootW);
+      height = width;
+    }
     return { width, height };
   }
 
   private _wheelSize(width: number, height: number): number {
     const side = Math.min(width, height);
-    return Math.max(120, Math.min(160, Math.floor(side) || 140));
+    return computeWheelSize(side);
   }
 
   private _tryMountOrResize(): void {
@@ -142,6 +165,10 @@ export class WledColorWheelRgbw extends BasePoweredElement {
     }
   }
 
+  private _borderColor(): string {
+    return getComputedStyle(this).getPropertyValue("--wled-border").trim() || "rgba(255, 255, 255, 0.12)";
+  }
+
   private _createPicker(host: HTMLDivElement, size: number): void {
     if (this._picker) return;
     host.replaceChildren();
@@ -154,7 +181,7 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         b: this.rgb[2],
       },
       borderWidth: 1,
-      borderColor: "#555",
+      borderColor: this._borderColor(),
       layout: [{ component: iro.ui.Wheel }],
     });
     this._picker.on("color:change", (color: iro.Color) => {
@@ -285,10 +312,10 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         gap: 10px;
       }
       .wheel-host {
-        width: 140px;
-        height: 140px;
-        min-width: 140px;
-        min-height: 140px;
+        width: 100%;
+        max-width: 280px;
+        min-width: 180px;
+        aspect-ratio: 1;
         flex-shrink: 0;
         position: relative;
       }
@@ -315,10 +342,11 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         gap: 4px;
       }
       select {
-        border-radius: 6px;
+        border-radius: var(--wled-radius-sm);
         padding: 4px 8px;
-        background: var(--card-background-color);
-        color: inherit;
+        background: var(--wled-surface);
+        color: var(--wled-text);
+        border: 1px solid var(--wled-border);
       }
       .w-hint {
         margin: 0;

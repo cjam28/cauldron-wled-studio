@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.11.0
+
+### Design system
+- Add `wledDesignTokens` CSS variables on HA tokens (Graphite-targeted)
+- Global focus-visible styles and motion token aliases
+- Replace hard-coded preview/wheel/tile colors with `--wled-*` tokens
+
+### Card
+- 5-tab IA: Color / Effects / Scenes / Segments / Paint
+- Header → preview → tabs → panel → pinned global brightness with `%` label
+- Scrollable WAI-ARIA tab bar with keyboard navigation
+- Compact effects grid (2-column tiles); segment brightness hidden on Color tab
+
+### Panel
+- Primary nav mirrors card; secondary "More" section for Layout/Devices/Audio/etc.
+- Active nav accent border; onboarding modal overlay with Escape dismiss
+
+### Scenes
+- Gradient scene tiles from stored WLED colors; reserved `scene_thumb_url` field
+
+### Color & brightness
+- Responsive color wheel (180–280px); external HA color sync
+- Brightness off semantics (`turn_off` at 0, restore on drag-up)
+- Paint brush uses `ha-slider`
+
+### Tests
+- Tab keyboard nav, scene gradients, expanded brightness/color sync (107 vitest)
+
 ## 0.10.23
 
 ### Backend

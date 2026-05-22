@@ -30,6 +30,8 @@ export class WledEffectChips extends BasePoweredElement {
   @property({ type: Array }) thumbBasenames: string[] = [];
   @property({ type: Boolean }) toggleOff = true;
   @property({ type: Boolean }) showRecents = true;
+  /** Card embed: wider tiles in a 2-column grid (min 120px, 16:9 thumbs). */
+  @property({ type: Boolean, attribute: "tile-grid" }) tileGrid = false;
 
   @state() private _category: EffectCategory = "all";
   @state() private _recentEntries: RecentEffectEntry[] = [];
@@ -101,7 +103,7 @@ export class WledEffectChips extends BasePoweredElement {
     const recentVisible = this._recentEntries.slice(0, this._recentVisible);
 
     return html`
-      <div class="wrap">
+      <div class="wrap ${this.tileGrid ? "tile-grid" : ""}">
         ${showRecentRow
           ? html`
               <div class="recent-block">
@@ -310,6 +312,23 @@ export class WledEffectChips extends BasePoweredElement {
         padding: 4px 2px;
         scrollbar-width: thin;
         align-content: start;
+      }
+      .tile-grid .grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        max-height: none;
+        min-height: 0;
+      }
+      .tile-grid .chip-tile {
+        min-height: 0;
+        max-width: none;
+      }
+      .tile-grid .chip-tile .tile {
+        max-width: none;
+        min-width: 0;
+      }
+      .tile-grid .chip-tile.active .tile {
+        outline: 2px solid var(--wled-accent);
+        outline-offset: 2px;
       }
       .chip {
         border: 1px solid var(--divider-color, #555);

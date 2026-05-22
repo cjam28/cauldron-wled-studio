@@ -1,15 +1,36 @@
-import { LitElement, type PropertyValues } from "lit";
+import { css, LitElement, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import type { HomeAssistant } from "custom-card-helpers";
 import { containerStyles } from "../styles/container.js";
 import { motionStyles } from "../styles/motion.js";
+import { wledDesignTokens } from "../styles/tokens.js";
 import { RemoteModeController } from "../controllers/remote-mode.js";
+
+const baseInteractionStyles = css`
+  :host {
+    --wled-transition-fast: var(--m-tap) ease;
+    --wled-transition: var(--m-view-transition) ease;
+  }
+
+  button:focus-visible,
+  [role="tab"]:focus-visible,
+  .tile:focus-visible,
+  .btn:focus-visible {
+    outline: 2px solid var(--wled-accent);
+    outline-offset: 2px;
+  }
+`;
 
 /**
  * Lifecycle base for every WLED Studio Lit component.
  * AbortController + rAF set + unsub set + IntersectionObserver + visibilitychange.
  */
-export const sharedBaseStyles = [containerStyles, motionStyles];
+export const sharedBaseStyles = [
+  wledDesignTokens,
+  containerStyles,
+  motionStyles,
+  baseInteractionStyles,
+];
 
 export abstract class BasePoweredElement extends LitElement {
   static override styles = sharedBaseStyles;

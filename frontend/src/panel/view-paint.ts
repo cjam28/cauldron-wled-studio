@@ -542,18 +542,18 @@ export class WledViewPaint extends BasePoweredElement {
         </div>
 
         <div class="tools">
-          <label>
-            Brush size
-            <input
-              type="range"
+          <label class="brush-row">
+            <span>Brush · ${this._brushSize} px</span>
+            <ha-slider
               min="1"
               max="20"
-              .value=${String(this._brushSize)}
-              @input=${(e: Event) => {
-                this._brushSize = parseInt((e.target as HTMLInputElement).value, 10);
+              step="1"
+              .value=${this._brushSize}
+              @change=${(e: Event) => {
+                this._brushSize = Number((e.target as HTMLInputElement).value);
                 this._emitPaintConfig();
               }}
-            />
+            ></ha-slider>
           </label>
           <button type="button" ?disabled=${!this._active} @click=${() => this._commit()}>
             End live &amp; commit
@@ -653,6 +653,13 @@ export class WledViewPaint extends BasePoweredElement {
         flex-wrap: wrap;
         gap: 12px;
         align-items: center;
+      }
+      .brush-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 160px;
+        font-size: 0.85rem;
       }
       .status {
         font-size: 0.85rem;

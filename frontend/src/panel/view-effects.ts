@@ -38,6 +38,7 @@ const SLIDER_LABELS: Record<string, string> = {
 export class WledViewEffects extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
+  @property({ type: Boolean }) compact = false;
 
   @state() private _snapshot?: DeviceStateSnapshot;
   @state() private _segments: WledSegment[] = [];
@@ -157,27 +158,33 @@ export class WledViewEffects extends BasePoweredElement {
     const sliders = meta?.sliders ?? {};
     const targetCount = this._targetIds().length;
 
+    const compact = this.compact;
+
     return html`
-      <div class="wrap">
-        <h2>Effects</h2>
-        <p class="hint">
-          Tap segments to choose targets. Tap the active effect again to return to Solid.
-        </p>
-        <details class="seg-note">
-          <summary>Why do chase effects restart on each segment?</summary>
-          <p>
-            WLED runs effects <strong>per segment</strong>: each segment’s effect uses LED
-            indices <code>start…stop</code> only inside that segment. The same effect on
-            neighbors does not continue across segment boundaries. For one motion across the
-            whole strip, use a <strong>single segment</strong> spanning all LEDs (Layout →
-            Apply segments) or external tools (LedFX / xLights). WLED+ uses the same model;
-            grouping is planned in firmware, not shipped yet.
-          </p>
-        </details>
+      <div class="wrap ${compact ? "compact" : ""}">
+        ${compact
+          ? null
+          : html`
+              <h2>Effects</h2>
+              <p class="hint">
+                Tap segments to choose targets. Tap the active effect again to return to Solid.
+              </p>
+              <details class="seg-note">
+                <summary>Why do chase effects restart on each segment?</summary>
+                <p>
+                  WLED runs effects <strong>per segment</strong>: each segment’s effect uses LED
+                  indices <code>start…stop</code> only inside that segment. The same effect on
+                  neighbors does not continue across segment boundaries. For one motion across the
+                  whole strip, use a <strong>single segment</strong> spanning all LEDs (Layout →
+                  Apply segments) or external tools (LedFX / xLights). WLED+ uses the same model;
+                  grouping is planned in firmware, not shipped yet.
+                </p>
+              </details>
+            `}
         ${this._status ? html`<p>${this._status}</p>` : null}
         ${this._toast ? html`<p class="toast" role="status">${this._toast}</p>` : null}
 
-        ${this.connection && this.controllerId
+        ${this.connection && this.controllerId && !compact
           ? html`
               <wled-effect-merge-toggle
                 .connection=${this.connection}
@@ -189,7 +196,7 @@ export class WledViewEffects extends BasePoweredElement {
               ></wled-effect-merge-toggle>
             `
           : null}
-        ${this._segments.length && !this._mergeActive
+        ${this._segments.length && !this._mergeActive && !compact
           ? html`
               <wled-segment-bar
                 .segments=${this._segments}
@@ -222,11 +229,15 @@ export class WledViewEffects extends BasePoweredElement {
                 .soundFlags=${snap.sound_flags ?? []}
                 .selectedFx=${fx}
                 .filter=${this._filter}
+                .tileGrid=${compact}
                 @effect-select=${(
                   e: CustomEvent<{ effectId: number; toggledOff?: boolean }>
                 ) => this._onFx(e.detail.effectId, e.detail.toggledOff)}
               ></wled-effect-chips>
 
+              ${compact
+                ? null
+                : html`
               <div class="sliders">
                 ${Object.entries(SLIDER_LABELS).map(([key, label]) => {
                   if (!sliders[key]) return null;
@@ -250,6 +261,7 @@ export class WledViewEffects extends BasePoweredElement {
                 ${targetCount} segment${targetCount === 1 ? "" : "s"} · effect
                 #${fx}
               </p>
+                `}
             `
           : null}
       </div>
@@ -312,6 +324,9 @@ export class WledViewEffects extends BasePoweredElement {
     ...sharedBaseStyles,
     css`
       .wrap {
+        max-width: 100%;
+      }
+      .wrap.compact .search {
         max-width: 100%;
       }
       h2 {

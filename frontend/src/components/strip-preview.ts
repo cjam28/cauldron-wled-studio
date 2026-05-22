@@ -121,6 +121,11 @@ export class WledStripPreview extends BasePoweredElement {
     return led >= start && led < stop;
   }
 
+  private _surfaceFill(): string {
+    const value = getComputedStyle(this).getPropertyValue("--wled-surface").trim();
+    return value || "#1e1e1e";
+  }
+
   private _schedulePaint(): void {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
@@ -139,7 +144,7 @@ export class WledStripPreview extends BasePoweredElement {
     const n = this.pixelCount;
     const segW = w / n;
 
-    ctx.fillStyle = "#111";
+    ctx.fillStyle = this._surfaceFill();
     ctx.fillRect(0, 0, w, h);
 
     for (let i = 0; i < n; i++) {
@@ -185,9 +190,9 @@ export class WledStripPreview extends BasePoweredElement {
     css`
       .wrap {
         position: relative;
-        border-radius: 8px;
+        border-radius: var(--wled-radius-sm);
         overflow: hidden;
-        background: #111;
+        background: var(--wled-surface);
       }
       canvas {
         display: block;
@@ -201,7 +206,7 @@ export class WledStripPreview extends BasePoweredElement {
         align-items: center;
         justify-content: center;
         font-size: 0.75rem;
-        color: var(--secondary-text-color);
+        color: var(--wled-text-muted);
         background: rgba(0, 0, 0, 0.35);
       }
     `,

@@ -19,6 +19,7 @@ def test_scene_record_round_trip() -> None:
     assert out["id"] == "movie"
     assert out["transition_ms"] == 2500
     assert out["seeded"] is True
+    assert out["scene_thumb_url"] is None
 
 
 def test_transition_tt_helper() -> None:

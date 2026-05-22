@@ -67,13 +67,16 @@ export class WledEffectTile extends BasePoweredElement {
         align-items: stretch;
         gap: 4px;
         padding: 4px;
-        border: 1px solid var(--divider-color, #555);
-        border-radius: 8px;
+        border: 1px solid var(--wled-border);
+        border-radius: var(--wled-radius-sm);
         background: transparent;
         color: inherit;
         cursor: pointer;
         min-width: 72px;
         max-width: 96px;
+        transition:
+          border-color var(--wled-transition-fast),
+          transform var(--wled-transition-fast);
       }
       .thumb,
       .placeholder {
@@ -81,7 +84,7 @@ export class WledEffectTile extends BasePoweredElement {
         aspect-ratio: 16 / 9;
         object-fit: cover;
         border-radius: 4px;
-        background: var(--secondary-background-color, #333);
+        background: var(--wled-surface-elevated);
       }
       .placeholder {
         display: block;

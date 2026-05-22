@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WledColorWheelRgbw } from "../src/components/color-wheel-rgbw.js";
+import { WledColorWheelRgbw, computeWheelSize } from "../src/components/color-wheel-rgbw.js";
 
 async function waitForPickerMount(el: WledColorWheelRgbw): Promise<HTMLDivElement> {
   await el.updateComplete;
@@ -11,9 +11,18 @@ async function waitForPickerMount(el: WledColorWheelRgbw): Promise<HTMLDivElemen
 }
 
 describe("wled-color-wheel-rgbw", () => {
+  it("computeWheelSize clamps between 180 and 280", () => {
+    expect(computeWheelSize(100)).toBe(180);
+    expect(computeWheelSize(200)).toBe(180);
+    expect(computeWheelSize(300)).toBe(210);
+    expect(computeWheelSize(400)).toBe(280);
+    expect(computeWheelSize(500)).toBe(280);
+  });
+
   it("mounts iro wheel after layout and survives a re-render", async () => {
     const el = new WledColorWheelRgbw();
     el.rgb = [200, 100, 50];
+    el.style.width = "280px";
     document.body.appendChild(el);
     const host = await waitForPickerMount(el);
 
@@ -30,6 +39,7 @@ describe("wled-color-wheel-rgbw", () => {
   it("external rgb prop change syncs picker", async () => {
     const el = new WledColorWheelRgbw();
     el.rgb = [200, 100, 50];
+    el.style.width = "280px";
     document.body.appendChild(el);
     await waitForPickerMount(el);
 
@@ -49,6 +59,7 @@ describe("wled-color-wheel-rgbw", () => {
   it("keeps at most one iro wheel in host after multiple updates", async () => {
     const el = new WledColorWheelRgbw();
     el.rgb = [200, 100, 50];
+    el.style.width = "280px";
     document.body.appendChild(el);
     const host = await waitForPickerMount(el);
 

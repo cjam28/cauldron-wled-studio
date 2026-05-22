@@ -33,7 +33,7 @@ import "./effect-chips.js";
 import "./effect-merge-toggle.js";
 import "./preset-bar.js";
 import type { PresetEntry } from "./preset-bar.js";
-import { readBrightness255 } from "../utils/ha-brightness.js";
+import { readBrightness255, readEntityColor } from "../utils/ha-brightness.js";
 
 export const SEGMENT_CONTROLS_TAG = "wled-segment-controls";
 
@@ -56,6 +56,9 @@ export class WledSegmentControls extends BasePoweredElement {
   @property({ type: Boolean }) compact = false;
   /** Apply color/effects to every segment (Govee “Whole” mode). */
   @property({ type: Boolean }) wholeMode = false;
+  /** Hide per-segment brightness slider (card Color tab uses global brightness). */
+  @property({ type: Boolean, attribute: "hide-segment-brightness" })
+  hideSegmentBrightness = false;
   @property({ type: Number }) selectedSegId = -1;
   /** Master HA light entity — when its brightness changes, segment sliders follow. */
   @property() masterEntity = "";
@@ -75,15 +78,24 @@ export class WledSegmentControls extends BasePoweredElement {
 
   private _optimistic?: OptimisticApplyHandle;
   private _lastMasterBri255: number | null = null;
+  private _lastHaColorKey = "";
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
+    if (changed.has("hass") && this.hass) {
+      if (this.masterEntity) {
+        this._syncFromMasterEntity();
+      }
+      this._syncColorFromHaEntity();
+    }
+    if (changed.has("masterEntity") && this.masterEntity && this.hass) {
+      this._syncFromMasterEntity();
+    }
     if (
-      (changed.has("hass") || changed.has("masterEntity")) &&
-      this.masterEntity &&
+      (changed.has("_segId") || changed.has("_colorSlot")) &&
       this.hass
     ) {
-      this._syncFromMasterEntity();
+      this._syncColorFromHaEntity();
     }
   }
 
@@ -102,6 +114,52 @@ export class WledSegmentControls extends BasePoweredElement {
     const bri = readBrightness255(st);
     if (this._lastMasterBri255 === bri) return;
     this.applyGlobalBrightness(bri);
+  }
+
+  /** Push HA entity rgb into the active segment color (feeds color wheel). */
+  private _syncColorFromHaEntity(): void {
+    if (!this.hass) return;
+    const entityId = this._colorEntityId();
+    if (!entityId) return;
+    const parsed = readEntityColor(this.hass.states[entityId]);
+    if (!parsed) return;
+    const key = `${entityId}:${parsed[0]},${parsed[1]},${parsed[2]},${parsed[3]}`;
+    if (key === this._lastHaColorKey) return;
+
+    const seg = this._activeSeg();
+    if (!seg) return;
+    const cols = this._cols(seg);
+    const cur = cols[this._colorSlot] ?? cols[0];
+    if (
+      cur[0] === parsed[0] &&
+      cur[1] === parsed[1] &&
+      cur[2] === parsed[2] &&
+      cur[3] === parsed[3]
+    ) {
+      this._lastHaColorKey = key;
+      return;
+    }
+
+    this._lastHaColorKey = key;
+    cols[this._colorSlot] = parsed;
+    const idx = this._segments.findIndex((s) => s.id === seg.id);
+    if (idx < 0) return;
+    const next = [...this._segments];
+    next[idx] = {
+      ...next[idx],
+      col: cols.map((c) => [c[0], c[1], c[2], c[3]]),
+    };
+    this._segments = next;
+    this.requestUpdate();
+  }
+
+  private _colorEntityId(): string {
+    if (this.wholeMode && this.masterEntity) return this.masterEntity;
+    const seg = this._activeSeg();
+    if (!seg) return "";
+    return (
+      entityForWledSegment(seg.id, this._snapshot?.segment_entities ?? []) ?? ""
+    );
   }
 
   protected override onPoweredConnect(): void {
@@ -402,6 +460,7 @@ export class WledSegmentControls extends BasePoweredElement {
     const seg = this._activeSeg();
     if (!seg) return;
     const { rgb, white } = ev.detail;
+    this._lastHaColorKey = `${this._colorEntityId()}:${rgb[0]},${rgb[1]},${rgb[2]},${white}`;
     const cols = this._cols(seg);
     cols[this._colorSlot] = [rgb[0], rgb[1], rgb[2], white];
     const solidId = solidEffectId(this._snapshot?.effects_by_name ?? {});
@@ -534,16 +593,20 @@ export class WledSegmentControls extends BasePoweredElement {
             `
           : null}
 
-        <label class="bri-label">
-          Segment brightness
-          <ha-slider
-            min="0"
-            max="255"
-            step="1"
-            .value=${seg.bri ?? 255}
-            @change=${(ev: Event) => this._slider("bri", ev)}
-          ></ha-slider>
-        </label>
+        ${this.hideSegmentBrightness
+          ? null
+          : html`
+              <label class="bri-label">
+                Segment brightness
+                <ha-slider
+                  min="0"
+                  max="255"
+                  step="1"
+                  .value=${seg.bri ?? 255}
+                  @change=${(ev: Event) => this._slider("bri", ev)}
+                ></ha-slider>
+              </label>
+            `}
 
         <wled-color-wheel-rgbw
           .controllerId=${this.controllerId}
@@ -569,17 +632,21 @@ export class WledSegmentControls extends BasePoweredElement {
             `
           : null}
 
-        <wled-effect-chips
-          .hass=${this.hass}
-          .controllerId=${this.controllerId}
-          .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
-          .thumbBasenames=${this._snapshot?.thumb_basenames ?? []}
-          .effectsByName=${this._snapshot?.effects_by_name ?? {}}
-          .soundFlags=${this._snapshot?.sound_flags ?? []}
-          .selectedFx=${seg.fx ?? 0}
-          .filter=${this.compact ? "" : this._effectFilter}
-          @effect-select=${this._onEffectSelect}
-        ></wled-effect-chips>
+        ${!(this.wholeMode && this.compact && this.hideSegmentBrightness)
+          ? html`
+              <wled-effect-chips
+                .hass=${this.hass}
+                .controllerId=${this.controllerId}
+                .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
+                .thumbBasenames=${this._snapshot?.thumb_basenames ?? []}
+                .effectsByName=${this._snapshot?.effects_by_name ?? {}}
+                .soundFlags=${this._snapshot?.sound_flags ?? []}
+                .selectedFx=${seg.fx ?? 0}
+                .filter=${this.compact ? "" : this._effectFilter}
+                @effect-select=${this._onEffectSelect}
+              ></wled-effect-chips>
+            `
+          : null}
 
         <div class="sliders">
           ${Object.entries(SLIDER_LABELS).map(([key, label]) => {

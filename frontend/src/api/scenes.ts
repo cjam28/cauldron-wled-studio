@@ -12,6 +12,8 @@ export interface SceneRecord {
   etag?: string;
   seeded?: boolean;
   preview_url?: string | null;
+  /** Reserved for future captured thumbnails; null in v0.11. */
+  scene_thumb_url?: string | null;
   updated_at?: string;
 }
 

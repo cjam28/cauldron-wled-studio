@@ -33,10 +33,13 @@ class SceneRecord:
     etag: str = ""
     seeded: bool = False
     preview_url: str | None = None
+    scene_thumb_url: str | None = None
     updated_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data.setdefault("scene_thumb_url", None)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SceneRecord:
@@ -50,6 +53,7 @@ class SceneRecord:
             etag=str(data.get("etag", "")),
             seeded=bool(data.get("seeded", False)),
             preview_url=data.get("preview_url"),
+            scene_thumb_url=data.get("scene_thumb_url"),
             updated_at=str(data.get("updated_at", "")),
         )
 

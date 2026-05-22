@@ -23,3 +23,29 @@ export function readBrightness255(
 ): number {
   return pctTo255(readBrightnessPct(st));
 }
+
+/** Read HA light rgb/rgbw as [r, g, b, w] or null when unavailable. */
+export function readEntityColor(
+  st: { attributes?: Record<string, unknown> } | undefined
+): [number, number, number, number] | null {
+  if (!st) return null;
+  const rgbw = st.attributes?.rgbw_color;
+  if (Array.isArray(rgbw) && rgbw.length >= 3) {
+    return [
+      Number(rgbw[0]) || 0,
+      Number(rgbw[1]) || 0,
+      Number(rgbw[2]) || 0,
+      Number(rgbw[3]) || 0,
+    ];
+  }
+  const rgb = st.attributes?.rgb_color;
+  if (Array.isArray(rgb) && rgb.length >= 3) {
+    return [
+      Number(rgb[0]) || 0,
+      Number(rgb[1]) || 0,
+      Number(rgb[2]) || 0,
+      0,
+    ];
+  }
+  return null;
+}

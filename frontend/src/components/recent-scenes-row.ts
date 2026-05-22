@@ -8,6 +8,10 @@ import {
   type RecentSceneEntry,
 } from "../utils/recent-store.js";
 import type { SceneRecord } from "../api/scenes.js";
+import {
+  sceneHasThumb,
+  scenePreviewGradientStyle,
+} from "../utils/scene-gradient.js";
 
 export const RECENT_SCENES_TAG = "wled-recent-scenes-row";
 
@@ -50,8 +54,12 @@ export class WledRecentScenesRow extends BasePoweredElement {
   private _measure(): void {
     const row = this._rowEl;
     if (!row) return;
-    const next = maxItemsForRowWidth(row.clientWidth, 88, 8, 8);
+    const next = maxItemsForRowWidth(row.clientWidth, 104, 8, 8);
     if (next !== this._visibleCount) this._visibleCount = next;
+  }
+
+  private _sceneFor(id: string): SceneRecord | undefined {
+    return this.scenes.find((s) => s.id === id);
   }
 
   protected override render() {
@@ -64,11 +72,21 @@ export class WledRecentScenesRow extends BasePoweredElement {
       <div class="block">
         <span class="label">Recent scenes</span>
         <div class="recent-row" role="group" aria-label="Recent scenes">
-          ${visible.map(
-            (r) => html`
+          ${visible.map((r) => {
+            const scene = this._sceneFor(r.id);
+            const name = scene?.name ?? r.name;
+            const gradientStyle = scene
+              ? scenePreviewGradientStyle(scene)
+              : "linear-gradient(135deg, var(--wled-surface-elevated), var(--wled-surface))";
+            const thumbUrl =
+              scene && sceneHasThumb(scene)
+                ? scene.scene_thumb_url!.trim()
+                : "";
+            return html`
               <button
                 type="button"
                 class="chip"
+                aria-label=${`Apply scene ${name}`}
                 ?disabled=${this.disabled}
                 @click=${() =>
                   this.dispatchEvent(
@@ -79,10 +97,32 @@ export class WledRecentScenesRow extends BasePoweredElement {
                     })
                   )}
               >
-                ${r.name}
+                <span class="chip-visual">
+                  <span
+                    class="chip-gradient"
+                    style="background:${gradientStyle}"
+                    aria-hidden="true"
+                  ></span>
+                  ${thumbUrl
+                    ? html`<img
+                        class="chip-thumb"
+                        src=${thumbUrl}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        @error=${(e: Event) => {
+                          const img = e.target as HTMLImageElement;
+                          img.style.display = "none";
+                        }}
+                      />`
+                    : null}
+                  <span class="chip-scrim">
+                    <span class="chip-name">${name}</span>
+                  </span>
+                </span>
               </button>
-            `
-          )}
+            `;
+          })}
         </div>
       </div>
     `;
@@ -100,7 +140,7 @@ export class WledRecentScenesRow extends BasePoweredElement {
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        opacity: 0.65;
+        color: var(--wled-text-muted);
       }
       .recent-row {
         display: flex;
@@ -112,20 +152,62 @@ export class WledRecentScenesRow extends BasePoweredElement {
         flex: 1 1 0;
         min-width: 0;
         max-width: 100%;
-        border: 1px solid var(--divider-color);
-        border-radius: 8px;
-        padding: 8px 10px;
-        background: var(--card-background-color);
+        min-height: 120px;
+        border: 1px solid var(--wled-border);
+        border-radius: var(--wled-radius-sm);
+        padding: 0;
+        background: var(--wled-surface);
         color: inherit;
         cursor: pointer;
-        font-size: 0.82rem;
-        font-weight: 500;
+        overflow: hidden;
+        transition:
+          border-color var(--wled-transition-fast),
+          transform var(--wled-transition-fast);
+      }
+      .chip-visual {
+        position: relative;
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        min-height: 72px;
+        background: var(--wled-surface-elevated);
+      }
+      .chip-gradient,
+      .chip-thumb {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .chip-thumb {
+        object-fit: cover;
+        z-index: 1;
+      }
+      .chip-scrim {
+        position: absolute;
+        inset: auto 0 0;
+        z-index: 2;
+        padding: 16px 8px 6px;
+        background: linear-gradient(
+          180deg,
+          transparent 0%,
+          color-mix(in srgb, rgb(0 0 0) 72%, transparent) 100%
+        );
+        pointer-events: none;
+      }
+      .chip-name {
+        display: block;
+        font-size: 0.78rem;
+        font-weight: 600;
+        line-height: 1.2;
+        color: var(--wled-text);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
       }
       .chip:hover:not(:disabled) {
-        background: var(--secondary-background-color);
+        border-color: color-mix(in srgb, var(--wled-accent) 35%, var(--wled-border));
       }
       .chip:disabled {
         opacity: 0.5;

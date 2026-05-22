@@ -66,18 +66,23 @@ export class WledSegmentBar extends BasePoweredElement {
         margin-bottom: 12px;
       }
       .btn {
-        border: 1px solid var(--divider-color);
-        border-radius: 8px;
+        border: 1px solid var(--wled-border);
+        border-radius: var(--wled-radius-sm);
         padding: 6px 10px;
         background: transparent;
         color: inherit;
         cursor: pointer;
         font-size: 0.8rem;
+        min-height: var(--wled-tap);
+        transition:
+          border-color var(--wled-transition-fast),
+          background var(--wled-transition-fast),
+          outline-color var(--wled-transition-fast);
       }
       .btn.on {
-        border-color: var(--primary-color);
-        background: transparent;
-        outline: 2px solid var(--primary-color);
+        border-color: var(--wled-accent);
+        background: var(--wled-accent-soft);
+        outline: 2px solid var(--wled-accent);
         outline-offset: 1px;
       }
     `,

@@ -388,9 +388,13 @@ export class WledGeometryPreview extends BasePoweredElement {
   }
 
   private _accentStroke(): string {
-    const css = getComputedStyle(this);
-    const primary = css.getPropertyValue("--primary-color").trim();
-    return primary || "#18a0fb";
+    const accent = getComputedStyle(this).getPropertyValue("--wled-accent").trim();
+    return accent || "#03a9f4";
+  }
+
+  private _surfaceFill(): string {
+    const surface = getComputedStyle(this).getPropertyValue("--wled-surface").trim();
+    return surface || "#1e1e1e";
   }
 
   private _onResize(): void {
@@ -507,7 +511,7 @@ export class WledGeometryPreview extends BasePoweredElement {
     const { w, h } = this._logicalCanvasSize();
     if (w < 1 || h < 1) return;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#0d0d0d";
+    ctx.fillStyle = this._surfaceFill();
     ctx.fillRect(0, 0, w, h);
 
     if (this._bgImage?.complete && this._bgLayer) {
@@ -785,9 +789,9 @@ export class WledGeometryPreview extends BasePoweredElement {
       }
       .wrap {
         position: relative;
-        border-radius: 8px;
+        border-radius: var(--wled-radius-sm);
         overflow: hidden;
-        background: #0d0d0d;
+        background: var(--wled-surface);
         width: 100%;
         flex: 1;
         min-height: 160px;
@@ -810,7 +814,7 @@ export class WledGeometryPreview extends BasePoweredElement {
         align-items: center;
         justify-content: center;
         font-size: 0.75rem;
-        color: var(--secondary-text-color);
+        color: var(--wled-text-muted);
         background: rgba(0, 0, 0, 0.45);
         pointer-events: none;
       }
