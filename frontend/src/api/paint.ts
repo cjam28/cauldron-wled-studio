@@ -10,6 +10,17 @@ import { brushToPaintMode } from "../utils/paint-settings-types.js";
 
 export type PaintMode = "color" | "effect";
 
+/** Faster base64 for DDP buffers (avoids per-byte string concat). */
+export function paintBufferToBase64(data: Uint8Array): string {
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < data.length; i += chunk) {
+    const slice = data.subarray(i, i + chunk);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
 async function ws<T>(
   connection: Connection,
   payload: { type: string } & Record<string, unknown>
@@ -53,11 +64,7 @@ export async function paintFrame(
     effectsByName?: Record<string, number>;
   }
 ): Promise<void> {
-  let binary = "";
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]!);
-  }
-  const b64 = btoa(binary);
+  const b64 = paintBufferToBase64(data);
   const brush = options?.brush;
   const fill = options?.fill;
   const effects = options?.effectsByName ?? {};

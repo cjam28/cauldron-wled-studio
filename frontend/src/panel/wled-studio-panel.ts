@@ -338,8 +338,22 @@ export class WledStudioPanel extends BasePoweredElement {
   }
 
   private _selectView(view: StudioView): void {
+    const leavingPaint = this._view === "paint" && view !== "paint";
+    if (leavingPaint) {
+      void this._abortActivePaint();
+    }
     this._view = view;
     this._closeDrawer();
+    if (leavingPaint) {
+      this.refreshLivePreview();
+    }
+  }
+
+  private async _abortActivePaint(): Promise<void> {
+    const paint = this.renderRoot.querySelector("wled-view-paint");
+    if (!paint || !("cancelLiveIfActive" in paint)) return;
+    const el = paint as import("./view-paint.js").WledViewPaint;
+    await el.cancelLiveIfActive();
   }
 
   private _toggleDrawer(): void {

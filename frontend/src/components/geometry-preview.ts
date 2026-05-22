@@ -56,10 +56,16 @@ export class WledGeometryPreview extends BasePoweredElement {
   private _unsubLive?: () => void;
   private _hoverLed = -1;
   private _painting = false;
+  private _lastLivePaintMs = 0;
 
   /** Called externally (e.g. by view-layout) when a live frame arrives. */
   setFrame(frame: LiveFrameEvent | null): void {
     if (!frame || (this.paintMode && !this.paintLivePreview)) return;
+    if (this.paintMode && this.paintLivePreview) {
+      const now = performance.now();
+      if (now - this._lastLivePaintMs < 50) return;
+      this._lastLivePaintMs = now;
+    }
     this._pixels = expandToFixture(frame, this.pixelCount);
     this._status = "live";
     this._schedPaint();

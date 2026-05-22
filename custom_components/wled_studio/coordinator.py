@@ -242,6 +242,7 @@ class WledStudioCoordinator:
         if scene is None:
             raise ValueError(f"Unknown scene {scene_id}")
 
+        await self.async_abort_active_paint()
         await self.client.get_state(refresh=True)
         live_segs = self.client.state.get("seg")
         if not isinstance(live_segs, list):
@@ -295,6 +296,13 @@ class WledStudioCoordinator:
         if self.paint_session is None:
             self.paint_session = PaintSession(self.host, self.client)
         return self.paint_session
+
+    async def async_abort_active_paint(self) -> bool:
+        """End live paint without commit and restore pre-paint layout segments."""
+        if self.paint_session is None or not self.paint_session.active:
+            return False
+        await self.paint_session.stop(commit=False)
+        return True
 
     def get_thumb_runner(self) -> ThumbCaptureRunner:
         if self.thumb_runner is None:

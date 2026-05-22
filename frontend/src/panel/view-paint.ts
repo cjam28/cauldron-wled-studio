@@ -5,6 +5,7 @@ import type { HomeAssistant } from "custom-card-helpers";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
 import { debounce } from "../utils/debounce.js";
+import { throttle } from "../utils/throttle.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
@@ -41,9 +42,13 @@ export class WledViewPaint extends BasePoweredElement {
   @state() private _fixtureId = "";
 
   private _buffer: Uint8Array | null = null;
+  private _previewPixels: Uint8ClampedArray | null = null;
   private _touched = new Set<number>();
   @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
-  private _flushDebounced = debounce(() => void this._flushNow(), 33, 120);
+  private _flushInFlight = false;
+  private _flushQueued = false;
+  private _flushColor = throttle(() => void this._flushNow(), 20, { trailing: true });
+  private _flushEffect = debounce(() => void this._flushNow(), 60, 180);
 
   private _brushIsEffect(): boolean {
     return brushToPaintMode(this._brush, this._effectsByName) === "effect";
@@ -125,7 +130,8 @@ export class WledViewPaint extends BasePoweredElement {
   }
 
   protected override async onPoweredDisconnect(): Promise<void> {
-    this._flushDebounced.cancel();
+    this._flushColor.cancel();
+    this._flushEffect.cancel();
     if (this._active && this.connection && this.controllerId) {
       try {
         await paintStop(this.connection, this.controllerId, false);
@@ -159,19 +165,72 @@ export class WledViewPaint extends BasePoweredElement {
   private _allocBuffer(): void {
     const bpp = this._rgbw ? 4 : 3;
     this._buffer = new Uint8Array(this._pixelCount * bpp);
+    this._previewPixels = null;
     this._applyFillToBuffer();
     this._syncPreviewPixels();
   }
 
-  private _syncPreviewPixels(): void {
+  private _syncPreviewPixels(changedLeds?: number[]): void {
     if (!this._buffer || !this._preview) return;
-    this._preview.setPaintPixels(
-      bufferToPreviewPixels(this._buffer, this._pixelCount, this._rgbw)
-    );
+    const needFull =
+      !this._previewPixels || this._previewPixels.length !== this._pixelCount * 4;
+    if (needFull) {
+      this._previewPixels = bufferToPreviewPixels(
+        this._buffer,
+        this._pixelCount,
+        this._rgbw
+      );
+    } else if (changedLeds?.length) {
+      const bpp = this._rgbw ? 4 : 3;
+      const px = this._previewPixels!;
+      for (const i of changedLeds) {
+        const o = i * bpp;
+        const p = i * 4;
+        px[p] = this._buffer[o] ?? 0;
+        px[p + 1] = this._buffer[o + 1] ?? 0;
+        px[p + 2] = this._buffer[o + 2] ?? 0;
+        px[p + 3] = this._rgbw ? (this._buffer[o + 3] ?? 0) : 255;
+      }
+    } else {
+      this._previewPixels = bufferToPreviewPixels(
+        this._buffer,
+        this._pixelCount,
+        this._rgbw
+      );
+    }
+    this._preview.setPaintPixels(this._previewPixels);
   }
 
   private _brushRgb(): [number, number, number] {
-    return [this._brush.col[0], this._brush.col[1], this._brush.col[2]];
+    const f = Math.max(0, Math.min(255, this._brush.bri)) / 255;
+    return [
+      Math.round(this._brush.col[0] * f),
+      Math.round(this._brush.col[1] * f),
+      Math.round(this._brush.col[2] * f),
+    ];
+  }
+
+  /** End live paint without commit (restores layout segments on device). */
+  async cancelLiveIfActive(): Promise<boolean> {
+    if (!this._active || !this.connection || !this.controllerId) return false;
+    this._flushColor.cancel();
+    this._flushEffect.cancel();
+    try {
+      await paintStop(this.connection, this.controllerId, false);
+      this._status = "Live paint ended — layout segments restored";
+      this._preview?.setStatus("ready");
+    } catch (err) {
+      this._status = formatHaError(err);
+      return false;
+    }
+    this._active = false;
+    this._touched.clear();
+    this._applyFillToBuffer();
+    this._syncPreviewPixels();
+    this.dispatchEvent(
+      new CustomEvent("wled-paint-ended", { bubbles: true, composed: true })
+    );
+    return true;
   }
 
   private _writeLed(led: number, rgb: [number, number, number]): void {
@@ -198,6 +257,14 @@ export class WledViewPaint extends BasePoweredElement {
     }
   }
 
+  private _scheduleFlush(): void {
+    if (this._brushIsEffect()) {
+      this._flushEffect();
+    } else {
+      this._flushColor();
+    }
+  }
+
   private _strokeLeds(leds: number[]): void {
     if (!this._buffer || !leds.length) return;
     const effectBrush = this._brushIsEffect();
@@ -207,14 +274,14 @@ export class WledViewPaint extends BasePoweredElement {
         this._writeLed(idx, rgb);
         this._touched.add(idx);
       }
-      this._syncPreviewPixels();
+      this._syncPreviewPixels(leds);
     } else {
       for (const idx of leds) {
         this._touched.add(idx);
       }
       this._preview?.setPaintPixels(null);
     }
-    this._flushDebounced();
+    this._scheduleFlush();
   }
 
   private async _onPaintStroke(ev: CustomEvent<{ leds: number[] }>): Promise<void> {
@@ -224,6 +291,11 @@ export class WledViewPaint extends BasePoweredElement {
 
   private async _flushNow(): Promise<void> {
     if (!this._active || !this.connection || !this._buffer) return;
+    if (this._flushInFlight) {
+      this._flushQueued = true;
+      return;
+    }
+    this._flushInFlight = true;
     try {
       await paintFrame(this.connection, this.controllerId, this._buffer, {
         rgbw: this._rgbw,
@@ -236,19 +308,25 @@ export class WledViewPaint extends BasePoweredElement {
       this._status = `Live paint · ${this._touched.size} LEDs · ${modeLabel} · fill: ${this._fill.mode}`;
     } catch (err) {
       this._status = formatHaError(err);
+    } finally {
+      this._flushInFlight = false;
+      if (this._flushQueued) {
+        this._flushQueued = false;
+        void this._flushNow();
+      }
     }
   }
 
   private _onBrushChange(ev: CustomEvent<PaintBrushSettings>): void {
     this._brush = ev.detail;
-    if (this._active) this._flushDebounced();
+    if (this._active) this._scheduleFlush();
   }
 
   private _onFillChange(ev: CustomEvent<PaintBrushSettings>): void {
     this._fill = { ...ev.detail, mode: this._fill.mode };
     this._applyFillToBuffer();
     this._syncPreviewPixels();
-    if (this._active) this._flushDebounced();
+    if (this._active) this._scheduleFlush();
   }
 
   private _onFillModeChange(mode: UnpaintedFillMode): void {
@@ -260,7 +338,8 @@ export class WledViewPaint extends BasePoweredElement {
 
   private async _commit(): Promise<void> {
     if (!this.connection || !this._active) return;
-    this._flushDebounced.cancel();
+    this._flushColor.cancel();
+    this._flushEffect.cancel();
     await this._flushNow();
     try {
       await paintStop(this.connection, this.controllerId, true);
@@ -277,7 +356,8 @@ export class WledViewPaint extends BasePoweredElement {
 
   private async _cancel(): Promise<void> {
     if (!this.connection || !this._active) return;
-    this._flushDebounced.cancel();
+    this._flushColor.cancel();
+    this._flushEffect.cancel();
     try {
       await paintStop(this.connection, this.controllerId, false);
       this._status = "Live mode released";

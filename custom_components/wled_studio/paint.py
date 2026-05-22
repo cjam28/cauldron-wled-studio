@@ -22,6 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DDP_PORT = 4048
 KEEPALIVE_SEC = 1.5
+EFFECT_PREVIEW_DEBOUNCE_SEC = 0.1
 
 
 class PaintSession:
@@ -35,6 +36,7 @@ class PaintSession:
         self._last_rgbw = True
         self._baseline_payload: bytes | None = None
         self._segment_snapshot: list[dict[str, Any]] = []
+        self._global_bri = 255
         self._touched: set[int] = set()
         self._touched_fx: dict[int, int] = {}
         self._paint_mode = "color"
@@ -44,8 +46,13 @@ class PaintSession:
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
+        self._effect_preview_task: asyncio.Task[None] | None = None
         self._active = False
         self._coordinator: WledStudioCoordinator | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._active
 
     async def start(self, coordinator: WledStudioCoordinator | None = None) -> None:
         if self._active:
@@ -72,6 +79,7 @@ class PaintSession:
     async def stop(self, *, commit: bool = False) -> None:
         was_active = self._active
         self._active = False
+        await self._cancel_effect_preview_task()
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             try:
@@ -103,10 +111,15 @@ class PaintSession:
                         await self._client.apply_state({"live": False})
             elif was_active:
                 try:
-                    await self._client.apply_state({"live": False})
+                    if self._segment_snapshot:
+                        await self._restore_segment_snapshot()
+                    else:
+                        await self._client.apply_state({"live": False})
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning(
-                        "Failed to clear WLED live mode on %s", self._host, exc_info=True
+                        "Failed to restore layout after paint on %s",
+                        self._host,
+                        exc_info=True,
                     )
         finally:
             if self._transport:
@@ -126,33 +139,59 @@ class PaintSession:
     ) -> None:
         if not self._active or not self._transport:
             await self.start(self._coordinator)
-        async with self._commit_lock:
-            self._last_payload = payload
-            self._last_rgbw = rgbw
-            if paint_mode in ("color", "effect"):
-                self._paint_mode = paint_mode
-            if isinstance(brush, dict):
-                self._brush = brush
-            if isinstance(fill, dict):
-                self._fill = fill
-            if touched:
-                for led in touched:
-                    if 0 <= led < len(payload) // (4 if rgbw else 3):
-                        self._touched.add(led)
-                        if paint_mode == "effect" and effect_id is not None:
-                            self._touched_fx[led] = int(effect_id)
-            if self._paint_mode == "effect" and self._touched:
-                await self._apply_effect_preview()
-                return
-            if self._paint_mode == "color" and not self._ddp_live:
-                await self._client.apply_state({"live": True})
-                self._ddp_live = True
-            packets = build_ddp_packets(
-                payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
-            )
-            self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
-            for pkt in packets:
-                self._transport.sendto(pkt, (self._host, DDP_PORT))
+        self._last_payload = payload
+        self._last_rgbw = rgbw
+        if paint_mode in ("color", "effect"):
+            self._paint_mode = paint_mode
+        if isinstance(brush, dict):
+            self._brush = brush
+        if isinstance(fill, dict):
+            self._fill = fill
+        if touched:
+            for led in touched:
+                if 0 <= led < len(payload) // (4 if rgbw else 3):
+                    self._touched.add(led)
+                    if paint_mode == "effect" and effect_id is not None:
+                        self._touched_fx[led] = int(effect_id)
+        if self._paint_mode == "effect" and self._touched:
+            self._schedule_effect_preview()
+            return
+        if self._paint_mode == "color" and not self._ddp_live:
+            await self._client.apply_state({"live": True})
+            self._ddp_live = True
+        packets = build_ddp_packets(
+            payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
+        )
+        self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
+        for pkt in packets:
+            self._transport.sendto(pkt, (self._host, DDP_PORT))
+
+    def _schedule_effect_preview(self) -> None:
+        """Debounce WLED /json/state pushes so paint strokes stay responsive."""
+        if self._effect_preview_task and not self._effect_preview_task.done():
+            self._effect_preview_task.cancel()
+
+        async def _run() -> None:
+            await asyncio.sleep(EFFECT_PREVIEW_DEBOUNCE_SEC)
+            await self._apply_effect_preview()
+
+        self._effect_preview_task = asyncio.create_task(_run())
+
+    async def _cancel_effect_preview_task(self) -> None:
+        task = self._effect_preview_task
+        self._effect_preview_task = None
+        if not task or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _await_effect_preview_idle(self) -> None:
+        await self._cancel_effect_preview_task()
+        if self._paint_mode == "effect" and self._touched:
+            await self._apply_effect_preview()
 
     async def _capture_baseline(
         self, coordinator: WledStudioCoordinator | None
@@ -165,6 +204,7 @@ class PaintSession:
         self._last_rgbw = rgbw
 
         state = self._client.state or {}
+        self._global_bri = int(state.get("bri") or 255)
         segs_raw = state.get("seg")
         self._segment_snapshot = (
             copy.deepcopy(segs_raw) if isinstance(segs_raw, list) else []
@@ -183,6 +223,17 @@ class PaintSession:
                 self._segment_snapshot, pixel_count, rgbw=rgbw
             )
         self._baseline_payload = baseline
+
+    async def _restore_segment_snapshot(self) -> None:
+        """Revert temporary paint segments to the layout saved at paint start."""
+        segs = copy.deepcopy(self._segment_snapshot)
+        if not segs:
+            await self._client.apply_state({"live": False})
+            return
+        await self._client.apply_state(
+            {"live": False, "on": True, "bri": self._global_bri, "seg": segs},
+            full_response=True,
+        )
 
     async def _apply_effect_preview(self) -> None:
         """Push segment effects to WLED (DDP cannot preview animated effects)."""
@@ -210,6 +261,7 @@ class PaintSession:
             max_segments=max_seg,
             brush=self._brush,
             fill=self._fill,
+            global_bri=self._global_bri,
         )
         await self._client.apply_state(patch)
 
@@ -217,6 +269,7 @@ class PaintSession:
         """Push painted pixels into WLED (per-LED or effect segments) and exit live."""
         if not self._last_payload:
             return
+        await self._await_effect_preview_idle()
         await self._client.get_state(refresh=True)
         state = self._client.state or {}
         segs_raw = state.get("seg")
@@ -246,6 +299,7 @@ class PaintSession:
             max_segments=max_seg,
             brush=self._brush,
             fill=self._fill,
+            global_bri=self._global_bri,
         )
         await self._client.apply_state(patch, full_response=True)
 
@@ -255,10 +309,16 @@ class PaintSession:
             if not self._active or not self._last_payload or not self._transport:
                 continue
             if self._paint_mode == "effect":
-                try:
-                    await self._apply_effect_preview()
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug("paint effect keepalive failed", exc_info=True)
+                if (
+                    not self._effect_preview_task
+                    or self._effect_preview_task.done()
+                ):
+                    try:
+                        await self._apply_effect_preview()
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "paint effect keepalive failed", exc_info=True
+                        )
                 continue
             try:
                 packets = build_ddp_packets(

@@ -216,6 +216,7 @@ async def ws_apply_state(
         )
         return
     try:
+        await coord.async_abort_active_paint()
         result = await coord.client.apply_state(
             msg["state"],
             full_response=msg.get("full_response", False),
@@ -608,6 +609,7 @@ async def ws_layout_to_segments(
         fixture, layout.pixel_count, name_prefix=prefix
     )
     try:
+        await coord.async_abort_active_paint()
         result = await coord.client.apply_state(
             {"seg": seg_payload}, full_response=True
         )
