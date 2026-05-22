@@ -27,6 +27,11 @@ export class WledViewPaint extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property({ attribute: false }) override hass?: HomeAssistant;
   @property() controllerId = "";
+  /** Card embed: paint on a parent ``wled-geometry-preview`` instead of an internal canvas. */
+  @property({ type: Boolean, attribute: "embed-mode" }) embedMode = false;
+  @property() embedLayoutId = "";
+  @property() embedFixtureId = "";
+  @property({ type: Number }) embedPixelCount = 0;
 
   @state() private _pixelCount = 210;
   @state() private _rgbw = true;
@@ -44,7 +49,46 @@ export class WledViewPaint extends BasePoweredElement {
   private _buffer: Uint8Array | null = null;
   private _previewPixels: Uint8ClampedArray | null = null;
   private _touched = new Set<number>();
-  @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
+  @query("wled-geometry-preview") private _internalPreview?: WledGeometryPreview;
+  private _externalPreview?: WledGeometryPreview;
+
+  private _previewEl(): WledGeometryPreview | undefined {
+    return this.embedMode ? this._externalPreview : this._internalPreview;
+  }
+
+  get brushSize(): number {
+    return this._brushSize;
+  }
+
+  get paintLivePreview(): boolean {
+    return this._brushIsEffect();
+  }
+
+  get paintExternalLive(): boolean {
+    return !this._brushIsEffect();
+  }
+
+  bindExternalPreview(el: WledGeometryPreview | undefined): void {
+    this._externalPreview = el;
+    if (el && this._active) {
+      el.setStatus("live paint");
+    }
+    if (el && this._previewPixels) {
+      this._syncPreviewPixels();
+    } else if (el) {
+      void el.refresh();
+    }
+  }
+
+  handleExternalPaintStroke(ev: CustomEvent<{ leds: number[] }>): void {
+    void this._onPaintStroke(ev);
+  }
+
+  private _emitPaintConfig(): void {
+    this.dispatchEvent(
+      new CustomEvent("paint-config-change", { bubbles: true, composed: true })
+    );
+  }
   private _flushInFlight = false;
   private _flushQueued = false;
   private _flushColor = throttle(() => void this._flushNow(), 20, { trailing: true });
@@ -63,13 +107,25 @@ export class WledViewPaint extends BasePoweredElement {
     ) {
       this._applyFillToBuffer();
       if (this._brushIsEffect()) {
-        this._preview?.setPaintPixels(null);
+        this._previewEl()?.setPaintPixels(null);
       } else {
         this._syncPreviewPixels();
       }
     }
-    if (changed.has("_brush")) {
+    if (changed.has("_brush") || changed.has("_brushSize")) {
       this.requestUpdate();
+      this._emitPaintConfig();
+    }
+    if (
+      this.embedMode &&
+      (changed.has("embedLayoutId") ||
+        changed.has("embedFixtureId") ||
+        changed.has("embedPixelCount"))
+    ) {
+      if (this.embedLayoutId) this._layoutId = this.embedLayoutId;
+      if (this.embedFixtureId) this._fixtureId = this.embedFixtureId;
+      if (this.embedPixelCount > 0) this._pixelCount = this.embedPixelCount;
+      void this._previewEl()?.refresh();
     }
   }
 
@@ -99,11 +155,21 @@ export class WledViewPaint extends BasePoweredElement {
         this._brush = defaultBrushSettings(seg0.fx ?? 0, parsed);
       }
       this._layouts = layouts;
-      this._applyLayout(layouts[0]);
+      if (this.embedMode && this.embedLayoutId) {
+        this._layoutId = this.embedLayoutId;
+        this._fixtureId = this.embedFixtureId || "fixture-0";
+        if (this.embedPixelCount > 0) this._pixelCount = this.embedPixelCount;
+      } else {
+        this._applyLayout(layouts[0]);
+      }
       this._allocBuffer();
-      this._status = layouts.length
-        ? "Drag on the layout to paint"
-        : "Create a layout in the Layout tab first";
+      this._status = this.embedMode
+        ? this._layoutId
+          ? "Drag on the strip preview to paint"
+          : "Create a layout in Studio → Layout first"
+        : layouts.length
+          ? "Drag on the layout to paint"
+          : "Create a layout in the Layout tab first";
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -119,7 +185,7 @@ export class WledViewPaint extends BasePoweredElement {
     const first = layout.fixtures[0] as Record<string, unknown> | undefined;
     this._fixtureId = first ? String(first.id ?? "fixture-0") : "fixture-0";
     if (layout.pixel_count) this._pixelCount = layout.pixel_count;
-    void this._preview?.refresh();
+    void this._previewEl()?.refresh();
   }
 
   private _onLayoutPick(ev: Event): void {
@@ -153,7 +219,7 @@ export class WledViewPaint extends BasePoweredElement {
       if (res.pixel_count) this._pixelCount = res.pixel_count;
       if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
       this._allocBuffer();
-      this._preview?.setStatus("live paint");
+      this._previewEl()?.setStatus("live paint");
       this._status = "Live paint";
       return true;
     } catch (err) {
@@ -171,7 +237,8 @@ export class WledViewPaint extends BasePoweredElement {
   }
 
   private _syncPreviewPixels(changedLeds?: number[]): void {
-    if (!this._buffer || !this._preview) return;
+    const preview = this._previewEl();
+    if (!this._buffer || !preview) return;
     const needFull =
       !this._previewPixels || this._previewPixels.length !== this._pixelCount * 4;
     if (needFull) {
@@ -198,7 +265,7 @@ export class WledViewPaint extends BasePoweredElement {
         this._rgbw
       );
     }
-    this._preview.setPaintPixels(this._previewPixels);
+    preview.setPaintPixels(this._previewPixels);
   }
 
   private _brushRgb(): [number, number, number] {
@@ -218,7 +285,7 @@ export class WledViewPaint extends BasePoweredElement {
     try {
       await paintStop(this.connection, this.controllerId, false);
       this._status = "Live paint ended — layout segments restored";
-      this._preview?.setStatus("ready");
+      this._previewEl()?.setStatus("ready");
     } catch (err) {
       this._status = formatHaError(err);
       return false;
@@ -230,6 +297,7 @@ export class WledViewPaint extends BasePoweredElement {
     this.dispatchEvent(
       new CustomEvent("wled-paint-ended", { bubbles: true, composed: true })
     );
+    this._emitPaintConfig();
     return true;
   }
 
@@ -279,7 +347,7 @@ export class WledViewPaint extends BasePoweredElement {
       for (const idx of leds) {
         this._touched.add(idx);
       }
-      this._preview?.setPaintPixels(null);
+      this._previewEl()?.setPaintPixels(null);
     }
     this._scheduleFlush();
   }
@@ -319,6 +387,7 @@ export class WledViewPaint extends BasePoweredElement {
 
   private _onBrushChange(ev: CustomEvent<PaintBrushSettings>): void {
     this._brush = ev.detail;
+    this._emitPaintConfig();
     if (this._active) this._scheduleFlush();
   }
 
@@ -344,7 +413,7 @@ export class WledViewPaint extends BasePoweredElement {
     try {
       await paintStop(this.connection, this.controllerId, true);
       this._status = "Committed to WLED";
-      this._preview?.setStatus("committed");
+      this._previewEl()?.setStatus("committed");
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -361,7 +430,7 @@ export class WledViewPaint extends BasePoweredElement {
     try {
       await paintStop(this.connection, this.controllerId, false);
       this._status = "Live mode released";
-      this._preview?.setStatus("ready");
+      this._previewEl()?.setStatus("ready");
     } catch (err) {
       this._status = formatHaError(err);
     }
@@ -373,16 +442,21 @@ export class WledViewPaint extends BasePoweredElement {
 
   protected override render() {
     const hasLayout = Boolean(this._layoutId);
+    const compact = this.embedMode;
 
     return html`
-      <section class="paint">
-        <p class="lead">
-          Paint on your saved fixture layout (${this._pixelCount} LEDs). Unpainted areas
-          use the fill below (default <strong>Off</strong>).
-        </p>
+      <section class="paint ${compact ? "compact" : ""}">
+        ${compact
+          ? null
+          : html`
+              <p class="lead">
+                Paint on your saved fixture layout (${this._pixelCount} LEDs). Unpainted
+                areas use the fill below (default <strong>Off</strong>).
+              </p>
+            `}
         ${this._warn ? html`<p class="warn">${this._warn}</p>` : null}
 
-        ${this._layouts.length > 1
+        ${!this.embedMode && this._layouts.length > 1
           ? html`
               <label class="layout-pick">
                 Layout
@@ -396,26 +470,32 @@ export class WledViewPaint extends BasePoweredElement {
           : !hasLayout
             ? html`
                 <p class="hint warn-layout">
-                  No layout saved — open <strong>Layout</strong> and save a fixture path
-                  first.
+                  No layout saved —
+                  ${this.embedMode
+                    ? html`open <strong>Studio → Layout</strong> first.`
+                    : html`open <strong>Layout</strong> and save a fixture path first.`}
                 </p>
               `
             : null}
 
-        <div class="layout-canvas">
-          <wled-geometry-preview
-            paintMode
-            .externalLive=${!this._brushIsEffect()}
-            .paintLivePreview=${this._brushIsEffect()}
-            .connection=${this.connection}
-            .controllerId=${this.controllerId}
-            .layoutId=${this._layoutId}
-            .fixtureId=${this._fixtureId}
-            .pixelCount=${this._pixelCount}
-            .paintBrushSize=${this._brushSize}
-            @paint-stroke=${this._onPaintStroke}
-          ></wled-geometry-preview>
-        </div>
+        ${this.embedMode
+          ? null
+          : html`
+              <div class="layout-canvas">
+                <wled-geometry-preview
+                  paintMode
+                  .externalLive=${!this._brushIsEffect()}
+                  .paintLivePreview=${this._brushIsEffect()}
+                  .connection=${this.connection}
+                  .controllerId=${this.controllerId}
+                  .layoutId=${this._layoutId}
+                  .fixtureId=${this._fixtureId}
+                  .pixelCount=${this._pixelCount}
+                  .paintBrushSize=${this._brushSize}
+                  @paint-stroke=${this._onPaintStroke}
+                ></wled-geometry-preview>
+              </div>
+            `}
 
         <div class="settings-grid">
           <wled-paint-settings
@@ -471,6 +551,7 @@ export class WledViewPaint extends BasePoweredElement {
               .value=${String(this._brushSize)}
               @input=${(e: Event) => {
                 this._brushSize = parseInt((e.target as HTMLInputElement).value, 10);
+                this._emitPaintConfig();
               }}
             />
           </label>
@@ -494,6 +575,19 @@ export class WledViewPaint extends BasePoweredElement {
         display: flex;
         flex-direction: column;
         gap: 12px;
+      }
+      .paint.compact {
+        gap: 8px;
+      }
+      .paint.compact .settings-grid {
+        grid-template-columns: 1fr;
+      }
+      .paint.compact .tools {
+        gap: 8px;
+      }
+      .paint.compact .tools button {
+        font-size: 0.82rem;
+        padding: 6px 10px;
       }
       .lead {
         margin: 0;

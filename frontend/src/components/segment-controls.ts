@@ -53,6 +53,8 @@ export class WledSegmentControls extends BasePoweredElement {
   @property({ attribute: false }) override hass?: HomeAssistant;
   @property() controllerId = "";
   @property({ type: Boolean }) compact = false;
+  /** Apply color/effects to every segment (Govee “Whole” mode). */
+  @property({ type: Boolean }) wholeMode = false;
   @property({ type: Number }) selectedSegId = -1;
 
   @state() private _loading = true;
@@ -160,6 +162,10 @@ export class WledSegmentControls extends BasePoweredElement {
         this._editIds = mergedEffectTargetIds(this._segments, true);
         this._segId = this._editIds[0] ?? 0;
       }
+      if (this.wholeMode && this._segments.length) {
+        this._editIds = this._segments.map((s) => s.id);
+        this._segId = this._segments[0].id;
+      }
     } catch (err) {
       this._error = formatHaError(err);
     } finally {
@@ -266,6 +272,9 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _targetIds(): number[] {
+    if (this.wholeMode && this._segments.length) {
+      return this._segments.map((s) => s.id);
+    }
     if (this._mergeActive) {
       const ids = mergedEffectTargetIds(this._segments, true);
       return ids.length ? ids : [0];
@@ -422,7 +431,10 @@ export class WledSegmentControls extends BasePoweredElement {
         ${this._toast
           ? html`<p class="toast" role="status">${this._toast}</p>`
           : null}
-        ${this.connection && this.controllerId
+        ${this.wholeMode
+          ? html`<p class="seg-hint whole">Whole strip — color and effects apply to all segments.</p>`
+          : null}
+        ${!this.wholeMode && this.connection && this.controllerId
           ? html`
               <wled-effect-merge-toggle
                 .connection=${this.connection}
@@ -434,10 +446,12 @@ export class WledSegmentControls extends BasePoweredElement {
               ></wled-effect-merge-toggle>
             `
           : null}
-        ${this._mergeActive
-          ? html`<p class="seg-hint">Merge active — effects apply to the combined segment.</p>`
-          : html`<p class="seg-hint">Tap segments to toggle editing — changes apply to all highlighted segments.</p>`}
-        ${this._mergeActive
+        ${this.wholeMode
+          ? null
+          : this._mergeActive
+            ? html`<p class="seg-hint">Merge active — effects apply to the combined segment.</p>`
+            : html`<p class="seg-hint">Tap segments to toggle editing — changes apply to all highlighted segments.</p>`}
+        ${this.wholeMode || this._mergeActive
           ? null
           : html`
         <div class="seg-bar" role="group" aria-label="Segments">

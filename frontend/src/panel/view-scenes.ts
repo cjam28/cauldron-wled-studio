@@ -29,6 +29,7 @@ export const VIEW_SCENES_TAG = "wled-view-scenes";
 export class WledViewScenes extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
+  @property({ type: Boolean }) compact = false;
 
   @state() private _scenes: SceneRecord[] = [];
   @state() private _status = "Loading scenes…";
@@ -106,15 +107,21 @@ export class WledViewScenes extends BasePoweredElement {
   }
 
   protected override render() {
+    const compact = this.compact;
     return html`
-      <div class="wrap">
+      <div class="wrap ${compact ? "compact" : ""}">
         <header class="head">
-          <div>
-            <h2>Scenes</h2>
-            <p class="hint">
-              Apply uses WLED crossfade (<code>tt</code>) on the device — one POST, no client tweening.
-            </p>
-          </div>
+          ${compact
+            ? html`<span class="card-label">Scenes</span>`
+            : html`
+                <div>
+                  <h2>Scenes</h2>
+                  <p class="hint">
+                    Apply uses WLED crossfade (<code>tt</code>) on the device — one POST, no
+                    client tweening.
+                  </p>
+                </div>
+              `}
           <div class="actions">
             <input
               class="name-in"
@@ -132,7 +139,7 @@ export class WledViewScenes extends BasePoweredElement {
               ?disabled=${this._busy || !this._captureName.trim()}
               @click=${() => this._capture()}
             >
-              Save current look
+              ${compact ? "Save" : "Save current look"}
             </button>
           </div>
         </header>
@@ -144,7 +151,7 @@ export class WledViewScenes extends BasePoweredElement {
           ? html`<p class="toast" role="status">${this._toast}</p>`
           : null}
 
-        ${this._segments.length
+        ${!compact && this._segments.length
           ? html`
               <wled-segment-bar
                 .segments=${this._segments}
@@ -333,6 +340,32 @@ export class WledViewScenes extends BasePoweredElement {
     css`
       .wrap {
         max-width: 960px;
+      }
+      .wrap.compact {
+        max-width: none;
+      }
+      .wrap.compact .head {
+        margin-bottom: 8px;
+      }
+      .wrap.compact .card-label {
+        font-weight: 600;
+        font-size: 0.85rem;
+      }
+      .wrap.compact .name-in {
+        min-width: 6rem;
+        padding: 6px 8px;
+        font-size: 0.85rem;
+      }
+      .wrap.compact .primary {
+        padding: 6px 10px;
+        font-size: 0.85rem;
+      }
+      .wrap.compact .grid {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 8px;
+      }
+      .wrap.compact .tile-main {
+        padding: 10px 8px;
       }
       .head {
         display: flex;

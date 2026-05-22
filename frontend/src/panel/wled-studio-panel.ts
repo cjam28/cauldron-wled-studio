@@ -17,6 +17,7 @@ import "./view-settings.js";
 import "./view-audio.js";
 import "./view-voice.js";
 import "./view-schedules.js";
+import "./view-firmware.js";
 import { listControllers, type ControllerInfo } from "../api/live-stream.js";
 
 export const PANEL_TAG = "wled-studio-panel";
@@ -28,6 +29,7 @@ type StudioView =
   | "effects"
   | "paint"
   | "segments"
+  | "firmware"
   | "audio"
   | "voice"
   | "schedules"
@@ -119,6 +121,7 @@ export class WledStudioPanel extends BasePoweredElement {
             ${this._navItem("effects", "Effects", "mdi:auto-fix")}
             ${this._navItem("paint", "Paint", "mdi:brush")}
             ${this._navItem("segments", "Segments", "mdi:vector-line")}
+            ${this._navItem("firmware", "Controller", "mdi:web")}
             ${this._navItem("audio", "Audio", "mdi:music")}
             ${this._navItem("voice", "Voice", "mdi:microphone-message")}
             ${this._navItem("schedules", "Schedules", "mdi:clock-outline")}
@@ -318,6 +321,15 @@ export class WledStudioPanel extends BasePoweredElement {
     if (this._view === "paint" && conn && id) {
       return html`
         <wled-view-paint .connection=${conn} .controllerId=${id}></wled-view-paint>
+      `;
+    }
+    if (this._view === "firmware" && id) {
+      const ctrl = this._controllers.find((c) => c.entry_id === id);
+      return html`
+        <wled-view-firmware
+          .host=${ctrl?.host ?? ""}
+          .controllerTitle=${ctrl?.title ?? id}
+        ></wled-view-firmware>
       `;
     }
     if (this._view === "audio" && id) {

@@ -8,8 +8,11 @@ import { listControllers, subscribeLive } from "../api/live-stream.js";
 import { applyState, fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
+import type { WledViewPaint } from "../panel/view-paint.js";
 import "../components/geometry-preview.js";
 import "../components/segment-controls.js";
+import "../panel/view-scenes.js";
+import "../panel/view-paint.js";
 
 export const CARD_TAG = "wled-studio-card";
 
@@ -23,6 +26,15 @@ export interface WledStudioCardConfig {
   show_scenes?: boolean;
 }
 
+type CardModeTab = "solid" | "segments" | "scenes" | "paint";
+
+const MODE_TABS: Array<{ id: CardModeTab; label: string; icon: string }> = [
+  { id: "solid", label: "Solid", icon: "mdi:palette" },
+  { id: "segments", label: "Segments", icon: "mdi:vector-line" },
+  { id: "scenes", label: "Scenes", icon: "mdi:palette-swatch" },
+  { id: "paint", label: "Paint", icon: "mdi:brush" },
+];
+
 @safeCustomElement(CARD_TAG)
 export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @property({ attribute: false }) public config?: WledStudioCardConfig;
@@ -34,9 +46,11 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @state() private _hint = "";
   @state() private _layoutId = "";
   @state() private _fixtureId = "";
+  @state() private _cardTab: CardModeTab = "solid";
 
   @query("wled-geometry-preview") private _preview?: WledGeometryPreview;
   @query("wled-segment-controls") private _segmentControls?: import("../components/segment-controls.js").WledSegmentControls;
+  @query("wled-view-paint") private _paintPanel?: WledViewPaint;
 
   @state() private _selectedSegId = -1;
   /** Optimistic global brightness (0–100) while dragging until HA state catches up. */
@@ -56,7 +70,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   public getCardSize(): number {
-    return 6;
+    return 8;
   }
 
   public static getConfigElement(): HTMLElement {
@@ -80,6 +94,14 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         this._globalBriPct = null;
       }
     }
+    if (changed.has("_cardTab")) {
+      void this._onCardTabChanged(
+        changed.get("_cardTab") as CardModeTab | undefined
+      );
+    }
+    if (changed.has("_cardTab") || changed.has("_paintPanel")) {
+      this._syncPaintPreview();
+    }
     if (changed.has("config")) {
       this._bindConnectionReady();
       void this._bootstrap(true);
@@ -89,6 +111,39 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       this._bindConnectionReady();
       void this._bootstrap();
     }
+  }
+
+  private async _onCardTabChanged(prev: CardModeTab | undefined): Promise<void> {
+    if (prev === "paint" && this._cardTab !== "paint") {
+      await this._paintPanel?.cancelLiveIfActive();
+    }
+    this._syncPaintPreview();
+  }
+
+  private _syncPaintPreview(): void {
+    const paintActive = this._cardTab === "paint";
+    if (this._preview) {
+      this._preview.paintMode = paintActive;
+      if (paintActive && this._paintPanel) {
+        this._preview.paintBrushSize = this._paintPanel.brushSize;
+        this._preview.externalLive = this._paintPanel.paintExternalLive;
+        this._preview.paintLivePreview = this._paintPanel.paintLivePreview;
+        this._paintPanel.bindExternalPreview(this._preview);
+      }
+    }
+  }
+
+  private _onPaintStroke(ev: CustomEvent<{ leds: number[] }>): void {
+    this._paintPanel?.handleExternalPaintStroke(ev);
+  }
+
+  private _onPaintConfigChange(): void {
+    this._syncPaintPreview();
+  }
+
+  private _selectCardTab(tab: CardModeTab): void {
+    if (tab === this._cardTab) return;
+    this._cardTab = tab;
   }
 
   protected override onPoweredConnect(): void {
@@ -102,6 +157,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     this._offConnReady = undefined;
     this._unsubLive?.();
     this._unsubLive = undefined;
+    void this._paintPanel?.cancelLiveIfActive();
   }
 
   private _bindConnectionReady(): void {
@@ -250,6 +306,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   private _onStripSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
+    if (this._cardTab !== "segments") return;
     this._selectedSegId = ev.detail.segmentId;
     this._segmentControls?.selectSegment(ev.detail.segmentId);
   }
@@ -323,10 +380,94 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     this.hass.callService("light", "toggle", { entity_id: this._masterEntity });
   }
 
+  private _renderModeTabs(): import("lit").TemplateResult {
+    return html`
+      <div class="mode-tabs" role="tablist" aria-label="Control mode">
+        ${MODE_TABS.map(
+          (t) => html`
+            <button
+              type="button"
+              role="tab"
+              class="mode-tab ${this._cardTab === t.id ? "active" : ""}"
+              aria-selected=${this._cardTab === t.id ? "true" : "false"}
+              @click=${() => this._selectCardTab(t.id)}
+            >
+              <ha-icon .icon=${t.icon}></ha-icon>
+              <span>${t.label}</span>
+            </button>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private _renderTabPanel(): import("lit").TemplateResult | null {
+    if (!this._controllerId || !this.hass?.connection) return null;
+    const conn = this.hass.connection;
+    const hass = this.hass;
+
+    switch (this._cardTab) {
+      case "solid":
+        return html`
+          <wled-segment-controls
+            class="tab-panel"
+            .hass=${hass}
+            .connection=${conn}
+            .controllerId=${this._controllerId}
+            wholeMode
+            compact
+          ></wled-segment-controls>
+        `;
+      case "segments":
+        return html`
+          <wled-segment-controls
+            class="tab-panel"
+            .hass=${hass}
+            .connection=${conn}
+            .controllerId=${this._controllerId}
+            .selectedSegId=${this._selectedSegId}
+            compact
+            @segment-change=${this._onSegmentChange}
+          ></wled-segment-controls>
+        `;
+      case "scenes":
+        return html`
+          <wled-view-scenes
+            class="tab-panel"
+            .connection=${conn}
+            .controllerId=${this._controllerId}
+            compact
+          ></wled-view-scenes>
+        `;
+      case "paint":
+        return html`
+          <wled-view-paint
+            class="tab-panel"
+            embed-mode
+            .connection=${conn}
+            .hass=${hass}
+            .controllerId=${this._controllerId}
+            .embedLayoutId=${this._layoutId}
+            .embedFixtureId=${this._fixtureId}
+            .embedPixelCount=${this._pixelCount}
+            @paint-config-change=${this._onPaintConfigChange}
+          ></wled-view-paint>
+        `;
+      default:
+        return null;
+    }
+  }
+
   protected override render() {
     const height = this.config?.height ?? 200;
     const remote = this.remote.state;
     const previewStyle = `--wled-preview-height: ${height}px`;
+    const paintTab = this._cardTab === "paint";
+    const paintBrush = this._paintPanel?.brushSize ?? 6;
+    const paintExternalLive = paintTab
+      ? (this._paintPanel?.paintExternalLive ?? true)
+      : true;
+    const paintLivePreview = paintTab && (this._paintPanel?.paintLivePreview ?? false);
 
     return html`
       <div class="card" role="region" aria-label="WLED Studio card">
@@ -346,24 +487,8 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           </button>
         </header>
 
-        <wled-geometry-preview
-          class="layout-preview"
-          style=${previewStyle}
-          compact
-          externalLive
-          .heightPx=${height}
-          .connection=${this.hass?.connection}
-          .controllerId=${this._controllerId}
-          .layoutId=${this._layoutId}
-          .fixtureId=${this._fixtureId}
-          .pixelCount=${this._pixelCount}
-          .segments=${this._segments}
-          .selectedSegId=${this._selectedSegId}
-          @segment-select=${this._onStripSegmentSelect}
-        ></wled-geometry-preview>
-
         <div class="controls">
-          <label class="bri-label" for="global-brightness">Global brightness</label>
+          <label class="bri-label" for="global-brightness">Brightness</label>
           <ha-slider
             id="global-brightness"
             min="0"
@@ -376,19 +501,30 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
           ></ha-slider>
         </div>
 
-        ${this._controllerId && this.hass?.connection
-          ? html`
-              <wled-segment-controls
-                class="segment-block"
-                .hass=${this.hass}
-                .connection=${this.hass.connection}
-                .controllerId=${this._controllerId}
-                .selectedSegId=${this._selectedSegId}
-                compact
-                @segment-change=${this._onSegmentChange}
-              ></wled-segment-controls>
-            `
-          : null}
+        ${this._renderModeTabs()}
+
+        <wled-geometry-preview
+          class="layout-preview"
+          style=${previewStyle}
+          compact
+          externalLive
+          .heightPx=${height}
+          .connection=${this.hass?.connection}
+          .controllerId=${this._controllerId}
+          .layoutId=${this._layoutId}
+          .fixtureId=${this._fixtureId}
+          .pixelCount=${this._pixelCount}
+          .segments=${this._segments}
+          .selectedSegId=${paintTab ? -1 : this._selectedSegId}
+          .paintMode=${paintTab}
+          .paintBrushSize=${paintBrush}
+          .paintLivePreview=${paintLivePreview}
+          .externalLive=${paintExternalLive}
+          @segment-select=${this._onStripSegmentSelect}
+          @paint-stroke=${this._onPaintStroke}
+        ></wled-geometry-preview>
+
+        <div class="tab-body">${this._renderTabPanel()}</div>
 
         <button
           class="studio-link"
@@ -452,7 +588,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         margin-bottom: 4px;
       }
       .controls {
-        margin: 10px 0;
+        margin: 0 0 10px;
       }
       .bri-label {
         display: block;
@@ -460,10 +596,44 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         opacity: 0.85;
         margin-bottom: 4px;
       }
-      .segment-block {
+      .mode-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .mode-tab {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 8px 4px;
+        border: none;
+        border-radius: 10px;
+        background: var(--secondary-background-color);
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.68rem;
+        line-height: 1.2;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .mode-tab ha-icon {
+        --mdc-icon-size: 22px;
+      }
+      .mode-tab.active {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+      }
+      .tab-body {
+        max-height: min(48vh, 380px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
         margin: 8px 0 4px;
         border-top: 1px solid var(--divider-color, rgba(128, 128, 128, 0.3));
         padding-top: 10px;
+      }
+      .tab-panel {
+        display: block;
       }
       .studio-link {
         width: 100%;
@@ -473,6 +643,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         cursor: pointer;
+        margin-top: 8px;
       }
       .hint {
         font-size: 0.8rem;
@@ -481,13 +652,6 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       }
       .layout-hint {
         font-style: italic;
-      }
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
       }
     `,
   ];
