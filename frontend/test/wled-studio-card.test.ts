@@ -29,6 +29,48 @@ function dispatchTabKey(el: WledStudioCard, key: string): void {
   );
 }
 
+function dispatchTabSwipe(el: WledStudioCard, deltaX: number): void {
+  const panel = el.shadowRoot?.querySelector(".tab-body");
+  if (!panel) throw new Error("tab-body missing");
+  const startX = 200;
+  const startY = 300;
+  panel.dispatchEvent(
+    new TouchEvent("touchstart", {
+      bubbles: true,
+      cancelable: true,
+      touches: [new Touch({ identifier: 0, target: panel, clientX: startX, clientY: startY })],
+    })
+  );
+  panel.dispatchEvent(
+    new TouchEvent("touchmove", {
+      bubbles: true,
+      cancelable: true,
+      touches: [
+        new Touch({
+          identifier: 0,
+          target: panel,
+          clientX: startX + deltaX,
+          clientY: startY,
+        }),
+      ],
+    })
+  );
+  panel.dispatchEvent(
+    new TouchEvent("touchend", {
+      bubbles: true,
+      cancelable: true,
+      changedTouches: [
+        new Touch({
+          identifier: 0,
+          target: panel,
+          clientX: startX + deltaX,
+          clientY: startY,
+        }),
+      ],
+    })
+  );
+}
+
 describe("WledStudioCard mode tabs", () => {
   let el: WledStudioCard;
 
@@ -57,6 +99,17 @@ describe("WledStudioCard mode tabs", () => {
     el.setConfig({ type: "custom:wled-studio-card", show_scenes: false });
     await el.updateComplete;
     expect(tabLabels(el)).toEqual(["Color", "Effects", "Segments", "Paint"]);
+  });
+
+  it("hides optional tabs when show_* flags are false", async () => {
+    el.setConfig({
+      type: "custom:wled-studio-card",
+      show_effects: false,
+      show_paint: false,
+      show_segments: false,
+    });
+    await el.updateComplete;
+    expect(tabLabels(el)).toEqual(["Color", "Scenes"]);
   });
 
   it("ArrowRight selects next tab and moves focus", async () => {
@@ -88,6 +141,38 @@ describe("WledStudioCard mode tabs", () => {
     await flushRaf();
     expect(el["_cardTab"]).toBe("paint");
     expect(activeTabId(el)).toBe("wled-card-tab-paint");
+  });
+
+  it("swipe left on tab panel selects next tab", async () => {
+    await el.updateComplete;
+    expect(el["_cardTab"]).toBe("color");
+
+    dispatchTabSwipe(el, -60);
+    await el.updateComplete;
+
+    expect(el["_cardTab"]).toBe("effects");
+  });
+
+  it("swipe right on tab panel selects previous tab", async () => {
+    await el.updateComplete;
+    el["_cardTab"] = "effects";
+    await el.updateComplete;
+
+    dispatchTabSwipe(el, 60);
+    await el.updateComplete;
+
+    expect(el["_cardTab"]).toBe("color");
+  });
+
+  it("ignores swipe shorter than 50px", async () => {
+    await el.updateComplete;
+    el["_cardTab"] = "color";
+    await el.updateComplete;
+
+    dispatchTabSwipe(el, -30);
+    await el.updateComplete;
+
+    expect(el["_cardTab"]).toBe("color");
   });
 
   it("renders mode tabs when Graphite-like document theme vars are set", async () => {

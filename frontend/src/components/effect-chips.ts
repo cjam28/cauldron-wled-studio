@@ -118,7 +118,8 @@ export class WledEffectChips extends BasePoweredElement {
                       <button
                         type="button"
                         class="recent-chip ${active ? "active" : ""}"
-                        aria-pressed=${active}
+                        aria-label=${`Apply effect ${name}`}
+                        aria-pressed=${active ? "true" : "false"}
                         @click=${() => this._pick(id, solidId)}
                       >
                         ${name}
@@ -141,7 +142,7 @@ export class WledEffectChips extends BasePoweredElement {
                 type="button"
                 class="cat ${this._category === cat ? "active" : ""}"
                 role="tab"
-                aria-selected=${this._category === cat}
+                aria-selected=${this._category === cat ? "true" : "false"}
                 @click=${() => {
                   this._category = cat;
                 }}
@@ -175,8 +176,8 @@ export class WledEffectChips extends BasePoweredElement {
                   return html`
                     <wled-effect-tile
                       class="chip-tile ${active ? "active" : ""}"
-                      role="option"
-                      aria-selected=${active}
+                      listbox-option
+                      .selected=${active}
                       .fxId=${id}
                       .thumbUrl=${thumbUrl}
                       .label=${tileLabel}
@@ -189,7 +190,8 @@ export class WledEffectChips extends BasePoweredElement {
                     type="button"
                     class="chip ${active ? "active" : ""}"
                     role="option"
-                    aria-selected=${active}
+                    aria-selected=${active ? "true" : "false"}
+                    aria-label=${tileLabel}
                     @click=${() => this._pick(id, solidId)}
                   >
                     ${name}
@@ -256,7 +258,7 @@ export class WledEffectChips extends BasePoweredElement {
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        opacity: 0.65;
+        color: var(--wled-text-muted);
       }
       .recent-row {
         display: flex;
@@ -363,13 +365,13 @@ export class WledEffectChips extends BasePoweredElement {
       .empty {
         grid-column: 1 / -1;
         margin: 0;
-        opacity: 0.7;
+        color: var(--wled-text-muted);
         font-size: 0.85rem;
       }
       .count {
         margin: 0;
         font-size: 0.72rem;
-        opacity: 0.55;
+        color: var(--wled-text-muted);
       }
     `,
   ];

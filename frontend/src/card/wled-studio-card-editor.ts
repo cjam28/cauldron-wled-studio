@@ -10,6 +10,15 @@ import {
 
 export const CARD_EDITOR_TAG = "wled-studio-card-editor";
 
+type TabToggleKey = "show_scenes" | "show_paint" | "show_segments" | "show_effects";
+
+const TAB_TOGGLES: Array<{ key: TabToggleKey; label: string }> = [
+  { key: "show_effects", label: "Show Effects tab" },
+  { key: "show_scenes", label: "Show Scenes tab" },
+  { key: "show_segments", label: "Show Segments tab" },
+  { key: "show_paint", label: "Show Paint tab" },
+];
+
 @safeCustomElement(CARD_EDITOR_TAG)
 export class WledStudioCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
@@ -44,11 +53,21 @@ export class WledStudioCardEditor extends LitElement {
           .value=${config.layout_id ?? ""}
           @value-changed=${this._onLayoutId}
         ></ha-textfield>
-        <ha-switch
-          .checked=${config.show_scenes !== false}
-          @change=${this._onShowScenes}
-        ></ha-switch>
-        <span>Show Scenes tab</span>
+        <fieldset class="tabs">
+          <legend>Visible tabs</legend>
+          ${TAB_TOGGLES.map(
+            ({ key, label }) => html`
+              <label class="toggle">
+                <input
+                  type="checkbox"
+                  .checked=${config[key] !== false}
+                  @change=${(ev: Event) => this._onTabToggle(key, ev)}
+                />
+                <span>${label}</span>
+              </label>
+            `
+          )}
+        </fieldset>
       </div>
     `;
   }
@@ -76,10 +95,9 @@ export class WledStudioCardEditor extends LitElement {
     this._fire(next);
   }
 
-  private _onShowScenes(ev: Event): void {
+  private _onTabToggle(key: TabToggleKey, ev: Event): void {
     const checked = (ev.target as HTMLInputElement).checked;
-    const next = { ...this._config, show_scenes: checked };
-    this._fire(next);
+    this._fire({ ...this._config, [key]: checked });
   }
 
   private _fire(config: WledStudioCardConfig): void {
@@ -99,6 +117,32 @@ export class WledStudioCardEditor extends LitElement {
       flex-direction: column;
       gap: 12px;
       padding: 16px;
+    }
+    .tabs {
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 8px;
+      padding: 12px;
+      margin: 0;
+    }
+    .tabs legend {
+      padding: 0 4px;
+      font-size: 0.9rem;
+    }
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .toggle:first-of-type {
+      margin-top: 4px;
+    }
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
     }
   `;
 }

@@ -5,6 +5,7 @@ import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-eleme
 import { isWledStudioStale } from "../utils/build-stamp.js";
 import "../components/segment-controls.js";
 import "../components/studio-live-preview.js";
+import "../components/wled-toast-host.js";
 import type { WledStudioLivePreview } from "../components/studio-live-preview.js";
 import type { WledViewEffects } from "./view-effects.js";
 import type { WledViewScenes } from "./view-scenes.js";
@@ -247,6 +248,7 @@ export class WledStudioPanel extends BasePoweredElement {
             <button
               type="button"
               class="more-toggle"
+              aria-label="More sections"
               aria-expanded=${this._moreExpanded ? "true" : "false"}
               @click=${() => this._toggleMore()}
             >
@@ -320,6 +322,7 @@ export class WledStudioPanel extends BasePoweredElement {
           </section>
         </main>
       </div>
+      <wled-toast-host></wled-toast-host>
     `;
   }
 
@@ -328,6 +331,7 @@ export class WledStudioPanel extends BasePoweredElement {
     return html`
       <button
         class="nav ${active ? "active" : ""}"
+        aria-label=${label}
         aria-current=${active ? "page" : "false"}
         @click=${() => this._selectView(view)}
       >
@@ -343,6 +347,7 @@ export class WledStudioPanel extends BasePoweredElement {
       <button
         class="primary-tab ${active ? "active" : ""}"
         role="tab"
+        aria-label=${label}
         aria-selected=${active ? "true" : "false"}
         @click=${() => this._selectView(view)}
       >
@@ -403,7 +408,9 @@ export class WledStudioPanel extends BasePoweredElement {
 
   /** Call after scene/effect apply so segment dividers stay in sync. */
   refreshLivePreview(): void {
-    void this._livePreview()?.refreshSegments();
+    const preview = this._livePreview();
+    preview?.pulseApply();
+    void preview?.refreshSegments();
   }
 
   private _masterEntityForController(): string {
@@ -501,7 +508,11 @@ export class WledStudioPanel extends BasePoweredElement {
     }
     if (this._view === "voice" && conn && id) {
       return html`
-        <wled-view-voice .connection=${conn} .controllerId=${id}></wled-view-voice>
+        <wled-view-voice
+          .connection=${conn}
+          .controllerId=${id}
+          .masterEntity=${this._masterEntityForController()}
+        ></wled-view-voice>
       `;
     }
     if (this._view === "schedules" && conn && id) {

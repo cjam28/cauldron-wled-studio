@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { showToast } from "../utils/toast.js";
 import {
   applyState,
   buildSegmentPatchForIds,
@@ -20,6 +21,7 @@ import {
 import "../components/effect-chips.js";
 import "../components/effect-merge-toggle.js";
 import "../components/segment-bar.js";
+import "../components/wled-skeleton.js";
 
 export const VIEW_EFFECTS_TAG = "wled-view-effects";
 
@@ -46,7 +48,6 @@ export class WledViewEffects extends BasePoweredElement {
   @state() private _focusSegId = 0;
   @state() private _filter = "";
   @state() private _status = "Loading effects…";
-  @state() private _toast = "";
   @state() private _meta?: EffectMeta;
   @state() private _mergeActive = false;
 
@@ -150,6 +151,21 @@ export class WledViewEffects extends BasePoweredElement {
     void this._load();
   }
 
+  private _isLoading(): boolean {
+    return this._status === "Loading effects…";
+  }
+
+  private _renderSkeleton() {
+    return html`
+      <div class="skeleton-load" aria-busy="true" aria-label="Loading effects">
+        <wled-skeleton height="2rem" width="min(100%, 360px)"></wled-skeleton>
+        <div class="sk-grid">
+          ${Array.from({ length: 6 }, () => html`<wled-skeleton height="72px"></wled-skeleton>`)}
+        </div>
+      </div>
+    `;
+  }
+
   protected override render() {
     const snap = this._snapshot;
     const seg = this._activeSeg();
@@ -181,8 +197,11 @@ export class WledViewEffects extends BasePoweredElement {
                 </p>
               </details>
             `}
-        ${this._status ? html`<p>${this._status}</p>` : null}
-        ${this._toast ? html`<p class="toast" role="status">${this._toast}</p>` : null}
+        ${this._isLoading()
+          ? this._renderSkeleton()
+          : this._status
+            ? html`<p class="status">${this._status}</p>`
+            : null}
 
         ${this.connection && this.controllerId && !compact
           ? html`
@@ -292,12 +311,15 @@ export class WledViewEffects extends BasePoweredElement {
         Object.entries(this._snapshot.effects_by_name).find(
           ([, id]) => id === effectId
         )?.[0] ?? (toggledOff ? "Solid" : `#${effectId}`);
-      this._toast = toggledOff ? `Solid on ${targets.length} segment(s)` : `Applied ${name}`;
+      showToast(
+        this,
+        toggledOff ? `Solid on ${targets.length} segment(s)` : `Applied ${name}`
+      );
       this.dispatchEvent(
         new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })
       );
     } catch (err) {
-      this._toast = `Apply failed: ${(err as Error).message || "error"}`;
+      showToast(this, `Apply failed: ${(err as Error).message || "error"}`);
     }
   }
 
@@ -357,9 +379,19 @@ export class WledViewEffects extends BasePoweredElement {
         background: var(--card-background-color);
         color: inherit;
       }
-      .toast {
-        color: var(--primary-color);
+      .status {
         font-size: 0.9rem;
+        opacity: 0.85;
+      }
+      .skeleton-load {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sk-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
       }
       .sliders {
         display: grid;

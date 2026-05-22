@@ -4,6 +4,7 @@ import type { HomeAssistant } from "custom-card-helpers";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { showToast } from "../utils/toast.js";
 import {
   applyRgbwm,
   applyState,
@@ -32,6 +33,7 @@ import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
 import "./effect-merge-toggle.js";
 import "./preset-bar.js";
+import "./wled-skeleton.js";
 import type { PresetEntry } from "./preset-bar.js";
 import { readBrightness255, readEntityColor } from "../utils/ha-brightness.js";
 
@@ -73,12 +75,12 @@ export class WledSegmentControls extends BasePoweredElement {
   @state() private _effectFilter = "";
   @state() private _presets: PresetEntry[] = [];
   @state() private _colorSlot = 0;
-  @state() private _toast = "";
   @state() private _mergeActive = false;
 
   private _optimistic?: OptimisticApplyHandle;
   private _lastMasterBri255: number | null = null;
   private _lastHaColorKey = "";
+  private _dragSegId: number | null = null;
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
@@ -245,8 +247,10 @@ export class WledSegmentControls extends BasePoweredElement {
       ) {
         setMergeForEffectsActive(this.controllerId, false);
         this._mergeActive = false;
-        this._toast =
-          "Merge for effects was turned off — WLED is using a multi-segment layout.";
+        showToast(
+          this,
+          "Merge for effects was turned off — WLED is using a multi-segment layout."
+        );
       }
       if (this._mergeActive) {
         this._editIds = mergedEffectTargetIds(this._segments, true);
@@ -295,12 +299,7 @@ export class WledSegmentControls extends BasePoweredElement {
       this._segments = next;
     }
     if (message) {
-      this._toast = message;
-      this.requestUpdate();
-      window.setTimeout(() => {
-        this._toast = "";
-        this.requestUpdate();
-      }, 4000);
+      showToast(this, message);
     } else {
       this.requestUpdate();
     }
@@ -442,6 +441,45 @@ export class WledSegmentControls extends BasePoweredElement {
     );
   }
 
+  /** Visual-only reorder stub — WLED segment order API not wired yet. */
+  private _reorderSegmentsVisual(fromId: number, toId: number): void {
+    const fromIdx = this._segments.findIndex((s) => s.id === fromId);
+    const toIdx = this._segments.findIndex((s) => s.id === toId);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const next = [...this._segments];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    this._segments = next;
+  }
+
+  private _onSegDragStart(id: number, ev: DragEvent): void {
+    this._dragSegId = id;
+    ev.dataTransfer?.setData("text/plain", String(id));
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  private _onSegDragOver(id: number, ev: DragEvent): void {
+    ev.preventDefault();
+    if (ev.dataTransfer) {
+      ev.dataTransfer.dropEffect = "move";
+    }
+    void id;
+  }
+
+  private _onSegDrop(targetId: number, ev: DragEvent): void {
+    ev.preventDefault();
+    const fromId = this._dragSegId;
+    this._dragSegId = null;
+    if (fromId === null || fromId === targetId) return;
+    this._reorderSegmentsVisual(fromId, targetId);
+  }
+
+  private _onSegDragEnd(): void {
+    this._dragSegId = null;
+  }
+
   private async _onEffectSelect(ev: CustomEvent<{ effectId: number }>): Promise<void> {
     this._patchSeg({ fx: ev.detail.effectId });
     await this._refreshMeta();
@@ -485,8 +523,7 @@ export class WledSegmentControls extends BasePoweredElement {
       }
       this.requestUpdate();
     } catch (err) {
-      this._toast = err instanceof Error ? err.message : String(err);
-      this.requestUpdate();
+      showToast(this, err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -501,9 +538,22 @@ export class WledSegmentControls extends BasePoweredElement {
     await this._load();
   }
 
+  private _renderSkeleton() {
+    return html`
+      <div class="skeleton-load" aria-busy="true" aria-label="Loading segments">
+        <wled-skeleton height="2rem" width="100%"></wled-skeleton>
+        <wled-skeleton height="220px" width="min(100%, 280px)"></wled-skeleton>
+        <wled-skeleton height="1rem" width="70%"></wled-skeleton>
+        <div class="sk-grid">
+          ${Array.from({ length: 4 }, () => html`<wled-skeleton height="56px"></wled-skeleton>`)}
+        </div>
+      </div>
+    `;
+  }
+
   protected override render() {
     if (this._loading) {
-      return html`<p class="muted">Loading segments…</p>`;
+      return this._renderSkeleton();
     }
     if (this._error) {
       return html`<p class="err">${this._error}</p>`;
@@ -522,9 +572,6 @@ export class WledSegmentControls extends BasePoweredElement {
 
     return html`
       <div class="controls ${this.compact ? "compact" : ""}">
-        ${this._toast
-          ? html`<p class="toast" role="status">${this._toast}</p>`
-          : null}
         ${this.wholeMode
           ? html`<p class="seg-hint whole">Whole strip — color and effects apply to all segments.</p>`
           : null}
@@ -552,11 +599,25 @@ export class WledSegmentControls extends BasePoweredElement {
           ${this._segments.map(
             (s) => html`
               <button
-                class="seg-tab ${this._editIds.includes(s.id) ? "editing" : ""} ${s.id === this._segId ? "focus" : ""}"
+                class="seg-tab ${this._editIds.includes(s.id) ? "editing" : ""} ${s.id === this._segId ? "focus" : ""} ${this._dragSegId === s.id ? "dragging" : ""}"
                 aria-pressed=${this._editIds.includes(s.id)}
                 @click=${() => this._toggleSegEdit(s.id)}
+                @dragover=${(ev: DragEvent) => this._onSegDragOver(s.id, ev)}
+                @drop=${(ev: DragEvent) => this._onSegDrop(s.id, ev)}
               >
-                ${labelForSegment(s, this._snapshot?.segment_entities ?? [])}
+                <span
+                  class="seg-drag-handle"
+                  draggable="true"
+                  aria-hidden="true"
+                  title="Drag to reorder (preview only)"
+                  @dragstart=${(ev: DragEvent) => this._onSegDragStart(s.id, ev)}
+                  @dragend=${() => this._onSegDragEnd()}
+                  @click=${(ev: Event) => ev.stopPropagation()}
+                  @mousedown=${(ev: Event) => ev.stopPropagation()}
+                >
+                  <ha-icon icon="mdi:drag-vertical"></ha-icon>
+                </span>
+                <span class="seg-label">${labelForSegment(s, this._snapshot?.segment_entities ?? [])}</span>
               </button>
             `
           )}
@@ -688,6 +749,9 @@ export class WledSegmentControls extends BasePoweredElement {
         gap: 6px;
       }
       .seg-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
         border: 1px solid var(--divider-color, #555);
         border-radius: 8px;
         padding: 6px 10px;
@@ -695,6 +759,27 @@ export class WledSegmentControls extends BasePoweredElement {
         color: inherit;
         cursor: pointer;
         font-size: 0.8rem;
+      }
+      .seg-drag-handle {
+        display: inline-flex;
+        align-items: center;
+        cursor: grab;
+        opacity: 0.55;
+        touch-action: none;
+        line-height: 0;
+        padding: 0 2px 0 0;
+      }
+      .seg-drag-handle:active {
+        cursor: grabbing;
+      }
+      .seg-drag-handle ha-icon {
+        --mdc-icon-size: 16px;
+      }
+      .seg-tab.dragging {
+        opacity: 0.65;
+      }
+      .seg-label {
+        white-space: nowrap;
       }
       .seg-hint {
         margin: 0;
@@ -730,6 +815,16 @@ export class WledSegmentControls extends BasePoweredElement {
         opacity: 0.7;
         font-size: 0.85rem;
       }
+      .skeleton-load {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sk-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+      }
       .err {
         color: var(--error-color, #f44);
         font-size: 0.85rem;
@@ -754,11 +849,6 @@ export class WledSegmentControls extends BasePoweredElement {
       .slot.active {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
-      }
-      .toast {
-        font-size: 0.8rem;
-        color: var(--warning-color, orange);
-        margin: 0;
       }
       .bri-label {
         font-size: 0.75rem;

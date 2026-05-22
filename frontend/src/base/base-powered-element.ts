@@ -19,6 +19,28 @@ const baseInteractionStyles = css`
     outline: 2px solid var(--wled-accent);
     outline-offset: 2px;
   }
+
+  .primary {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--primary-color);
+    color: var(--text-primary-color, #fff);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: transform var(--wled-transition-fast);
+  }
+  .primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .primary:active:not(:disabled) {
+    transform: scale(0.97);
+  }
 `;
 
 /**

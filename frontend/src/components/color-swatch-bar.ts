@@ -26,6 +26,10 @@ export class WledColorSwatchBar extends BasePoweredElement {
   @state() private _editingId: string | null = null;
   @state() private _editName = "";
 
+  private _pressTimer: ReturnType<typeof setTimeout> | null = null;
+  private _pressSwatch: ColorSwatch | null = null;
+  private _suppressChipClick = false;
+
   protected override onPoweredConnect(): void {
     this._reload();
   }
@@ -106,14 +110,68 @@ export class WledColorSwatchBar extends BasePoweredElement {
     this._editingId = null;
   }
 
-  private _delete(id: string, ev: Event): void {
-    ev.stopPropagation();
+  private _delete(id: string, ev?: Event): void {
+    ev?.stopPropagation();
     removeColorSwatch(this.controllerId, id);
     if (this._editingId === id) this._editingId = null;
     this._reload();
     this.dispatchEvent(
       new CustomEvent("swatches-changed", { bubbles: true, composed: true })
     );
+  }
+
+  private _clearPressTimer(): void {
+    if (this._pressTimer !== null) {
+      clearTimeout(this._pressTimer);
+      this._pressTimer = null;
+    }
+    this._pressSwatch = null;
+  }
+
+  private _confirmDelete(s: ColorSwatch): void {
+    if (confirm(`Delete swatch "${s.name}"?`)) {
+      this._delete(s.id);
+    }
+    this._suppressChipClick = false;
+  }
+
+  private _onChipTouchStart(s: ColorSwatch): void {
+    this._clearPressTimer();
+    this._pressSwatch = s;
+    this._pressTimer = setTimeout(() => {
+      this._pressTimer = null;
+      this._suppressChipClick = true;
+      this._confirmDelete(s);
+    }, 500);
+  }
+
+  private _onChipTouchEnd(): void {
+    this._clearPressTimer();
+  }
+
+  private _onChipTouchMove(ev: TouchEvent): void {
+    if (!this._pressSwatch || ev.touches.length !== 1) return;
+    const touch = ev.touches[0];
+    const chip = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const pad = 12;
+    if (
+      touch.clientX < chip.left - pad ||
+      touch.clientX > chip.right + pad ||
+      touch.clientY < chip.top - pad ||
+      touch.clientY > chip.bottom + pad
+    ) {
+      this._clearPressTimer();
+    }
+  }
+
+  private _onChipClick(s: ColorSwatch, ev: Event): void {
+    if (this._suppressChipClick) {
+      this._suppressChipClick = false;
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    this._apply(s);
   }
 
   protected override render() {
@@ -203,7 +261,11 @@ export class WledColorSwatchBar extends BasePoweredElement {
                         class="chip"
                         title=${s.name}
                         style="background: ${this._swatchCss(s)}"
-                        @click=${() => this._apply(s)}
+                        @click=${(ev: Event) => this._onChipClick(s, ev)}
+                        @touchstart=${() => this._onChipTouchStart(s)}
+                        @touchend=${() => this._onChipTouchEnd()}
+                        @touchcancel=${() => this._onChipTouchEnd()}
+                        @touchmove=${(ev: TouchEvent) => this._onChipTouchMove(ev)}
                         aria-label=${`Apply ${s.name}`}
                       ></button>
                       <span class="chip-name">${s.name}</span>
@@ -220,7 +282,10 @@ export class WledColorSwatchBar extends BasePoweredElement {
                           type="button"
                           class="icon danger"
                           aria-label=${`Remove ${s.name}`}
-                          @click=${(ev: Event) => this._delete(s.id, ev)}
+                          @click=${(ev: Event) => {
+                            ev.stopPropagation();
+                            this._confirmDelete(s);
+                          }}
                         >
                           <ha-icon icon="mdi:close"></ha-icon>
                         </button>
@@ -254,7 +319,7 @@ export class WledColorSwatchBar extends BasePoweredElement {
         font-size: 0.75rem;
         font-weight: 600;
         letter-spacing: 0.02em;
-        opacity: 0.85;
+        color: var(--wled-text-muted);
       }
       .save-btn {
         display: inline-flex;
@@ -312,7 +377,7 @@ export class WledColorSwatchBar extends BasePoweredElement {
       .empty {
         margin: 0;
         font-size: 0.72rem;
-        opacity: 0.65;
+        color: var(--wled-text-muted);
       }
       .grid {
         display: flex;
@@ -360,8 +425,15 @@ export class WledColorSwatchBar extends BasePoweredElement {
         transition: opacity 0.15s ease;
       }
       .chip-wrap:hover .chip-actions,
-      .chip-wrap:focus-within .chip-actions {
+      .chip-wrap:focus-within .chip-actions,
+      .chip-wrap:active .chip-actions,
+      .chip-wrap.active .chip-actions {
         opacity: 1;
+      }
+      @media (hover: none) {
+        .chip-actions {
+          opacity: 1;
+        }
       }
       .icon {
         border: none;

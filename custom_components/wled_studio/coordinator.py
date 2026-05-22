@@ -78,15 +78,9 @@ class WledStudioCoordinator:
             isinstance(info.get("u"), dict)
             and "AudioReactive" in str(info.get("u"))
         )
-        audio_key = f"{DOMAIN}_audio_listener"
-        existing = self.hass.data.get(audio_key)
         if has_ar:
-            if existing is None:
-                self.audio_listener = AudioSyncListener(self.hass, self.entry_id)
-                await self.audio_listener.start()
-                self.hass.data[audio_key] = self.audio_listener
-            else:
-                self.audio_listener = existing
+            self.audio_listener = AudioSyncListener(self.hass, self.entry_id)
+            await self.audio_listener.start()
         _LOGGER.info(
             "WLED Studio ready entry=%s host=%s master=%s",
             self.entry_id,
@@ -352,11 +346,9 @@ class WledStudioCoordinator:
         if self.paint_session:
             await self.paint_session.stop()
             self.paint_session = None
-        audio_key = f"{DOMAIN}_audio_listener"
-        if self.audio_listener and self.hass.data.get(audio_key) is self.audio_listener:
+        if self.audio_listener is not None:
             await self.audio_listener.stop()
-            self.hass.data.pop(audio_key, None)
-        self.audio_listener = None
+            self.audio_listener = None
         await self.scene_store.async_flush()
         await shutdown_live_proxy(self.entry_id)
         if self.client is not None:

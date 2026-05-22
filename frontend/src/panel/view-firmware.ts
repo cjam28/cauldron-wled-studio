@@ -107,7 +107,7 @@ export class WledViewFirmware extends BasePoweredElement {
         ${url
           ? html`
               <div class="toolbar">
-                <a class="link" href=${url} target="_blank" rel="noopener noreferrer">
+                <a class="primary" href=${url} target="_blank" rel="noopener noreferrer">
                   <ha-icon icon="mdi:open-in-new"></ha-icon>
                   Open in new tab
                 </a>
@@ -177,7 +177,6 @@ export class WledViewFirmware extends BasePoweredElement {
         align-items: center;
         gap: 10px;
       }
-      .link,
       .ghost {
         display: inline-flex;
         align-items: center;
@@ -188,10 +187,6 @@ export class WledViewFirmware extends BasePoweredElement {
         cursor: pointer;
         text-decoration: none;
         color: inherit;
-      }
-      .link {
-        background: var(--primary-color);
-        color: var(--text-primary-color, #fff);
       }
       .ghost {
         border: 1px solid var(--divider-color);

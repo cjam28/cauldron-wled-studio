@@ -85,6 +85,7 @@ export class WledViewSettings extends BasePoweredElement {
           <div class="row">
             <button
               type="button"
+              class="primary"
               ?disabled=${this._capturing}
               @click=${() => this._recapture()}
             >

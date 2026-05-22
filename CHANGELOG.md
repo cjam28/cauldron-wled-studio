@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.1
+
+### UX polish
+- Toast host component with auto-dismiss; skeleton loaders for effects/scenes/segments
+- Tab fade transitions, scene-apply strip pulse, primary button press scale
+- Swipe-between-tabs on card; long-press swatch delete; segment drag handles (visual reorder)
+
+### Accessibility
+- ARIA labels on icon controls; effect grid listbox semantics; improved scrim contrast
+
+### Panel views
+- Audio: band labels, peak meter, empty-state CTA
+- Voice: entity copy buttons, Assist docs link
+- Schedules: fade progress bar; shared `.primary` buttons on settings/firmware
+- Card editor: tab visibility toggles (show_effects, show_scenes, show_segments, show_paint)
+
+### Backend
+- AudioSyncListener per config entry (fixes singleton unload bug)
+
+### Tests
+- 114 vitest, 58 pytest
+
 ## 0.11.0
 
 ### Design system

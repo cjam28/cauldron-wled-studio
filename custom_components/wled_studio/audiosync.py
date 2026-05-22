@@ -48,9 +48,10 @@ class AudioSyncListener:
         _LOGGER.info("AudioSync listener on UDP %s for %s", AUDIOSYNC_PORT, self.entry_id)
 
     async def stop(self) -> None:
-        if self._transport:
-            self._transport.close()
-            self._transport = None
+        transport = self._transport
+        self._transport = None
+        if transport is not None:
+            transport.close()
 
     def _on_packet(self, data: bytes) -> None:
         if len(data) < PACKET_SIZE:

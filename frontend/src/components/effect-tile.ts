@@ -11,6 +11,9 @@ export class WledEffectTile extends BasePoweredElement {
   @property() thumbUrl = "";
   @property() thumbUrlAnimated = "";
   @property() label = "";
+  /** When true, tile button participates in a parent listbox. */
+  @property({ type: Boolean, attribute: "listbox-option" }) listboxOption = false;
+  @property({ type: Boolean }) selected = false;
 
   @state() private _hover = false;
 
@@ -21,12 +24,15 @@ export class WledEffectTile extends BasePoweredElement {
     const restSrc = this.thumbUrl || animated;
     const src =
       this._hover && animated ? animated : restSrc;
+    const optionLabel = this.label || `Effect ${this.fxId}`;
 
     return html`
       <button
         class="tile"
         type="button"
-        aria-label=${this.label || `Effect ${this.fxId}`}
+        aria-label=${optionLabel}
+        role=${this.listboxOption ? "option" : undefined}
+        aria-selected=${this.listboxOption ? (this.selected ? "true" : "false") : undefined}
         @mouseenter=${() => {
           this._hover = true;
         }}

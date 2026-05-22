@@ -15,6 +15,7 @@ import "../components/segment-controls.js";
 import "../panel/view-effects.js";
 import "../panel/view-scenes.js";
 import "../panel/view-paint.js";
+import "../components/wled-toast-host.js";
 
 export const CARD_TAG = "wled-studio-card";
 
@@ -26,6 +27,9 @@ export interface WledStudioCardConfig {
   /** Saved layout id; defaults to first layout for the controller. */
   layout_id?: string;
   show_scenes?: boolean;
+  show_paint?: boolean;
+  show_segments?: boolean;
+  show_effects?: boolean;
 }
 
 type CardModeTab = "color" | "effects" | "scenes" | "segments" | "paint";
@@ -65,6 +69,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   private _bootstrapGen = 0;
   private _offConnReady?: () => void;
   private _bootstrapControllerKey = "";
+  private _tabTouchStartX = 0;
+  private _tabTouchStartY = 0;
+  private _tabSwiping = false;
 
   public setConfig(config: WledStudioCardConfig): void {
     if (!config.type?.startsWith("custom:")) {
@@ -90,10 +97,13 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   }
 
   private _visibleModeTabs(): Array<{ id: CardModeTab; label: string; icon: string }> {
-    if (this.config?.show_scenes === false) {
-      return MODE_TABS.filter((t) => t.id !== "scenes");
-    }
-    return MODE_TABS;
+    return MODE_TABS.filter((t) => {
+      if (t.id === "scenes" && this.config?.show_scenes === false) return false;
+      if (t.id === "paint" && this.config?.show_paint === false) return false;
+      if (t.id === "segments" && this.config?.show_segments === false) return false;
+      if (t.id === "effects" && this.config?.show_effects === false) return false;
+      return true;
+    });
   }
 
   private _tabId(tab: CardModeTab): string {
@@ -106,8 +116,9 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
-    if (this.config?.show_scenes === false && this._cardTab === "scenes") {
-      this._cardTab = "color";
+    const visibleTabs = this._visibleModeTabs().map((t) => t.id);
+    if (!visibleTabs.includes(this._cardTab)) {
+      this._cardTab = visibleTabs[0] ?? "color";
     }
     this._syncSegmentsFromControls();
     if (changed.has("hass") && this._globalBriPct !== null) {
@@ -175,6 +186,45 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   private _selectCardTab(tab: CardModeTab): void {
     if (tab === this._cardTab) return;
     this._cardTab = tab;
+  }
+
+  private _swipeTab(deltaX: number): void {
+    const tabs = this._visibleModeTabs();
+    const idx = tabs.findIndex((t) => t.id === this._cardTab);
+    if (idx < 0) return;
+    if (deltaX < 0 && idx < tabs.length - 1) {
+      this._selectCardTab(tabs[idx + 1].id);
+    } else if (deltaX > 0 && idx > 0) {
+      this._selectCardTab(tabs[idx - 1].id);
+    }
+  }
+
+  private _onTabPanelTouchStart(ev: TouchEvent): void {
+    if (ev.touches.length !== 1) return;
+    this._tabTouchStartX = ev.touches[0].clientX;
+    this._tabTouchStartY = ev.touches[0].clientY;
+    this._tabSwiping = false;
+  }
+
+  private _onTabPanelTouchMove(ev: TouchEvent): void {
+    if (ev.touches.length !== 1) return;
+    const dx = ev.touches[0].clientX - this._tabTouchStartX;
+    const dy = ev.touches[0].clientY - this._tabTouchStartY;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
+      this._tabSwiping = true;
+    }
+  }
+
+  private _onTabPanelTouchEnd(ev: TouchEvent): void {
+    if (!this._tabSwiping || ev.changedTouches.length !== 1) {
+      this._tabSwiping = false;
+      return;
+    }
+    const dx = ev.changedTouches[0].clientX - this._tabTouchStartX;
+    if (Math.abs(dx) >= 50) {
+      this._swipeTab(dx);
+    }
+    this._tabSwiping = false;
   }
 
   private _focusModeTab(tab: CardModeTab): void {
@@ -493,6 +543,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
               id=${this._tabId(t.id)}
               role="tab"
               class="mode-tab ${active ? "active" : ""}"
+              aria-label=${t.label}
               aria-selected=${active ? "true" : "false"}
               aria-controls=${this._panelId(t.id)}
               tabindex=${active ? "0" : "-1"}
@@ -673,7 +724,15 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
         ${this._renderModeTabs()}
 
-        <div class="tab-body">${this._renderTabPanel()}</div>
+        <div
+          class="tab-body"
+          @touchstart=${this._onTabPanelTouchStart}
+          @touchmove=${this._onTabPanelTouchMove}
+          @touchend=${this._onTabPanelTouchEnd}
+          @touchcancel=${() => {
+            this._tabSwiping = false;
+          }}
+        >${this._renderTabPanel()}</div>
 
         <div class="controls">
           <div class="bri-row">
@@ -708,6 +767,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
             </p>`
           : null}
       </div>
+      <wled-toast-host></wled-toast-host>
     `;
   }
 
@@ -823,6 +883,20 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       }
       .tab-panel-host {
         display: block;
+        animation: tab-fade-in var(--m-view-transition) ease;
+      }
+      @keyframes tab-fade-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tab-panel-host {
+          animation: none;
+        }
       }
       .tab-panel {
         display: block;

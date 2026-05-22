@@ -79,6 +79,10 @@ export class WledStudioLivePreview extends BasePoweredElement {
     this.addUnsub(() => this._unsubLive?.());
   }
 
+  pulseApply(): void {
+    this._preview()?.pulseApply();
+  }
+
   /** Refresh segment boundaries after apply (scenes/effects). */
   async refreshSegments(): Promise<void> {
     if (!this.connection || !this.controllerId) return;

@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
+import { showToast } from "../utils/toast.js";
 import {
   sceneApply,
   sceneCapture,
@@ -25,6 +26,7 @@ import {
 } from "../utils/scene-gradient.js";
 import "../components/segment-bar.js";
 import "../components/recent-scenes-row.js";
+import "../components/wled-skeleton.js";
 import type { WledRecentScenesRow } from "../components/recent-scenes-row.js";
 
 export const VIEW_SCENES_TAG = "wled-view-scenes";
@@ -38,7 +40,6 @@ export class WledViewScenes extends BasePoweredElement {
   @state() private _scenes: SceneRecord[] = [];
   @state() private _status = "Loading scenes…";
   @state() private _busy = false;
-  @state() private _toast = "";
   @state() private _conflict?: SceneRecord;
   @state() private _captureName = "";
   @state() private _segments: WledSegment[] = [];
@@ -110,6 +111,21 @@ export class WledViewScenes extends BasePoweredElement {
     this._applySegIds = next;
   }
 
+  private _isLoading(): boolean {
+    return this._status === "Loading scenes…";
+  }
+
+  private _renderSkeleton() {
+    return html`
+      <div class="skeleton-load" aria-busy="true" aria-label="Loading scenes">
+        <wled-skeleton height="2.5rem" width="100%"></wled-skeleton>
+        <div class="sk-grid">
+          ${Array.from({ length: 4 }, () => html`<wled-skeleton height="120px"></wled-skeleton>`)}
+        </div>
+      </div>
+    `;
+  }
+
   protected override render() {
     const compact = this.compact;
     return html`
@@ -148,12 +164,11 @@ export class WledViewScenes extends BasePoweredElement {
           </div>
         </header>
 
-        ${this._status
-          ? html`<p class="status">${this._status}</p>`
-          : null}
-        ${this._toast
-          ? html`<p class="toast" role="status">${this._toast}</p>`
-          : null}
+        ${this._isLoading()
+          ? this._renderSkeleton()
+          : this._status
+            ? html`<p class="status">${this._status}</p>`
+            : null}
 
         ${!compact && this._segments.length
           ? html`
@@ -276,7 +291,6 @@ export class WledViewScenes extends BasePoweredElement {
   private async _apply(scene: SceneRecord): Promise<void> {
     if (!this.connection) return;
     this._busy = true;
-    this._toast = "";
     this._applyAbort?.abort();
     this._applyAbort = new AbortController();
     try {
@@ -290,7 +304,7 @@ export class WledViewScenes extends BasePoweredElement {
       pushRecentScene(this.controllerId, scene.id, scene.name);
       this._recentScenesRow()?.reload();
       await this._load();
-      this._toast = `Applied ${scene.name}`;
+      showToast(this, `Applied ${scene.name}`);
       this.dispatchEvent(
         new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })
       );
@@ -300,7 +314,7 @@ export class WledViewScenes extends BasePoweredElement {
           (err as { message?: string }).message ||
           (err as Error).message ||
           "error";
-        this._toast = `Apply failed: ${msg}`;
+        showToast(this, `Apply failed: ${msg}`);
       }
     } finally {
       this._busy = false;
@@ -312,14 +326,13 @@ export class WledViewScenes extends BasePoweredElement {
     const name = this._captureName.trim();
     if (!name) return;
     this._busy = true;
-    this._toast = "";
     try {
       const saved = await sceneCapture(this.connection, this.controllerId, name);
       this._captureName = "";
-      this._toast = `Saved ${saved.name}`;
+      showToast(this, `Saved ${saved.name}`);
       await this._load();
     } catch (err) {
-      this._toast = `Save failed: ${(err as Error).message || "error"}`;
+      showToast(this, `Save failed: ${(err as Error).message || "error"}`);
     } finally {
       this._busy = false;
     }
@@ -330,10 +343,10 @@ export class WledViewScenes extends BasePoweredElement {
     this._busy = true;
     try {
       await sceneDelete(this.connection, this.controllerId, scene.id);
-      this._toast = `Deleted ${scene.name}`;
+      showToast(this, `Deleted ${scene.name}`);
       await this._load();
     } catch {
-      this._toast = "Delete failed";
+      showToast(this, "Delete failed");
     } finally {
       this._busy = false;
     }
@@ -352,7 +365,7 @@ export class WledViewScenes extends BasePoweredElement {
     try {
       await sceneSave(this.connection, this.controllerId, scene);
       this._conflict = undefined;
-      this._toast = "Scene overwritten";
+      showToast(this, "Scene overwritten");
       await this._load();
     } catch (err) {
       if (err instanceof SceneConflictError) {
@@ -410,7 +423,7 @@ export class WledViewScenes extends BasePoweredElement {
       .hint {
         margin: 0;
         font-size: 0.85rem;
-        opacity: 0.75;
+        color: var(--wled-text-muted);
         max-width: 28rem;
       }
       .actions {
@@ -427,26 +440,20 @@ export class WledViewScenes extends BasePoweredElement {
         background: var(--card-background-color);
         color: inherit;
       }
-      .primary {
-        padding: 8px 14px;
-        border-radius: 8px;
-        border: none;
-        background: var(--primary-color);
-        color: var(--text-primary-color, #fff);
-        cursor: pointer;
-      }
-      .primary:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
       .status {
         font-size: 0.9rem;
-        opacity: 0.85;
+        color: var(--wled-text-muted);
       }
-      .toast {
-        font-size: 0.9rem;
-        opacity: 0.85;
-        color: var(--primary-color);
+      .skeleton-load {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .sk-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
       }
       .conflict {
         padding: 12px;
@@ -552,13 +559,14 @@ export class WledViewScenes extends BasePoweredElement {
       }
       .badge {
         font-size: 0.62rem;
-        opacity: 0.85;
         text-transform: uppercase;
         letter-spacing: 0.04em;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
       }
       .tile-meta {
         font-size: 0.68rem;
-        opacity: 0.8;
+        color: var(--wled-text-muted);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
       }
       .icon-btn {
         align-self: stretch;

@@ -36,6 +36,16 @@ export class WledStripPreview extends BasePoweredElement {
     this.requestUpdate();
   }
 
+  /** Brief scale/opacity pulse after scene or effect apply. */
+  pulseApply(): void {
+    const wrap = this.renderRoot.querySelector(".wrap");
+    if (!wrap) return;
+    wrap.classList.remove("scene-pulse");
+    void wrap.getBoundingClientRect();
+    wrap.classList.add("scene-pulse");
+    window.setTimeout(() => wrap.classList.remove("scene-pulse"), 200);
+  }
+
   protected override onPoweredConnect(): void {
     if (this._lastPixels) {
       this._schedulePaint();
@@ -193,6 +203,29 @@ export class WledStripPreview extends BasePoweredElement {
         border-radius: var(--wled-radius-sm);
         overflow: hidden;
         background: var(--wled-surface);
+        transform-origin: center center;
+      }
+      .wrap.scene-pulse {
+        animation: scene-apply-pulse var(--m-scene-confirm) ease;
+      }
+      @keyframes scene-apply-pulse {
+        0% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        45% {
+          transform: scale(1.02);
+          opacity: 0.88;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .wrap.scene-pulse {
+          animation: none;
+        }
       }
       canvas {
         display: block;
