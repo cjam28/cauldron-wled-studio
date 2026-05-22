@@ -613,6 +613,7 @@ async def ws_layout_to_segments(
         result = await coord.client.apply_state(
             {"seg": seg_payload}, full_response=True
         )
+        coord.note_applied_layout(msg["layout_id"], seg_payload)
     except Exception as err:
         connection.send_error(msg["id"], "wled_error", str(err))
         return

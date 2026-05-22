@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from typing import Any
 
@@ -54,6 +55,8 @@ class WledStudioCoordinator:
         self.paint_session: PaintSession | None = None
         self.thumb_runner: ThumbCaptureRunner | None = None
         self.audio_listener: AudioSyncListener | None = None
+        self._applied_layout_id: str | None = None
+        self._applied_layout_segments: list[dict[str, Any]] | None = None
 
     async def async_setup(self) -> None:
         wled_entry = await resolve_wled_entry(self.hass, self.wled_entry_id)
@@ -296,6 +299,13 @@ class WledStudioCoordinator:
         if self.paint_session is None:
             self.paint_session = PaintSession(self.host, self.client)
         return self.paint_session
+
+    def note_applied_layout(
+        self, layout_id: str, segments: list[dict[str, Any]]
+    ) -> None:
+        """Remember last layout→segments apply for paint cancel restore."""
+        self._applied_layout_id = layout_id
+        self._applied_layout_segments = copy.deepcopy(segments)
 
     async def async_abort_active_paint(self) -> bool:
         """End live paint without commit and restore pre-paint layout segments."""

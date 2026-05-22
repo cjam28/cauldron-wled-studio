@@ -13,6 +13,7 @@ from .paint_commit import (
     expand_segments_to_payload,
     live_frame_to_payload,
 )
+from .segments_restore import build_segment_restore_patch
 
 if TYPE_CHECKING:
     from .coordinator import WledStudioCoordinator
@@ -225,13 +226,29 @@ class PaintSession:
         self._baseline_payload = baseline
 
     async def _restore_segment_snapshot(self) -> None:
-        """Revert temporary paint segments to the layout saved at paint start."""
-        segs = copy.deepcopy(self._segment_snapshot)
-        if not segs:
+        """Revert paint temp segments; prefer last applied layout map."""
+        coord = self._coordinator
+        if coord and coord._applied_layout_segments:
+            target = copy.deepcopy(coord._applied_layout_segments)
+        else:
+            target = copy.deepcopy(self._segment_snapshot)
+        if not target:
             await self._client.apply_state({"live": False})
             return
+        await self._client.get_state(refresh=True)
+        state = self._client.state or {}
+        current_raw = state.get("seg")
+        current = current_raw if isinstance(current_raw, list) else []
+        patch_segs = build_segment_restore_patch(
+            target, current_segments=current
+        )
         await self._client.apply_state(
-            {"live": False, "on": True, "bri": self._global_bri, "seg": segs},
+            {
+                "live": False,
+                "on": True,
+                "bri": self._global_bri,
+                "seg": patch_segs,
+            },
             full_response=True,
         )
 

@@ -37,7 +37,7 @@ export class WledPaintSettings extends BasePoweredElement {
   @property({ attribute: false }) settings!: PaintBrushSettings;
   @property({ type: Boolean }) showOnToggle = false;
 
-  @state() private _loading = true;
+  @state() private _loadingEffects = true;
   @state() private _error = "";
   @state() private _snapshot?: DeviceStateSnapshot;
   @state() private _meta?: EffectMeta;
@@ -62,7 +62,7 @@ export class WledPaintSettings extends BasePoweredElement {
 
   private async _load(): Promise<void> {
     if (!this.connection || !this.controllerId) return;
-    this._loading = true;
+    this._loadingEffects = true;
     this._error = "";
     try {
       this._snapshot = await fetchDeviceState(this.connection, this.controllerId);
@@ -70,7 +70,7 @@ export class WledPaintSettings extends BasePoweredElement {
     } catch (err) {
       this._error = formatHaError(err);
     } finally {
-      this._loading = false;
+      this._loadingEffects = false;
     }
   }
 
@@ -119,12 +119,6 @@ export class WledPaintSettings extends BasePoweredElement {
   }
 
   protected override render() {
-    if (this._loading) {
-      return html`<p class="muted">Loading…</p>`;
-    }
-    if (this._error) {
-      return html`<p class="err">${this._error}</p>`;
-    }
     if (!this.settings) {
       return null;
     }
@@ -136,6 +130,9 @@ export class WledPaintSettings extends BasePoweredElement {
     return html`
       <div class="block">
         <h3 class="heading">${this.heading}</h3>
+        ${this._error
+          ? html`<p class="err">${this._error}</p>`
+          : null}
         ${this.showOnToggle
           ? html`
               <label class="row">
@@ -169,60 +166,64 @@ export class WledPaintSettings extends BasePoweredElement {
           @color-change=${this._onColor}
         ></wled-color-wheel-rgbw>
 
-        <input
-          class="fx-search"
-          type="search"
-          placeholder="Search effects…"
-          .value=${this._effectFilter}
-          @input=${(e: Event) => {
-            this._effectFilter = (e.target as HTMLInputElement).value;
-          }}
-        />
+        ${this._loadingEffects
+          ? html`<p class="muted">Loading effects…</p>`
+          : html`
+              <input
+                class="fx-search"
+                type="search"
+                placeholder="Search effects…"
+                .value=${this._effectFilter}
+                @input=${(e: Event) => {
+                  this._effectFilter = (e.target as HTMLInputElement).value;
+                }}
+              />
 
-        <wled-effect-chips
-          .hass=${this.hass}
-          .controllerId=${this.controllerId}
-          .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
-          .thumbBasenames=${this._snapshot?.thumb_basenames ?? []}
-          .effectsByName=${this._snapshot?.effects_by_name ?? {}}
-          .soundFlags=${this._snapshot?.sound_flags ?? []}
-          .selectedFx=${this.settings.fx}
-          .filter=${this._effectFilter}
-          @effect-select=${this._onEffectSelect}
-        ></wled-effect-chips>
+              <wled-effect-chips
+                .hass=${this.hass}
+                .controllerId=${this.controllerId}
+                .fwVer=${this._snapshot?.fw_ver ?? (this._snapshot?.info?.ver as string) ?? ""}
+                .thumbBasenames=${this._snapshot?.thumb_basenames ?? []}
+                .effectsByName=${this._snapshot?.effects_by_name ?? {}}
+                .soundFlags=${this._snapshot?.sound_flags ?? []}
+                .selectedFx=${this.settings.fx}
+                .filter=${this._effectFilter}
+                @effect-select=${this._onEffectSelect}
+              ></wled-effect-chips>
 
-        <div class="sliders">
-          ${Object.entries(SLIDER_LABELS).map(([key, label]) => {
-            if (!sliders[key]) return null;
-            const val = this.settings[key as keyof PaintBrushSettings];
-            if (typeof val === "boolean") {
-              return html`
-                <label class="row">
-                  <input
-                    type="checkbox"
-                    .checked=${val}
-                    @change=${(e: Event) =>
-                      this._slider(key as keyof PaintBrushSettings, e)}
-                  />
-                  ${label}
-                </label>
-              `;
-            }
-            return html`
-              <label>
-                ${label}
-                <ha-slider
-                  min="0"
-                  max="255"
-                  step="1"
-                  .value=${val as number}
-                  @change=${(ev: Event) =>
-                    this._slider(key as keyof PaintBrushSettings, ev)}
-                ></ha-slider>
-              </label>
-            `;
-          })}
-        </div>
+              <div class="sliders">
+                ${Object.entries(SLIDER_LABELS).map(([key, label]) => {
+                  if (!sliders[key]) return null;
+                  const val = this.settings[key as keyof PaintBrushSettings];
+                  if (typeof val === "boolean") {
+                    return html`
+                      <label class="row">
+                        <input
+                          type="checkbox"
+                          .checked=${val}
+                          @change=${(e: Event) =>
+                            this._slider(key as keyof PaintBrushSettings, e)}
+                        />
+                        ${label}
+                      </label>
+                    `;
+                  }
+                  return html`
+                    <label>
+                      ${label}
+                      <ha-slider
+                        min="0"
+                        max="255"
+                        step="1"
+                        .value=${val as number}
+                        @change=${(ev: Event) =>
+                          this._slider(key as keyof PaintBrushSettings, ev)}
+                      ></ha-slider>
+                    </label>
+                  `;
+                })}
+              </div>
+            `}
       </div>
     `;
   }

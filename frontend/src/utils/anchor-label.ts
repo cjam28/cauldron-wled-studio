@@ -1,15 +1,15 @@
-/** Bold digit width ≈ em × fontSize (system-ui); 3 digits need a wider factor. */
-function anchorDigitWidthEm(digits: number): number {
-  if (digits <= 1) return 0.58;
-  if (digits === 2) return 0.62;
-  return 0.72;
+/** Font size in model units so labels stay ~constant size on screen when zooming. */
+export function vertexLabelFontSize(viewScale: number): number {
+  const safe = Math.max(viewScale, 0.01);
+  return Math.max(9, Math.min(13, 11 / safe));
 }
 
-/** Font size (model units) so LED index fits inside anchor circle radius r. */
-export function anchorLedFontSize(led: number, r: number): number {
-  const digits = String(led).length;
-  const innerDiameter = r * 1.92;
-  const maxByHeight = r * 0.98;
-  const maxByWidth = innerDiameter / (digits * anchorDigitWidthEm(digits));
-  return Math.max(4, Math.min(maxByHeight, maxByWidth));
+/** External label: vertex index + anchor LED (e.g. v3 · 89). */
+export function vertexAnchorLabel(vertexIndex: number, anchorLed: number): string {
+  return `v${vertexIndex} · ${anchorLed}`;
+}
+
+/** External label for vertices without an anchor LED yet. */
+export function vertexIndexLabel(vertexIndex: number): string {
+  return `v${vertexIndex}`;
 }

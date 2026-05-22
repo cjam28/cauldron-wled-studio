@@ -1,21 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { anchorLedFontSize } from "../src/utils/anchor-label.js";
+import {
+  vertexAnchorLabel,
+  vertexIndexLabel,
+  vertexLabelFontSize,
+} from "../src/utils/anchor-label.js";
 
-const ANCHOR_R = 9;
-
-describe("anchorLedFontSize", () => {
-  it("scales down for 3-digit indices so text fits in anchor circle", () => {
-    const r = ANCHOR_R;
-    const two = anchorLedFontSize(85, r);
-    const three = anchorLedFontSize(209, r);
-    expect(three).toBeLessThan(two);
-    expect(three).toBeGreaterThan(4);
-    const estWidth = 3 * three * 0.72;
-    expect(estWidth).toBeLessThanOrEqual(r * 1.92 + 0.5);
+describe("vertex labels", () => {
+  it("formats anchor label with vertex index and LED", () => {
+    expect(vertexAnchorLabel(3, 89)).toBe("v3 · 89");
+    expect(vertexAnchorLabel(0, 0)).toBe("v0 · 0");
   });
 
-  it("allows larger font for 1–2 digits than 3", () => {
-    const r = ANCHOR_R;
-    expect(anchorLedFontSize(9, r)).toBeGreaterThan(anchorLedFontSize(209, r));
+  it("formats index-only label", () => {
+    expect(vertexIndexLabel(2)).toBe("v2");
+  });
+
+  it("keeps font size in a readable band across zoom", () => {
+    expect(vertexLabelFontSize(0.5)).toBe(13);
+    expect(vertexLabelFontSize(2)).toBeGreaterThanOrEqual(9);
+    expect(vertexLabelFontSize(2)).toBeLessThanOrEqual(13);
   });
 });

@@ -39,6 +39,18 @@ import {
   viewScaleToSlider,
   type LayoutDesignerSnapshot,
 } from "../utils/layout-history.js";
+import {
+  calibDistancePrompt,
+  defaultCalibDistanceInput,
+  displayLengthToMeters,
+  formatScalePxPerM,
+  haLengthUnitLabel,
+  isHaLengthMetric,
+} from "../utils/ha-length-units.js";
+import {
+  resolveFixtureName,
+  resolveLayoutName,
+} from "../utils/layout-display.js";
 
 /** Sparse corners / segment pins (user-placed). */
 interface Vertex {
@@ -74,8 +86,10 @@ export class WledLayoutDesigner extends BasePoweredElement {
   @state() private _backgroundUrl: string | null = null;
   @state() private _bgLayer: BackgroundLayer | null = null;
   @state() private _scalePxPerM: number | null = null;
+  @state() private _layoutName = "Layout";
+  @state() private _fixtureName = "Fixture";
   @state() private _calibActive = false;
-  @state() private _calibMeters = "1";
+  @state() private _calibDistance = "1";
   @state() private _canUndo = false;
   @state() private _canRedo = false;
   @state() private _zoomSlider = 50;
@@ -611,14 +625,19 @@ export class WledLayoutDesigner extends BasePoweredElement {
     this._syncStage();
   }
 
+  private _lengthMetric(): boolean {
+    return isHaLengthMetric(this.hass);
+  }
+
   private _applyCalibration(): void {
     if (this._calibPts.length < 2) return;
     const [a, b] = this._calibPts;
     const px = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const meters = parseFloat(this._calibMeters);
+    const display = parseFloat(this._calibDistance);
+    const meters = displayLengthToMeters(display, this._lengthMetric());
     if (px > 0 && meters > 0) {
       this._scalePxPerM = px / meters;
-      this._status = `Scale: ${this._scalePxPerM.toFixed(1)} px/m`;
+      this._status = `Scale: ${formatScalePxPerM(this._scalePxPerM, this._lengthMetric())}`;
     }
     this._calibActive = false;
     this._calibPts = [];
@@ -727,6 +746,11 @@ export class WledLayoutDesigner extends BasePoweredElement {
       this._bgLayer = backgroundFromLayout(layout);
       this._backgroundUrl = this._bgLayer?.url ?? layout.background_url ?? null;
       this._scalePxPerM = layout.scale_px_per_m ?? null;
+      this._layoutName = resolveLayoutName(layout.name, this.layoutId);
+      this._fixtureName = resolveFixtureName(
+        String(fixture.name ?? ""),
+        this.fixtureId || String(fixture.id ?? "fixture-0")
+      );
       this._loadBackgroundImage();
 
       this._fitView();
@@ -775,7 +799,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
     return {
       id: this.layoutId || "layout-0",
       controller_id: this.controllerId,
-      name: "Layout",
+      name: this._layoutName,
       pixel_count: this.pixelCount,
       background_url: this._backgroundUrl,
       background: this._bgLayer,
@@ -783,7 +807,7 @@ export class WledLayoutDesigner extends BasePoweredElement {
       fixtures: [
         {
           id: this.fixtureId || "fixture-0",
-          name: "Fixture",
+          name: this._fixtureName,
           kind: "polyline",
           closed: this._closed,
           points: pts,
@@ -1184,7 +1208,8 @@ export class WledLayoutDesigner extends BasePoweredElement {
               @click=${() => {
                 this._calibActive = true;
                 this._calibPts = [];
-                this._status = "Click two points on the floorplan, then enter real distance (m)";
+                this._calibDistance = defaultCalibDistanceInput(this.hass);
+                this._status = calibDistancePrompt(this.hass);
               }}
             >
               Calibrate
@@ -1248,14 +1273,14 @@ export class WledLayoutDesigner extends BasePoweredElement {
           ? html`
               <div class="context-bar">
                 <label>
-                  Distance (m)
+                  Distance (${haLengthUnitLabel(this.hass)})
                   <input
                     type="number"
-                    min="0.01"
-                    step="0.01"
-                    .value=${this._calibMeters}
+                    min=${this._lengthMetric() ? "0.01" : "0.1"}
+                    step=${this._lengthMetric() ? "0.01" : "0.1"}
+                    .value=${this._calibDistance}
                     @input=${(e: Event) => {
-                      this._calibMeters = (e.target as HTMLInputElement).value;
+                      this._calibDistance = (e.target as HTMLInputElement).value;
                     }}
                   />
                 </label>
@@ -1346,7 +1371,9 @@ export class WledLayoutDesigner extends BasePoweredElement {
           ? html`<p class="status-bar">${this._status}</p>`
           : null}
         ${this._scalePxPerM
-          ? html`<p class="status-bar meta">Scale: ${this._scalePxPerM.toFixed(1)} px/m</p>`
+          ? html`<p class="status-bar meta">
+              Scale: ${formatScalePxPerM(this._scalePxPerM, this._lengthMetric())}
+            </p>`
           : null}
 
         <div class="split-body">

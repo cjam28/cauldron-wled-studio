@@ -1,5 +1,6 @@
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { HomeAssistant } from "custom-card-helpers";
 import type { Connection } from "home-assistant-js-websocket";
 import { safeCustomElement } from "../utils/safe-custom-element.js";
 import { BasePoweredElement, sharedBaseStyles } from "../base/base-powered-element.js";
@@ -8,6 +9,7 @@ import { kitchenIslandLayout } from "../data/kitchen-island-layout.js";
 import type { LiveFrameEvent } from "../api/live-stream.js";
 import { subscribeLive } from "../api/live-stream.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
+import { layoutDisplayName } from "../utils/layout-display.js";
 
 // Register sub-components eagerly (they are already registered by the imports
 // below, but we import them for their side-effects in the panel bundle).
@@ -21,6 +23,7 @@ type ViewMode = "list" | "designer";
 @safeCustomElement(VIEW_LAYOUT_TAG)
 export class WledViewLayout extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
+  @property({ attribute: false }) override hass?: HomeAssistant;
   @property() controllerId = "";
 
   @state() private _layouts: LayoutRecord[] = [];
@@ -107,6 +110,11 @@ export class WledViewLayout extends BasePoweredElement {
     }
   }
 
+  private _activeLayoutLabel(): string {
+    const layout = this._layouts.find((l) => String(l.id) === this._activeLayoutId);
+    return layout ? layoutDisplayName(layout) : this._activeLayoutId;
+  }
+
   private _openDesigner(layout: LayoutRecord): void {
     this._activeLayoutId = String(layout.id);
     const firstFixture = layout.fixtures[0] as
@@ -159,7 +167,7 @@ export class WledViewLayout extends BasePoweredElement {
                   (l) => html`
                     <li class="layout-item">
                       <div class="layout-info">
-                        <span class="layout-name">${l.name ?? l.id}</span>
+                        <span class="layout-name">${layoutDisplayName(l)}</span>
                         <span class="meta">${l.pixel_count} px</span>
                       </div>
                       <div class="layout-btns">
@@ -200,7 +208,7 @@ export class WledViewLayout extends BasePoweredElement {
           >
             ← Back to layouts
           </button>
-          <span class="layout-id-label">${this._activeLayoutId}</span>
+          <span class="layout-id-label">${this._activeLayoutLabel()}</span>
           <button
             class="small"
             ?disabled=${this._busy}
@@ -213,6 +221,7 @@ export class WledViewLayout extends BasePoweredElement {
         <wled-layout-designer
           class="designer-main"
           .connection=${this.connection}
+          .hass=${this.hass}
           controllerId=${this.controllerId}
           layoutId=${this._activeLayoutId}
           fixtureId=${this._activeFixtureId}

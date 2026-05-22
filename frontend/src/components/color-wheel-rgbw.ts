@@ -7,9 +7,22 @@ import "./color-swatch-bar.js";
 
 export const COLOR_WHEEL_TAG = "wled-color-wheel-rgbw";
 
+function rgbEqual(
+  a: [number, number, number],
+  b: [number, number, number]
+): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+}
+
 @safeCustomElement(COLOR_WHEEL_TAG)
 export class WledColorWheelRgbw extends BasePoweredElement {
-  @property({ type: Array }) rgb: [number, number, number] = [255, 128, 0];
+  @property({
+    type: Array,
+    hasChanged: (a: [number, number, number], b: [number, number, number]) =>
+      !rgbEqual(a, b),
+  })
+  rgb: [number, number, number] = [255, 128, 0];
+
   @property({ type: Number }) white = 0;
   @property({ type: Number }) awm = 0;
   @property({ type: Boolean }) showWhite = true;
@@ -20,15 +33,22 @@ export class WledColorWheelRgbw extends BasePoweredElement {
 
   private _picker?: iro.ColorPicker;
   private _suppress = false;
+  private _ro?: ResizeObserver;
+  private _lastSize = 0;
 
   protected override firstUpdated(): void {
-    this._ensurePicker();
+    this._bindResizeObserver();
+  }
+
+  protected override onPoweredDisconnect(): void {
+    this._destroyPicker();
+    super.onPoweredDisconnect();
   }
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
     if (!this._picker) {
-      this._ensurePicker();
+      this._tryMountOrResize();
       return;
     }
     if (changed.has("rgb")) {
@@ -36,23 +56,53 @@ export class WledColorWheelRgbw extends BasePoweredElement {
     }
   }
 
-  private _ensurePicker(): void {
+  private _bindResizeObserver(): void {
     const host = this._host;
-    if (!host || this._picker) return;
+    if (!host || this._ro) return;
+    this._ro = new ResizeObserver(() => this._tryMountOrResize());
+    this._ro.observe(host);
+    this.addUnsub(() => {
+      this._ro?.disconnect();
+      this._ro = undefined;
+    });
+    this._tryMountOrResize();
+  }
+
+  private _wheelSize(rect: DOMRectReadOnly): number {
+    const side = Math.min(rect.width, rect.height);
+    return Math.max(120, Math.min(160, Math.floor(side) || 140));
+  }
+
+  private _tryMountOrResize(): void {
+    const host = this._host;
+    if (!host) return;
     const rect = host.getBoundingClientRect();
-    if (rect.width < 8 || rect.height < 8) {
-      queueMicrotask(() => this._ensurePicker());
+    if (rect.width < 8 || rect.height < 8) return;
+
+    const size = this._wheelSize(rect);
+    if (!this._picker) {
+      this._createPicker(host, size);
       return;
     }
+    if (size !== this._lastSize && typeof this._picker.resize === "function") {
+      this._picker.resize(size);
+      this._lastSize = size;
+    }
+  }
+
+  private _createPicker(host: HTMLDivElement, size: number): void {
+    if (this._picker) return;
+    host.replaceChildren();
+    this._lastSize = size;
     this._picker = iro.ColorPicker(host, {
-      width: Math.max(120, Math.min(160, Math.floor(rect.width) || 140)),
+      width: size,
       color: {
         r: this.rgb[0],
         g: this.rgb[1],
         b: this.rgb[2],
       },
       borderWidth: 1,
-      borderColor: "var(--divider-color, #444)",
+      borderColor: "#555",
       layout: [{ component: iro.ui.Wheel }],
     });
     this._picker.on("color:change", (color: iro.Color) => {
@@ -69,6 +119,12 @@ export class WledColorWheelRgbw extends BasePoweredElement {
       );
     });
     this._syncPicker();
+  }
+
+  private _destroyPicker(): void {
+    this._host?.replaceChildren();
+    this._picker = undefined;
+    this._lastSize = 0;
   }
 
   private _syncPicker(): void {
@@ -172,8 +228,8 @@ export class WledColorWheelRgbw extends BasePoweredElement {
         width: 100%;
       }
       .wheel-host {
-        min-width: 140px;
-        min-height: 140px;
+        width: 140px;
+        height: 140px;
         flex-shrink: 0;
       }
       .wrap {

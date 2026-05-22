@@ -10,7 +10,11 @@ import {
   type BackgroundLayer,
 } from "../utils/background-layer.js";
 import type { LedPosition } from "../api/layout.js";
-import { anchorLedFontSize } from "../utils/anchor-label.js";
+import {
+  vertexAnchorLabel,
+  vertexIndexLabel,
+  vertexLabelFontSize,
+} from "../utils/anchor-label.js";
 
 export interface LayoutVertex {
   x: number;
@@ -38,8 +42,8 @@ const ANCHOR_COLOR = "#f59e0b";
 const VERTEX_COLOR = "#6366f1";
 const EDGE_COLOR = "rgba(99,102,241,0.6)";
 const DOT_COLOR = "rgba(120,220,120,0.65)";
-const VERTEX_R = 7;
-const ANCHOR_R = 9;
+const VERTEX_R = 4;
+const ANCHOR_R = 5;
 const DOT_R = 3;
 
 function guideToLinePoints(guide: GuidePath): number[] {
@@ -327,34 +331,27 @@ export class LayoutDesignerKonvaStage {
       });
       this._vertices.add(circle);
 
-      if (isAnchor && v.anchorLed !== null) {
-        const label = String(v.anchorLed);
-        const fontSize = anchorLedFontSize(v.anchorLed, r);
-        const ledText = new Konva.Text({
-          x: v.x,
-          y: v.y,
-          text: label,
-          fontSize,
-          fontStyle: "bold",
-          fontFamily: "system-ui, -apple-system, sans-serif",
-          fill: "#111",
-          listening: false,
-        });
-        ledText.offsetX(ledText.width() / 2);
-        ledText.offsetY(ledText.height() / 2);
-        this._vertices.add(ledText);
-      }
-
-      this._vertices.add(
-        new Konva.Text({
-          x: v.x + r + 2 / this.viewScaleSafe,
-          y: v.y - r - 2 / this.viewScaleSafe,
-          text: `v${i}`,
-          fontSize: 10 / this.viewScaleSafe,
-          fill: "rgba(255,255,255,0.5)",
-          listening: false,
-        })
-      );
+      const labelPad = 3 / this.viewScaleSafe;
+      const fontSize = vertexLabelFontSize(this.viewScaleSafe);
+      const labelText =
+        isAnchor && v.anchorLed !== null
+          ? vertexAnchorLabel(i, v.anchorLed)
+          : vertexIndexLabel(i);
+      const label = new Konva.Text({
+        x: v.x + r + labelPad,
+        y: v.y - r - labelPad,
+        text: labelText,
+        fontSize,
+        fontStyle: "bold",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        fill: "#ffffff",
+        shadowColor: "rgba(0,0,0,0.85)",
+        shadowBlur: 3 / this.viewScaleSafe,
+        shadowOffset: { x: 0, y: 1 / this.viewScaleSafe },
+        listening: false,
+      });
+      label.y(v.y - r - labelPad - label.height());
+      this._vertices.add(label);
     }
 
     this._layer.batchDraw();
