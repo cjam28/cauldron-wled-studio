@@ -2,6 +2,11 @@ import type { Connection } from "home-assistant-js-websocket";
 import { SCHEMA_VERSION } from "./types.js";
 import { waitForConnection } from "./live-stream.js";
 import { formatHaError } from "../utils/ha-error.js";
+import type {
+  PaintBrushSettings,
+  UnpaintedFillSettings,
+} from "../utils/paint-settings-types.js";
+import { brushToPaintMode } from "../utils/paint-settings-types.js";
 
 export type PaintMode = "color" | "effect";
 
@@ -43,8 +48,9 @@ export async function paintFrame(
   options?: {
     rgbw?: boolean;
     touched?: number[];
-    paintMode?: PaintMode;
-    effectId?: number;
+    brush?: PaintBrushSettings;
+    fill?: UnpaintedFillSettings;
+    effectsByName?: Record<string, number>;
   }
 ): Promise<void> {
   let binary = "";
@@ -52,18 +58,24 @@ export async function paintFrame(
     binary += String.fromCharCode(data[i]!);
   }
   const b64 = btoa(binary);
-  const payload = {
-    type: "wled_studio/paint_frame" as const,
+  const brush = options?.brush;
+  const fill = options?.fill;
+  const effects = options?.effectsByName ?? {};
+  const paintMode = brush ? brushToPaintMode(brush, effects) : "color";
+
+  await ws(connection, {
+    type: "wled_studio/paint_frame",
     controller_id: controllerId,
     data: b64,
     rgbw: options?.rgbw ?? true,
-    paint_mode: options?.paintMode ?? "color",
+    paint_mode: paintMode,
     ...(options?.touched?.length ? { touched: options.touched } : {}),
-    ...(options?.paintMode === "effect" && options.effectId !== undefined
-      ? { effect_id: options.effectId }
+    ...(brush ? { brush } : {}),
+    ...(fill ? { fill } : {}),
+    ...(paintMode === "effect" && brush
+      ? { effect_id: brush.fx }
       : {}),
-  };
-  await ws(connection, payload);
+  });
 }
 
 export async function paintStop(

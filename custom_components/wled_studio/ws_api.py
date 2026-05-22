@@ -937,6 +937,8 @@ async def ws_paint_start(
         vol.Optional("touched"): [int],
         vol.Optional("paint_mode", default="color"): vol.In(["color", "effect"]),
         vol.Optional("effect_id"): int,
+        vol.Optional("brush"): dict,
+        vol.Optional("fill"): dict,
         vol.Optional("schema_version", default=SCHEMA_VERSION): int,
     }
 )
@@ -966,6 +968,8 @@ async def ws_paint_frame(
             touched=msg.get("touched"),
             paint_mode=str(msg.get("paint_mode") or "color"),
             effect_id=msg.get("effect_id"),
+            brush=msg.get("brush"),
+            fill=msg.get("fill"),
         )
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))

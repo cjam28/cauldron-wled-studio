@@ -8,6 +8,9 @@ from .scene_expand import build_starter_segment_template
 from .scene_store import SceneRecord
 from .wled_client import WledClient
 
+# Bump when starter names/colors change so existing installs re-sync seeded scenes.
+STARTER_SCENE_REVISION = 2
+
 _STARTER_DEFS: list[dict[str, Any]] = [
     {
         "id": "movie",
@@ -27,10 +30,18 @@ _STARTER_DEFS: list[dict[str, Any]] = [
     },
     {
         "id": "warm_read",
-        "name": "Warm Read",
+        "name": "Reading Light",
         "effect": "Solid",
         "bri": 120,
         "col": [[255, 180, 100, 0]],
+        "transition_ms": 2500,
+    },
+    {
+        "id": "warm_red",
+        "name": "Warm Red",
+        "effect": "Solid",
+        "bri": 160,
+        "col": [[255, 48, 12, 0]],
         "transition_ms": 2500,
     },
     {

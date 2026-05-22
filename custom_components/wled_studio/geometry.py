@@ -145,29 +145,34 @@ def resolve_led_positions(
             walked += seg
         return points[-1]
 
-    # Build LED ranges between consecutive anchors
+    # Build LED ranges between consecutive anchors (wrap last→first when closed).
     led_positions: dict[int, tuple[float, float]] = {}
     ordered = sorted(fixture.anchors, key=lambda a: a.led)
     for idx, anchor in enumerate(ordered):
         vx = min(anchor.vertex_index, len(points) - 1)
         led_positions[anchor.led] = points[vx]
-        if idx + 1 >= len(ordered):
-            continue
-        nxt = ordered[idx + 1]
-        d0 = vert_dist.get(
-            min(anchor.vertex_index, max(vert_dist.keys(), default=0)), 0.0
-        )
-        v1 = min(nxt.vertex_index, len(points) - 1)
-        d1 = vert_dist.get(v1, total_len)
-        span = nxt.led - anchor.led
+        is_last = idx + 1 >= len(ordered)
+        if is_last:
+            if not fixture.closed:
+                continue
+            nxt = ordered[0]
+            span = pixel_count - anchor.led
+        else:
+            nxt = ordered[idx + 1]
+            span = nxt.led - anchor.led
         if span <= 1:
             continue
+        d0 = vert_dist.get(vx, 0.0)
+        v1 = min(nxt.vertex_index, len(points) - 1)
+        d1 = vert_dist.get(v1, 0.0)
         arc = (d1 - d0) % total_len if fixture.closed else d1 - d0
         if arc < 0:
             arc += total_len
         for k in range(1, span):
             led = anchor.led + k
-            if led >= pixel_count or led >= nxt.led:
+            if led >= pixel_count:
+                break
+            if not is_last and led >= nxt.led:
                 break
             dist = d0 + arc * (k / span)
             led_positions[led] = point_at_distance(dist)

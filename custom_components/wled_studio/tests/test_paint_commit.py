@@ -1,23 +1,53 @@
 """Paint commit state builder tests."""
 
 from wled_studio.paint_commit import (
+    FILL_OFF,
+    FILL_PRESERVE,
     build_paint_commit_state,
     build_segment_individual_i,
 )
 
 
-def test_per_led_commit_preserves_untouched_in_segment() -> None:
-    """Paint LEDs 5–25 in a 0–30 segment; others keep baseline colors."""
+def test_unpainted_default_off_not_white() -> None:
+    """Paint 0–10 on white strip; 11+ commit as off segments."""
+    pixel_count = 30
+    bpp = 4
+    baseline = bytes([255, 255, 255, 0] * pixel_count)
+    payload = bytearray(baseline)
+    for led in range(0, 11):
+        o = led * bpp
+        payload[o : o + 3] = bytes([255, 0, 0])
+    touched = set(range(0, 11))
+    live = [{"id": 0, "start": 0, "stop": 30}]
+    patch = build_paint_commit_state(
+        payload=bytes(payload),
+        rgbw=True,
+        live_segments=live,
+        pixel_count=pixel_count,
+        effects_by_name={"Solid": 0},
+        touched=touched,
+        baseline=baseline,
+        fill={"mode": FILL_OFF},
+        brush={"fx": 0, "bri": 255, "on": True},
+    )
+    segs = patch["seg"]
+    assert len(segs) >= 2
+    off_runs = [s for s in segs if s.get("on") is False]
+    assert off_runs
+    on_runs = [s for s in segs if s.get("on") is not False]
+    assert on_runs
+    assert any(s["start"] == 0 and s["stop"] == 11 for s in on_runs)
+    assert any(s["start"] == 11 and s["stop"] == 30 for s in off_runs)
+
+
+def test_preserve_mode_keeps_untouched_colors() -> None:
     pixel_count = 30
     bpp = 4
     baseline = bytes([255, 255, 255, 0] * pixel_count)
     payload = bytearray(baseline)
     for led in range(5, 26):
         o = led * bpp
-        payload[o] = 255
-        payload[o + 1] = 0
-        payload[o + 2] = 0
-        payload[o + 3] = 0
+        payload[o : o + 3] = bytes([255, 0, 0])
     touched = set(range(5, 26))
     live = [{"id": 1, "start": 0, "stop": 30}]
     patch = build_paint_commit_state(
@@ -28,12 +58,10 @@ def test_per_led_commit_preserves_untouched_in_segment() -> None:
         effects_by_name={"Solid": 0},
         touched=touched,
         baseline=baseline,
-        paint_mode="color",
+        fill={"mode": FILL_PRESERVE},
     )
     seg = patch["seg"][0]
     assert "i" in seg
-    assert seg["fx"] == 0
-    # LED 4 untouched (white), LED 5 touched (red)
     i = seg["i"]
     rel4 = i.index(4)
     assert i[rel4 + 1] == [255, 255, 255, 0]
@@ -41,12 +69,11 @@ def test_per_led_commit_preserves_untouched_in_segment() -> None:
     assert i[rel5 + 1] == [255, 0, 0, 0]
 
 
-def test_effect_commit_splits_runs() -> None:
-    payload = bytes([0, 0, 0, 0] * 20)
-    baseline = bytes([10, 10, 10, 0] * 20)
-    touched = {5, 6, 7, 15, 16}
-    touched_fx = {5: 3, 6: 3, 7: 3, 15: 7, 16: 7}
-    live = [{"id": 0, "start": 0, "stop": 20, "fx": 0, "col": [[10, 10, 10, 0]]}]
+def test_custom_fill_applies_effect() -> None:
+    payload = bytes([255, 0, 0, 0] * 20)
+    baseline = bytes([255, 255, 255, 0] * 20)
+    touched = {0, 1}
+    live = [{"id": 0, "start": 0, "stop": 20}]
     patch = build_paint_commit_state(
         payload=payload,
         rgbw=True,
@@ -55,14 +82,11 @@ def test_effect_commit_splits_runs() -> None:
         effects_by_name={"Solid": 0},
         touched=touched,
         baseline=baseline,
-        paint_mode="effect",
-        touched_fx=touched_fx,
-        max_segments=32,
+        fill={"mode": "custom", "fx": 7, "on": True, "bri": 200, "col": [0, 0, 255, 0]},
+        brush={"fx": 0, "on": True, "bri": 255},
     )
-    segs = patch["seg"]
-    assert len(segs) >= 2
-    fx_vals = {s["fx"] for s in segs}
-    assert 3 in fx_vals
+    fx_vals = {s["fx"] for s in patch["seg"]}
+    assert 0 in fx_vals
     assert 7 in fx_vals
 
 

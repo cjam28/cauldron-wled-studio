@@ -1,4 +1,4 @@
-"""Map paint buffers to WLED /json/state (per-LED ``i`` or effect segment splits)."""
+"""Map paint buffers to WLED /json/state (segment runs with brush + fill)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 
 DEFAULT_MAX_SEGMENTS = 32
+FILL_OFF = "off"
+FILL_PRESERVE = "preserve"
+FILL_CUSTOM = "custom"
 
 
 def solid_effect_id(effects_by_name: dict[str, int]) -> int:
@@ -122,6 +125,54 @@ class _LedPaint:
     on: bool = True
     bri: int = 255
     pal: int = 0
+    sx: int = 128
+    ix: int = 128
+    c1: int = 128
+    c2: int = 128
+    c3: int = 128
+    o1: bool = False
+    o2: bool = False
+    o3: bool = False
+
+
+def _col_from_settings(settings: dict[str, Any], *, rgbw: bool) -> list[int]:
+    col_raw = settings.get("col")
+    if isinstance(col_raw, list) and len(col_raw) >= 3:
+        if isinstance(col_raw[0], (list, tuple)):
+            base = list(col_raw[0][:4])
+        else:
+            base = list(col_raw[:4])
+        if not rgbw:
+            return base[:3]
+        while len(base) < 4:
+            base.append(0)
+        return base[:4]
+    return [0, 0, 0, 0] if rgbw else [0, 0, 0]
+
+
+def _paint_from_settings(
+    settings: dict[str, Any],
+    *,
+    solid_fx: int,
+    rgbw: bool,
+    col_override: list[int] | None = None,
+) -> _LedPaint:
+    col = col_override if col_override is not None else _col_from_settings(settings, rgbw=rgbw)
+    return _LedPaint(
+        fx=int(settings.get("fx") if settings.get("fx") is not None else solid_fx),
+        col=col,
+        on=bool(settings.get("on", True)),
+        bri=int(settings.get("bri") if settings.get("bri") is not None else 255),
+        pal=int(settings.get("pal") or 0),
+        sx=int(settings.get("sx") if settings.get("sx") is not None else 128),
+        ix=int(settings.get("ix") if settings.get("ix") is not None else 128),
+        c1=int(settings.get("c1") if settings.get("c1") is not None else 128),
+        c2=int(settings.get("c2") if settings.get("c2") is not None else 128),
+        c3=int(settings.get("c3") if settings.get("c3") is not None else 128),
+        o1=bool(settings.get("o1", False)),
+        o2=bool(settings.get("o2", False)),
+        o3=bool(settings.get("o3", False)),
+    )
 
 
 def _segment_template(seg: dict[str, Any], *, solid_fx: int) -> _LedPaint:
@@ -137,6 +188,14 @@ def _segment_template(seg: dict[str, Any], *, solid_fx: int) -> _LedPaint:
         on=bool(seg.get("on", True)),
         bri=int(seg.get("bri") or 255),
         pal=int(seg.get("pal") or 0),
+        sx=int(seg.get("sx") if seg.get("sx") is not None else 128),
+        ix=int(seg.get("ix") if seg.get("ix") is not None else 128),
+        c1=int(seg.get("c1") if seg.get("c1") is not None else 128),
+        c2=int(seg.get("c2") if seg.get("c2") is not None else 128),
+        c3=int(seg.get("c3") if seg.get("c3") is not None else 128),
+        o1=bool(seg.get("o1", False)),
+        o2=bool(seg.get("o2", False)),
+        o3=bool(seg.get("o3", False)),
     )
 
 
@@ -173,20 +232,43 @@ def _consolidate_runs(
         runs.append((start, i, state))
     if len(runs) <= max_segments:
         return runs
-    # Over WLED segment limit — merge adjacent runs that share the same fx.
     merged: list[tuple[int, int, _LedPaint]] = [runs[0]]
     for start, stop, state in runs[1:]:
         p_start, p_stop, prev = merged[-1]
-        if prev.fx == state.fx:
-            merged[-1] = (p_start, stop, prev)
+        if prev == state:
+            merged[-1] = (p_start, stop, state)
+        elif prev.fx == state.fx and prev.on == state.on:
+            merged[-1] = (p_start, stop, state)
         else:
             merged.append((start, stop, state))
     if len(merged) > max_segments:
         raise ValueError(
-            f"Paint effect commit needs {len(merged)} segments but device allows "
-            f"{max_segments}. Paint fewer effect zones or simplify."
+            f"Paint commit needs {len(merged)} segments but device allows "
+            f"{max_segments}. Paint fewer zones or simplify fill/brush."
         )
     return merged
+
+
+def _run_to_seg_patch(idx: int, start: int, stop: int, state: _LedPaint) -> dict[str, Any]:
+    patch: dict[str, Any] = {
+        "id": idx,
+        "start": start,
+        "stop": stop,
+        "on": state.on,
+        "bri": state.bri,
+        "fx": state.fx,
+        "col": [state.col],
+        "pal": state.pal,
+        "sx": state.sx,
+        "ix": state.ix,
+        "c1": state.c1,
+        "c2": state.c2,
+        "c3": state.c3,
+        "o1": state.o1,
+        "o2": state.o2,
+        "o3": state.o3,
+    }
+    return patch
 
 
 def build_paint_commit_state(
@@ -201,6 +283,8 @@ def build_paint_commit_state(
     paint_mode: str = "color",
     touched_fx: dict[int, int] | None = None,
     max_segments: int = DEFAULT_MAX_SEGMENTS,
+    brush: dict[str, Any] | None = None,
+    fill: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build state patch to persist paint and exit live mode."""
     if not payload:
@@ -218,21 +302,22 @@ def build_paint_commit_state(
     solid_fx = solid_effect_id(effects_by_name)
     segments = live_segments if live_segments else [{"id": 0, "start": 0, "stop": pixel_count}]
     touched = set(touched)
+    brush = dict(brush or {})
+    fill = dict(fill or {})
+    fill_mode = str(fill.get("mode") or FILL_OFF)
 
-    if paint_mode == "effect" and touched_fx:
-        return _build_effect_commit(
+    if fill_mode == FILL_PRESERVE and not brush and paint_mode == "color" and not touched_fx:
+        return _build_color_commit_preserve_i(
             payload=payload,
             rgbw=rgbw,
             segments=segments,
             pixel_count=pixel_count,
             touched=touched,
-            touched_fx=touched_fx,
             baseline=baseline,
             solid_fx=solid_fx,
-            max_segments=max_segments,
         )
 
-    return _build_color_commit(
+    return _build_run_commit(
         payload=payload,
         rgbw=rgbw,
         segments=segments,
@@ -240,10 +325,16 @@ def build_paint_commit_state(
         touched=touched,
         baseline=baseline,
         solid_fx=solid_fx,
+        max_segments=max_segments,
+        brush=brush,
+        fill=fill,
+        fill_mode=fill_mode,
+        touched_fx=touched_fx or {},
+        paint_mode=paint_mode,
     )
 
 
-def _build_color_commit(
+def _build_color_commit_preserve_i(
     *,
     payload: bytes,
     rgbw: bool,
@@ -253,6 +344,7 @@ def _build_color_commit(
     baseline: bytes | None,
     solid_fx: int,
 ) -> dict[str, Any]:
+    """Legacy per-LED ``i`` commit when fill mode is preserve (no brush/fill split)."""
     seg_patches: list[dict[str, Any]] = []
     for raw in segments:
         if not isinstance(raw, dict):
@@ -296,53 +388,119 @@ def _build_color_commit(
     return {"live": False, "on": True, "seg": seg_patches}
 
 
-def _build_effect_commit(
+def _fill_assignment(
+    led: int,
+    *,
+    fill_mode: str,
+    fill: dict[str, Any],
+    baseline: bytes | None,
+    segments: list[dict[str, Any]],
+    pixel_count: int,
+    rgbw: bool,
+    solid_fx: int,
+) -> _LedPaint:
+    if fill_mode == FILL_OFF:
+        return _LedPaint(
+            fx=solid_fx,
+            col=[0, 0, 0, 0] if rgbw else [0, 0, 0],
+            on=False,
+            bri=0,
+        )
+    if fill_mode == FILL_CUSTOM:
+        return _paint_from_settings(fill, solid_fx=solid_fx, rgbw=rgbw)
+    # preserve
+    if baseline is not None:
+        col = _read_led_color(baseline, rgbw=rgbw, led=led)
+    else:
+        seg = _find_segment_for_led(led, segments, pixel_count)
+        if seg is not None:
+            return _segment_template(seg, solid_fx=solid_fx)
+        col = [0, 0, 0, 0] if rgbw else [0, 0, 0]
+    seg = _find_segment_for_led(led, segments, pixel_count)
+    base = _segment_template(seg, solid_fx=solid_fx) if seg else _LedPaint(fx=solid_fx, col=col)
+    return _LedPaint(
+        fx=base.fx,
+        col=col,
+        on=base.on,
+        bri=base.bri,
+        pal=base.pal,
+        sx=base.sx,
+        ix=base.ix,
+        c1=base.c1,
+        c2=base.c2,
+        c3=base.c3,
+        o1=base.o1,
+        o2=base.o2,
+        o3=base.o3,
+    )
+
+
+def _brush_assignment(
+    led: int,
+    *,
+    payload: bytes,
+    rgbw: bool,
+    brush: dict[str, Any],
+    solid_fx: int,
+    touched_fx: dict[int, int],
+    paint_mode: str,
+) -> _LedPaint:
+    col = _read_led_color(payload, rgbw=rgbw, led=led)
+    settings = dict(brush)
+    if paint_mode == "effect" and led in touched_fx:
+        settings["fx"] = touched_fx[led]
+    elif paint_mode == "effect" and "fx" not in settings:
+        settings["fx"] = solid_fx
+    return _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw, col_override=col)
+
+
+def _build_run_commit(
     *,
     payload: bytes,
     rgbw: bool,
     segments: list[dict[str, Any]],
     pixel_count: int,
     touched: set[int],
-    touched_fx: dict[int, int],
     baseline: bytes | None,
     solid_fx: int,
     max_segments: int,
+    brush: dict[str, Any],
+    fill: dict[str, Any],
+    fill_mode: str,
+    touched_fx: dict[int, int],
+    paint_mode: str,
 ) -> dict[str, Any]:
-    assignments: list[_LedPaint | None] = [None] * pixel_count
     seg_snapshot = copy.deepcopy(segments)
+    assignments: list[_LedPaint | None] = [None] * pixel_count
 
     for led in range(pixel_count):
-        seg = _find_segment_for_led(led, seg_snapshot, pixel_count)
-        if seg is not None:
-            assignments[led] = _segment_template(seg, solid_fx=solid_fx)
-
-    for led in touched:
-        if led < 0 or led >= pixel_count:
-            continue
-        fx = int(touched_fx.get(led, solid_fx))
-        col = _read_led_color(payload, rgbw=rgbw, led=led)
-        base = assignments[led]
-        bri = base.bri if base else 255
-        pal = base.pal if base else 0
-        on = base.on if base else True
-        assignments[led] = _LedPaint(fx=fx, col=col, on=on, bri=bri, pal=pal)
+        if led in touched:
+            assignments[led] = _brush_assignment(
+                led,
+                payload=payload,
+                rgbw=rgbw,
+                brush=brush,
+                solid_fx=solid_fx,
+                touched_fx=touched_fx,
+                paint_mode=paint_mode,
+            )
+        else:
+            assignments[led] = _fill_assignment(
+                led,
+                fill_mode=fill_mode,
+                fill=fill,
+                baseline=baseline,
+                segments=seg_snapshot,
+                pixel_count=pixel_count,
+                rgbw=rgbw,
+                solid_fx=solid_fx,
+            )
 
     runs = _consolidate_runs(assignments, max_segments=max_segments)
-    seg_patches: list[dict[str, Any]] = []
-    for idx, (start, stop, state) in enumerate(runs):
-        seg_patches.append(
-            {
-                "id": idx,
-                "start": start,
-                "stop": stop,
-                "on": state.on,
-                "bri": state.bri,
-                "fx": state.fx,
-                "col": [state.col],
-                "pal": state.pal,
-            }
-        )
-
+    seg_patches = [
+        _run_to_seg_patch(idx, start, stop, state)
+        for idx, (start, stop, state) in enumerate(runs)
+    ]
     return {"live": False, "on": True, "seg": seg_patches}
 
 

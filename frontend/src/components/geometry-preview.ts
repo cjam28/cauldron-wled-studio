@@ -32,6 +32,9 @@ export class WledGeometryPreview extends BasePoweredElement {
   @property({ type: Number }) heightPx = 200;
   /** When true, do not subscribe to live WS (parent calls setFrame). */
   @property({ type: Boolean }) externalLive = false;
+  /** Paint tool: layout canvas drives brush strokes via ``paint-stroke`` events. */
+  @property({ type: Boolean, reflect: true }) paintMode = false;
+  @property({ type: Number }) paintBrushSize = 6;
   @property({ type: Array }) segments: WledSegment[] = [];
   @property({ type: Number }) selectedSegId = -1;
 
@@ -45,15 +48,26 @@ export class WledGeometryPreview extends BasePoweredElement {
   private _canvas?: HTMLCanvasElement;
   private _ctx?: CanvasRenderingContext2D;
   private _pixels?: Uint8ClampedArray;
+  private _paintPixels?: Uint8ClampedArray;
   private _raf = 0;
   private _resizeObs?: ResizeObserver;
   private _hoverLed = -1;
+  private _painting = false;
 
   /** Called externally (e.g. by view-layout) when a live frame arrives. */
   setFrame(frame: LiveFrameEvent | null): void {
-    if (!frame) return;
+    if (!frame || this.paintMode) return;
     this._pixels = expandToFixture(frame, this.pixelCount);
     this._status = "live";
+    this._schedPaint();
+  }
+
+  /** Paint tool: parent pushes RGBA pixels (one LED per 4 bytes). */
+  setPaintPixels(pixels: Uint8ClampedArray | null): void {
+    this._paintPixels = pixels ?? undefined;
+    if (this.paintMode) {
+      this._status = pixels ? "paint" : "ready";
+    }
     this._schedPaint();
   }
 
@@ -69,7 +83,7 @@ export class WledGeometryPreview extends BasePoweredElement {
 
   protected override onPoweredConnect(): void {
     void this._resolvePositions();
-    if (!this.externalLive) {
+    if (!this.externalLive && !this.paintMode) {
       this._attachLiveStream();
     }
   }
@@ -89,12 +103,15 @@ export class WledGeometryPreview extends BasePoweredElement {
       changed.has("fixtureId")
     ) {
       void this._resolvePositions();
-      if (!this.externalLive) {
+      if (!this.externalLive && !this.paintMode) {
         this._attachLiveStream();
       }
     }
-    if (changed.has("selectedSegId") || changed.has("segments")) {
+    if (changed.has("selectedSegId") || changed.has("segments") || changed.has("paintMode")) {
       this._schedPaint();
+      if (changed.has("paintMode") && this._canvas) {
+        this._canvas.style.cursor = this.paintMode ? "crosshair" : "pointer";
+      }
     }
   }
 
@@ -105,22 +122,30 @@ export class WledGeometryPreview extends BasePoweredElement {
       this._ctx = this._canvas.getContext("2d", { alpha: true }) ?? undefined;
       this._resizeObs = new ResizeObserver(() => this._onResize());
       this._resizeObs.observe(wrap);
-      if (this.compact || this.segments.length > 0) {
-        this._canvas.style.cursor = "pointer";
-        this._canvas.addEventListener("click", this._onCanvasClick);
-        this._canvas.addEventListener("mousemove", this._onCanvasMove);
-        this._canvas.addEventListener("mouseleave", this._onCanvasLeave);
-        this.addUnsub(() => {
-          this._canvas?.removeEventListener("click", this._onCanvasClick);
-          this._canvas?.removeEventListener("mousemove", this._onCanvasMove);
-          this._canvas?.removeEventListener("mouseleave", this._onCanvasLeave);
-        });
-      }
+      const c = this._canvas;
+      c.style.touchAction = "none";
+      c.addEventListener("pointerdown", this._onPaintPointerDown);
+      c.addEventListener("pointermove", this._onPaintPointerMove);
+      c.addEventListener("pointerup", this._onPaintPointerUp);
+      c.addEventListener("pointerleave", this._onPaintPointerLeave);
+      c.addEventListener("click", this._onCanvasClick);
+      c.addEventListener("mousemove", this._onCanvasMove);
+      c.addEventListener("mouseleave", this._onCanvasLeave);
+      this.addUnsub(() => {
+        c.removeEventListener("pointerdown", this._onPaintPointerDown);
+        c.removeEventListener("pointermove", this._onPaintPointerMove);
+        c.removeEventListener("pointerup", this._onPaintPointerUp);
+        c.removeEventListener("pointerleave", this._onPaintPointerLeave);
+        c.removeEventListener("click", this._onCanvasClick);
+        c.removeEventListener("mousemove", this._onCanvasMove);
+        c.removeEventListener("mouseleave", this._onCanvasLeave);
+      });
     }
     this._onResize();
   }
 
   private _onCanvasClick = (ev: MouseEvent): void => {
+    if (this.paintMode) return;
     const led = this._ledAtEvent(ev);
     if (led < 0) return;
     const segId = this._segmentForLed(led);
@@ -134,7 +159,54 @@ export class WledGeometryPreview extends BasePoweredElement {
     );
   };
 
+  private _emitPaintStroke(led: number): void {
+    if (led < 0) return;
+    const half = Math.max(1, Math.floor(this.paintBrushSize / 2));
+    const leds: number[] = [];
+    for (let d = -half; d <= half; d++) {
+      const idx = led + d;
+      if (idx >= 0 && idx < this.pixelCount) leds.push(idx);
+    }
+    if (!leds.length) return;
+    this.dispatchEvent(
+      new CustomEvent("paint-stroke", {
+        detail: { led, leds },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private _onPaintPointerDown = (ev: PointerEvent): void => {
+    if (!this.paintMode) return;
+    this._painting = true;
+    (ev.target as HTMLCanvasElement).setPointerCapture(ev.pointerId);
+    const led = this._ledAtEvent(ev);
+    this._emitPaintStroke(led);
+  };
+
+  private _onPaintPointerMove = (ev: PointerEvent): void => {
+    if (!this.paintMode || !this._painting) return;
+    const led = this._ledAtEvent(ev);
+    this._emitPaintStroke(led);
+  };
+
+  private _onPaintPointerUp = (ev: PointerEvent): void => {
+    if (!this.paintMode) return;
+    this._painting = false;
+    try {
+      (ev.target as HTMLCanvasElement).releasePointerCapture(ev.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  private _onPaintPointerLeave = (): void => {
+    this._painting = false;
+  };
+
   private _onCanvasMove = (ev: MouseEvent): void => {
+    if (this.paintMode) return;
     const led = this._ledAtEvent(ev);
     if (led !== this._hoverLed) {
       this._hoverLed = led;
@@ -358,7 +430,7 @@ export class WledGeometryPreview extends BasePoweredElement {
       drawBackgroundLayer(ctx, w, h, this._bgImage, this._bgLayer);
     }
 
-    const pixels = this._pixels;
+    const pixels = this.paintMode ? this._paintPixels : this._pixels;
     const positions = [...this._positions].sort((a, b) => a.led - b.led);
     const r = this.dotRadius;
     const map = this._layoutMap(w, h);
@@ -418,7 +490,9 @@ export class WledGeometryPreview extends BasePoweredElement {
         ctx.shadowBlur = 0;
       }
 
-      this._paintSegmentSelection(ctx, positions, toCanvas, lineW);
+      if (!this.paintMode) {
+        this._paintSegmentSelection(ctx, positions, toCanvas, lineW);
+      }
     } else {
       // Linear fallback
       const n = this.pixelCount;
@@ -455,7 +529,9 @@ export class WledGeometryPreview extends BasePoweredElement {
           : -1;
     if (highlightId < 0 || this.segments.length === 0) return;
 
-    const segPts = positions.filter((p) => this._ledInSegment(p.led, highlightId));
+    const segPts = positions
+      .filter((p) => this._ledInSegment(p.led, highlightId))
+      .sort((a, b) => a.led - b.led);
     if (segPts.length < 2) return;
 
     const accent = this._accentStroke();
@@ -493,12 +569,16 @@ export class WledGeometryPreview extends BasePoweredElement {
   }
 
   protected override render() {
-    const aria = this.compact
-      ? "Live layout preview — tap the strip to select a segment"
-      : "LED geometry preview — positions mapped from fixture layout";
+    const aria = this.paintMode
+      ? "Paint on layout — drag along the fixture path"
+      : this.compact
+        ? "Live layout preview — tap the strip to select a segment"
+        : "LED geometry preview — positions mapped from fixture layout";
+    const showOverlay =
+      !this.paintMode && this._status !== "live" && this._status !== "paint";
     return html`
-      <div class="preview-shell ${this.compact ? "compact" : ""}">
-        ${this.compact
+      <div class="preview-shell ${this.compact ? "compact" : ""} ${this.paintMode ? "paint" : ""}">
+        ${this.compact || this.paintMode
           ? null
           : html`
               <label class="mode-toggle">
@@ -515,8 +595,11 @@ export class WledGeometryPreview extends BasePoweredElement {
             `}
         <div class="wrap" role="img" aria-label=${aria}>
           <canvas></canvas>
-          ${this._status !== "live"
+          ${showOverlay
             ? html`<span class="overlay">${this._status}</span>`
+            : null}
+          ${this.paintMode && this._positions.length === 0
+            ? html`<span class="overlay">No layout — create one in Layout view</span>`
             : null}
         </div>
       </div>
@@ -563,11 +646,15 @@ export class WledGeometryPreview extends BasePoweredElement {
       .mode-toggle input {
         margin: 0;
       }
-      .preview-shell.compact .wrap {
+      .preview-shell.compact .wrap,
+      .preview-shell.paint .wrap {
         min-height: var(--wled-preview-height, 200px);
         aspect-ratio: 16 / 9;
         max-height: none;
         flex: none;
+      }
+      .preview-shell.paint .wrap {
+        min-height: var(--wled-paint-height, 320px);
       }
       .wrap {
         position: relative;

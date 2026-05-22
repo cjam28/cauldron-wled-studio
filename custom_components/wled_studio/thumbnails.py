@@ -28,7 +28,7 @@ class ThumbKey:
     fw_ver: str = ""
 
 
-def should_skip_effect_name(name: str) -> bool:
+def should_skip_effect_name(name: str | int | None) -> bool:
     """True for WLED placeholder rows that must not be captured.
 
     Skip rules (aligned with ``effects.build_effect_name_map``):
@@ -36,7 +36,9 @@ def should_skip_effect_name(name: str) -> bool:
     - ``RSVD`` reserved slots
     - ``-`` placeholder entries
     """
-    n = (name or "").strip()
+    if name is None or isinstance(name, int):
+        return name is None
+    n = name.strip()
     return not n or n in _SKIP_NAMES
 
 

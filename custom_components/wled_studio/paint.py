@@ -38,6 +38,8 @@ class PaintSession:
         self._touched: set[int] = set()
         self._touched_fx: dict[int, int] = {}
         self._paint_mode = "color"
+        self._brush: dict[str, Any] = {}
+        self._fill: dict[str, Any] = {"mode": "off"}
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
@@ -60,6 +62,8 @@ class PaintSession:
         self._touched.clear()
         self._touched_fx.clear()
         self._paint_mode = "color"
+        self._brush = {}
+        self._fill = {"mode": "off"}
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         await self._client.apply_state({"live": True})
 
@@ -115,6 +119,8 @@ class PaintSession:
         touched: list[int] | None = None,
         paint_mode: str = "color",
         effect_id: int | None = None,
+        brush: dict[str, Any] | None = None,
+        fill: dict[str, Any] | None = None,
     ) -> None:
         if not self._active or not self._transport:
             await self.start(self._coordinator)
@@ -123,6 +129,10 @@ class PaintSession:
             self._last_rgbw = rgbw
             if paint_mode in ("color", "effect"):
                 self._paint_mode = paint_mode
+            if isinstance(brush, dict):
+                self._brush = brush
+            if isinstance(fill, dict):
+                self._fill = fill
             if touched:
                 for led in touched:
                     if 0 <= led < len(payload) // (4 if rgbw else 3):
@@ -197,6 +207,8 @@ class PaintSession:
             paint_mode=self._paint_mode,
             touched_fx=self._touched_fx,
             max_segments=max_seg,
+            brush=self._brush,
+            fill=self._fill,
         )
         await self._client.apply_state(patch, full_response=True)
 

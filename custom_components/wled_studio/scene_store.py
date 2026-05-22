@@ -136,6 +136,24 @@ class SceneStore:
             seeded.append(controller_id)
         self._schedule_save()
 
+    def get_starter_revision(self, controller_id: str) -> int:
+        assert self._data is not None
+        meta = self._data.setdefault("meta", {})
+        revs = meta.get("starter_revision")
+        if not isinstance(revs, dict):
+            return 0
+        return int(revs.get(controller_id, 0))
+
+    def set_starter_revision(self, controller_id: str, revision: int) -> None:
+        assert self._data is not None
+        meta = self._data.setdefault("meta", {})
+        revs = meta.setdefault("starter_revision", {})
+        if not isinstance(revs, dict):
+            meta["starter_revision"] = {}
+            revs = meta["starter_revision"]
+        revs[controller_id] = int(revision)
+        self._schedule_save()
+
     async def async_list(self, controller_id: str) -> list[SceneRecord]:
         await self.async_load()
         bucket = self._bucket(controller_id)

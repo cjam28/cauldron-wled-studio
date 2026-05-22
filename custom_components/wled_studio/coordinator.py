@@ -22,7 +22,7 @@ from .paint import PaintSession
 from .thumb_capture import ThumbCaptureRunner
 from .audiosync import AudioSyncListener
 from .scene_expand import expand_scene_state
-from .scene_seed import build_starter_scenes
+from .scene_seed import STARTER_SCENE_REVISION, build_starter_scenes
 from .scene_store import SceneRecord, SceneStore
 from .wled_client import WledClient
 
@@ -167,17 +167,41 @@ class WledStudioCoordinator:
         self._async_add_scenes = async_add_entities
 
     async def async_ensure_starter_scenes(self) -> None:
-        """Seed eight starter scenes once per controller."""
+        """Seed starter scenes once per controller; re-sync when revision bumps."""
         if self.client is None:
             return
         await self.scene_store.async_load()
-        if self.scene_store.is_seeded(self.entry_id):
-            return
         starters = build_starter_scenes(self.entry_id, self.client)
-        await self.scene_store.async_save_many(starters)
-        self.scene_store.mark_seeded(self.entry_id)
-        for record in starters:
-            await self.async_register_scene_entity(record)
+        by_id = {s.id: s for s in starters}
+
+        if not self.scene_store.is_seeded(self.entry_id):
+            await self.scene_store.async_save_many(starters)
+            self.scene_store.mark_seeded(self.entry_id)
+            self.scene_store.set_starter_revision(
+                self.entry_id, STARTER_SCENE_REVISION
+            )
+            for record in starters:
+                await self.async_register_scene_entity(record)
+            return
+
+        if (
+            self.scene_store.get_starter_revision(self.entry_id)
+            < STARTER_SCENE_REVISION
+        ):
+            for record in starters:
+                existing = await self.scene_store.async_get(
+                    self.entry_id, record.id
+                )
+                if existing is not None and existing.seeded:
+                    record.etag = existing.etag
+                    await self.scene_store.async_save(record)
+                    await self.async_register_scene_entity(record)
+                elif existing is None:
+                    await self.scene_store.async_save(record)
+                    await self.async_register_scene_entity(record)
+            self.scene_store.set_starter_revision(
+                self.entry_id, STARTER_SCENE_REVISION
+            )
 
     async def async_register_scene_entity(self, record: SceneRecord) -> None:
         """Add or update a scene.* entity after save."""

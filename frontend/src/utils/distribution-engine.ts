@@ -101,26 +101,24 @@ export function resolveLedPositions(
     const vx = Math.min(anchor.vertex_index, points.length - 1);
     ledPositions.set(anchor.led, points[vx]);
 
-    if (idx + 1 >= ordered.length) continue;
-    const nxt = ordered[idx + 1];
+    const isLast = idx + 1 >= ordered.length;
+    if (isLast && !closed) continue;
 
-    let maxKey = 0;
-    for (const k of vertDist.keys()) {
-      if (k > maxKey) maxKey = k;
-    }
-    const d0 = vertDist.get(Math.min(anchor.vertex_index, maxKey)) ?? 0;
-    const v1 = Math.min(nxt.vertex_index, points.length - 1);
-    const d1 = vertDist.get(v1) ?? totalLen;
-
-    const span = nxt.led - anchor.led;
+    const nxt = isLast ? ordered[0]! : ordered[idx + 1]!;
+    const span = isLast ? pixelCount - anchor.led : nxt.led - anchor.led;
     if (span <= 1) continue;
+
+    const d0 = vertDist.get(vx) ?? 0;
+    const v1 = Math.min(nxt.vertex_index, points.length - 1);
+    const d1 = vertDist.get(v1) ?? 0;
 
     let arc = closed ? ((d1 - d0) % totalLen + totalLen) % totalLen : d1 - d0;
     if (!closed && arc < 0) arc += totalLen;
 
     for (let k = 1; k < span; k++) {
       const led = anchor.led + k;
-      if (led >= pixelCount || led >= nxt.led) break;
+      if (led >= pixelCount) break;
+      if (!isLast && led >= nxt.led) break;
       const dist = d0 + arc * (k / span);
       ledPositions.set(led, pointAtDistance(dist));
     }

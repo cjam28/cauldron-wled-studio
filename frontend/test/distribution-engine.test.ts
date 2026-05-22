@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { kitchenIslandLayout } from "../src/data/kitchen-island-layout.js";
+import {
+  fixtureToWledSegments,
+  kitchenIslandFixture,
+  resolveLedPositions,
+} from "../src/utils/distribution-engine.js";
 
 /**
  * Mirror of the Python distribution engine test:
@@ -60,5 +65,37 @@ describe("distribution engine — kitchen island anchors", () => {
 
   it("layout is closed path", () => {
     expect(fixture.closed).toBe(true);
+  });
+});
+
+describe("resolveLedPositions — closed auto-close edge", () => {
+  const fixture = kitchenIslandFixture();
+  const pixelCount = 210;
+
+  it("places LEDs 187–209 along the closing edge (not only 186)", () => {
+    const positions = resolveLedPositions(fixture, pixelCount);
+    const byLed = new Map(positions.map((p) => [p.led, p]));
+
+    expect(byLed.has(186)).toBe(true);
+    expect(byLed.has(187)).toBe(true);
+    expect(byLed.has(209)).toBe(true);
+
+    const p186 = byLed.get(186)!;
+    const p187 = byLed.get(187)!;
+    const p209 = byLed.get(209)!;
+    // Closing edge runs vtx3 → vtx0 (toward origin for reference fixture).
+    expect(p209.x).toBeLessThan(p186.x);
+    expect(p209.y).toBeLessThan(p186.y);
+    const step = Math.hypot(p187.x - p186.x, p187.y - p186.y);
+    const span = Math.hypot(p209.x - p186.x, p209.y - p186.y);
+    expect(step).toBeGreaterThan(0);
+    expect(step).toBeLessThan(span);
+  });
+
+  it("segment 4 spans 186–210", () => {
+    const segs = fixtureToWledSegments(fixture, pixelCount);
+    const seg4 = segs.find((s) => s.id === 3);
+    expect(seg4?.start).toBe(186);
+    expect(seg4?.stop).toBe(210);
   });
 });

@@ -162,7 +162,7 @@ class ThumbCaptureRunner:
             saved_state = None
 
         items = sorted(client.effects_by_name.items(), key=lambda x: x[1])
-        total = sum(1 for _, n in items if not should_skip_effect_name(n))
+        total = sum(1 for name, _ in items if not should_skip_effect_name(name))
         done = 0
         fw_ver = client.fw_ver or "unknown"
         self._emit({"status": "started", "total": total})
