@@ -390,7 +390,9 @@ export class WledGeometryPreview extends BasePoweredElement {
       pad + (x - minX) * scale,
       pad + (y - minY) * scale,
     ];
-    const lineW = Math.max(2.5, r * 1.35);
+    const lineW = this.compact
+      ? Math.max(8, r * 3)
+      : Math.max(3.5, r * 1.75);
     return { toCanvas, hitR: Math.max(10, lineW * 2.5), lineW };
   }
 
@@ -548,7 +550,7 @@ export class WledGeometryPreview extends BasePoweredElement {
           const [red, green, blue] = this._rgbForLed(pixels, from.led);
           if (!disableBloom && (red > 10 || green > 10 || blue > 10)) {
             ctx.shadowColor = `rgba(${red},${green},${blue},0.55)`;
-            ctx.shadowBlur = lineW * 1.5;
+            ctx.shadowBlur = lineW * (this.compact ? 2 : 1.5);
           } else {
             ctx.shadowBlur = 0;
           }
