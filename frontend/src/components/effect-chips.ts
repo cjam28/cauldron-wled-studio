@@ -37,6 +37,11 @@ export class WledEffectChips extends BasePoweredElement {
   @property({ type: Boolean }) showRecents = true;
   /** Card embed: wider tiles in a 2-column grid (min 120px, 16:9 thumbs). */
   @property({ type: Boolean, attribute: "tile-grid" }) tileGrid = false;
+  /** Scroll only the effect grid; keep filters fixed (Effects tab layout). */
+  @property({ type: Boolean, attribute: "scroll-pane" }) scrollPane = false;
+  /** When set, prefer palette-specific effect thumbnails. */
+  @property({ type: Number }) selectedPalette = 0;
+  @property({ type: Boolean, attribute: "palette-aware" }) paletteAware = false;
 
   @state() private _category: EffectCategory = "all";
   @state() private _recentEntries: RecentEffectEntry[] = [];
@@ -127,7 +132,9 @@ export class WledEffectChips extends BasePoweredElement {
     const showLibraryRow = !q && this._pinnedEntries.length > 0;
 
     return html`
-      <div class="wrap ${this.tileGrid ? "tile-grid" : ""}">
+      <div
+        class="wrap ${this.tileGrid ? "tile-grid" : ""} ${this.scrollPane ? "scroll-pane" : ""}"
+      >
         ${showLibraryRow
           ? html`
               <div class="recent-block">
@@ -214,7 +221,8 @@ export class WledEffectChips extends BasePoweredElement {
                   "strip",
                   this.fwVer,
                   this.hass,
-                  this.thumbBasenames
+                  this.thumbBasenames,
+                  this.paletteAware ? this.selectedPalette : 0
                 );
                 const tileLabel =
                   name +
@@ -405,6 +413,24 @@ export class WledEffectChips extends BasePoweredElement {
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         max-height: none;
         min-height: 0;
+      }
+      .scroll-pane {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .scroll-pane .grid {
+        flex: 1 1 auto;
+        min-height: 100px;
+        max-height: min(240px, 36vh);
+        overflow-y: auto;
+      }
+      .tile-grid.scroll-pane .grid {
+        flex: 1 1 auto;
+        min-height: 80px;
+        max-height: none;
+        overflow-y: auto;
       }
       .tile-grid .chip-tile {
         min-height: 0;

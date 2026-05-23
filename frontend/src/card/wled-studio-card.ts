@@ -764,7 +764,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         ${this._renderModeTabs()}
 
         <div
-          class="tab-body"
+          class="tab-body ${this._cardTab === "effects" ? "tab-body-effects" : ""}"
           @touchstart=${this._onTabPanelTouchStart}
           @touchmove=${this._onTabPanelTouchMove}
           @touchend=${this._onTabPanelTouchEnd}
@@ -921,6 +921,25 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
         margin: 0 0 10px;
         border-top: 1px solid var(--wled-border);
         padding-top: 10px;
+      }
+      .tab-body-effects {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .tab-body-effects .effects-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .tab-body-effects .effects-panel .tab-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       .tab-panel-host {
         display: block;

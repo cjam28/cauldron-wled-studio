@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.4
+
+### Palettes
+- Palette picker on Color and Effects tabs when the active effect supports palettes (`palette_enabled`)
+- Gradient previews from device `/json/palx` with name-based fallback
+- Embedded palette editor overlay (iframe to WLED `cpal.htm`) plus open-in-new-tab link
+- `host` and `palette_previews` included in `get_state`; `get_palette_previews` websocket for refresh after editing
+
+### Effects UX
+- Effects tab split layout: scrollable effect grid with fixed tuning footer (palette, advanced, sliders)
+- Card Effects tab body no longer scrolls as one long page
+
+### Thumbnails
+- Effect tiles prefer palette-specific captures when available (`{fxId}_p{paletteId}_…`)
+
+### Tests
+- Palette gradient + palx parsing tests; 118 vitest, 62 pytest
+
 ## 0.11.3
 
 ### Audio reactive

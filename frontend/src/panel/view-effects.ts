@@ -9,6 +9,7 @@ import {
   buildSegmentPatchForIds,
   fetchDeviceState,
   fetchEffectMeta,
+  fetchPalettePreviews,
   type DeviceStateSnapshot,
   type EffectMeta,
   type WledSegment,
@@ -33,6 +34,7 @@ import {
 } from "../utils/effect-merge.js";
 import "../components/effect-chips.js";
 import "../components/effect-merge-toggle.js";
+import "../components/palette-chips.js";
 import "../components/segment-bar.js";
 import "../components/segment-advanced.js";
 import "../components/wled-skeleton.js";
@@ -54,7 +56,7 @@ const SLIDER_LABELS: Record<string, string> = {
 export class WledViewEffects extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
   @property() controllerId = "";
-  @property({ type: Boolean }) compact = false;
+  @property({ type: Boolean, reflect: true }) compact = false;
 
   @state() private _snapshot?: DeviceStateSnapshot;
   @state() private _segments: WledSegment[] = [];
@@ -88,6 +90,20 @@ export class WledViewEffects extends BasePoweredElement {
     ) {
       void this._load();
     }
+  }
+
+  private async _refreshPalettePreviews(): Promise<void> {
+    if (!this.connection || !this.controllerId || !this._snapshot) return;
+    try {
+      const previews = await fetchPalettePreviews(this.connection, this.controllerId);
+      this._snapshot = { ...this._snapshot, palette_previews: previews };
+    } catch {
+      /* keep cached previews */
+    }
+  }
+
+  private _onPaletteCatalogChanged(): void {
+    void this._refreshPalettePreviews();
   }
 
   private async _load(): Promise<void> {
@@ -419,154 +435,186 @@ export class WledViewEffects extends BasePoweredElement {
 
         ${snap && seg
           ? html`
-              <input
-                class="search"
-                type="search"
-                placeholder="Search effects…"
-                aria-label="Filter effects"
-                .value=${this._filter}
-                @input=${(e: Event) => {
-                  this._filter = (e.target as HTMLInputElement).value;
-                }}
-              />
-              <wled-effect-chips
-                .hass=${this.hass}
-                .controllerId=${this.controllerId}
-                .fwVer=${snap.fw_ver ?? (snap.info?.ver as string) ?? ""}
-                .thumbBasenames=${snap.thumb_basenames ?? []}
-                .effectsByName=${snap.effects_by_name ?? {}}
-                .soundFlags=${snap.sound_flags ?? []}
-                .selectedFx=${fx}
-                .filter=${this._filter}
-                .tileGrid=${compact}
-                @effect-select=${(
-                  e: CustomEvent<{ effectId: number; toggledOff?: boolean }>
-                ) => this._onFx(e.detail.effectId, e.detail.toggledOff)}
-              ></wled-effect-chips>
+              <div class="effects-workspace ${compact ? "compact" : ""}">
+                <div class="effects-toolbar">
+                  <input
+                    class="search"
+                    type="search"
+                    placeholder="Search effects…"
+                    aria-label="Filter effects"
+                    .value=${this._filter}
+                    @input=${(e: Event) => {
+                      this._filter = (e.target as HTMLInputElement).value;
+                    }}
+                  />
+                </div>
+                <div class="effects-scroll">
+                  <wled-effect-chips
+                    scroll-pane
+                    .hass=${this.hass}
+                    .controllerId=${this.controllerId}
+                    .fwVer=${snap.fw_ver ?? (snap.info?.ver as string) ?? ""}
+                    .thumbBasenames=${snap.thumb_basenames ?? []}
+                    .effectsByName=${snap.effects_by_name ?? {}}
+                    .soundFlags=${snap.sound_flags ?? []}
+                    .selectedFx=${fx}
+                    .filter=${this._filter}
+                    .tileGrid=${compact}
+                    .selectedPalette=${seg.pal ?? 0}
+                    .paletteAware=${meta?.palette_enabled !== false}
+                    @effect-select=${(
+                      e: CustomEvent<{ effectId: number; toggledOff?: boolean }>
+                    ) => this._onFx(e.detail.effectId, e.detail.toggledOff)}
+                  ></wled-effect-chips>
+                </div>
 
-              <wled-segment-advanced
-                .segment=${seg}
-                .meta=${meta}
-                ?compact=${compact}
-                @segment-patch=${(ev: CustomEvent<Partial<WledSegment>>) =>
-                  void this._segPatch(ev.detail)}
-              ></wled-segment-advanced>
+                <div class="effects-tuning">
+                  ${meta?.palette_enabled !== false &&
+                  Object.keys(snap.palettes_by_name ?? {}).length
+                    ? html`
+                        <wled-palette-chips
+                          ?compact=${compact}
+                          ?collapsible=${compact}
+                          .palettesByName=${snap.palettes_by_name ?? {}}
+                          .palettePreviews=${snap.palette_previews ?? {}}
+                          .selectedPal=${seg.pal ?? 0}
+                          .deviceHost=${snap.host ?? ""}
+                          @palette-select=${(
+                            e: CustomEvent<{ paletteId: number }>
+                          ) => void this._segPatch({ pal: e.detail.paletteId })}
+                          @palette-catalog-changed=${() => this._onPaletteCatalogChanged()}
+                        ></wled-palette-chips>
+                      `
+                    : null}
 
-              <div class="sliders ${compact ? "compact" : ""}">
-                ${Object.entries(SLIDER_LABELS).map(([key, label]) => {
-                  if (!sliders[key]) return null;
-                  const val = seg[key as keyof WledSegment] as number | undefined;
-                  return html`
-                    <label>
-                      ${label}
-                      <ha-slider
-                        min="0"
-                        max="255"
-                        step="1"
-                        .value=${val ?? 128}
-                        @change=${(ev: Event) =>
-                          this._slider(key as keyof WledSegment, ev)}
-                      ></ha-slider>
-                    </label>
-                  `;
-                })}
+                  <wled-segment-advanced
+                    .segment=${seg}
+                    .meta=${meta}
+                    ?compact=${compact}
+                    @segment-patch=${(ev: CustomEvent<Partial<WledSegment>>) =>
+                      void this._segPatch(ev.detail)}
+                  ></wled-segment-advanced>
+
+                  <div class="sliders ${compact ? "compact" : ""}">
+                    ${Object.entries(SLIDER_LABELS).map(([key, label]) => {
+                      if (!sliders[key]) return null;
+                      const val = seg[key as keyof WledSegment] as number | undefined;
+                      return html`
+                        <label>
+                          ${label}
+                          <ha-slider
+                            min="0"
+                            max="255"
+                            step="1"
+                            .value=${val ?? 128}
+                            @change=${(ev: Event) =>
+                              this._slider(key as keyof WledSegment, ev)}
+                          ></ha-slider>
+                        </label>
+                      `;
+                    })}
+                  </div>
+
+                  ${Object.keys(sliders).length
+                    ? html`
+                        <div class="save-row">
+                          <button type="button" class="ghost" @click=${() => this._saveAsDefault()}>
+                            Save as default
+                          </button>
+                          <button type="button" class="ghost" @click=${() => this._openSaveCopy()}>
+                            Save copy…
+                          </button>
+                          <button type="button" class="ghost" @click=${() => this._openSaveScene()}>
+                            Save as scene
+                          </button>
+                        </div>
+                      `
+                    : null}
+
+                  ${this._saveCopyOpen
+                    ? html`
+                        <div class="inline-form">
+                          <input
+                            type="text"
+                            placeholder="Preset name"
+                            .value=${this._saveCopyName}
+                            @input=${(e: Event) => {
+                              this._saveCopyName = (e.target as HTMLInputElement).value;
+                            }}
+                          />
+                          <button type="button" class="primary" @click=${() => this._confirmSaveCopy()}>
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            class="ghost"
+                            @click=${() => {
+                              this._saveCopyOpen = false;
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      `
+                    : null}
+
+                  ${this._saveSceneOpen
+                    ? html`
+                        <div class="inline-form">
+                          <input
+                            type="text"
+                            placeholder="Scene name"
+                            .value=${this._saveSceneName}
+                            @input=${(e: Event) => {
+                              this._saveSceneName = (e.target as HTMLInputElement).value;
+                            }}
+                          />
+                          <button type="button" class="primary" @click=${() => void this._confirmSaveScene()}>
+                            Save scene
+                          </button>
+                          <button
+                            type="button"
+                            class="ghost"
+                            @click=${() => {
+                              this._saveSceneOpen = false;
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      `
+                    : null}
+
+                  ${this._library.length
+                    ? html`
+                        <div class="library-block">
+                          <span class="library-label">Library</span>
+                          <div class="library-row">
+                            ${this._library.slice(0, compact ? 6 : 12).map(
+                              (entry) => html`
+                                <button
+                                  type="button"
+                                  class="library-chip"
+                                  @click=${() => void this._applyLibraryEntry(entry)}
+                                >
+                                  ${entry.name}
+                                </button>
+                              `
+                            )}
+                          </div>
+                        </div>
+                      `
+                    : null}
+
+                  <p class="meta">
+                    ${targetCount} segment${targetCount === 1 ? "" : "s"} · effect
+                    #${fx}
+                    ${meta?.palette_enabled !== false && seg.pal !== undefined
+                      ? html` · palette #${seg.pal}`
+                      : null}
+                  </p>
+                </div>
               </div>
-
-              ${Object.keys(sliders).length
-                ? html`
-                    <div class="save-row">
-                      <button type="button" class="ghost" @click=${() => this._saveAsDefault()}>
-                        Save as default
-                      </button>
-                      <button type="button" class="ghost" @click=${() => this._openSaveCopy()}>
-                        Save copy…
-                      </button>
-                      <button type="button" class="ghost" @click=${() => this._openSaveScene()}>
-                        Save as scene
-                      </button>
-                    </div>
-                  `
-                : null}
-
-              ${this._saveCopyOpen
-                ? html`
-                    <div class="inline-form">
-                      <input
-                        type="text"
-                        placeholder="Preset name"
-                        .value=${this._saveCopyName}
-                        @input=${(e: Event) => {
-                          this._saveCopyName = (e.target as HTMLInputElement).value;
-                        }}
-                      />
-                      <button type="button" class="primary" @click=${() => this._confirmSaveCopy()}>
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        class="ghost"
-                        @click=${() => {
-                          this._saveCopyOpen = false;
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  `
-                : null}
-
-              ${this._saveSceneOpen
-                ? html`
-                    <div class="inline-form">
-                      <input
-                        type="text"
-                        placeholder="Scene name"
-                        .value=${this._saveSceneName}
-                        @input=${(e: Event) => {
-                          this._saveSceneName = (e.target as HTMLInputElement).value;
-                        }}
-                      />
-                      <button type="button" class="primary" @click=${() => void this._confirmSaveScene()}>
-                        Save scene
-                      </button>
-                      <button
-                        type="button"
-                        class="ghost"
-                        @click=${() => {
-                          this._saveSceneOpen = false;
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  `
-                : null}
-
-              ${this._library.length
-                ? html`
-                    <div class="library-block">
-                      <span class="library-label">Library</span>
-                      <div class="library-row">
-                        ${this._library.slice(0, compact ? 6 : 12).map(
-                          (entry) => html`
-                            <button
-                              type="button"
-                              class="library-chip"
-                              @click=${() => void this._applyLibraryEntry(entry)}
-                            >
-                              ${entry.name}
-                            </button>
-                          `
-                        )}
-                      </div>
-                    </div>
-                  `
-                : null}
-
-              <p class="meta">
-                ${targetCount} segment${targetCount === 1 ? "" : "s"} · effect
-                #${fx}
-              </p>
             `
           : null}
       </div>
@@ -647,6 +695,62 @@ export class WledViewEffects extends BasePoweredElement {
     css`
       .wrap {
         max-width: 100%;
+      }
+      :host {
+        display: block;
+      }
+      :host([compact]) {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+      }
+      .wrap.compact {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .effects-workspace {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+      }
+      .effects-workspace.compact {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: 100%;
+      }
+      .effects-toolbar {
+        flex: 0 0 auto;
+      }
+      .effects-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .effects-scroll wled-effect-chips {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .effects-tuning {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid var(--divider-color);
+        padding-top: 8px;
+        max-height: min(42vh, 280px);
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+      .effects-workspace.compact .effects-tuning {
+        max-height: min(46vh, 300px);
       }
       .wrap.compact .search {
         max-width: 100%;

@@ -144,6 +144,61 @@ def _flag_from_char(ch: str) -> str | None:
     return None
 
 
+def parse_palx_stops(stops_raw: Any) -> list[tuple[int, int, int, int] | str]:
+    """Parse one palette entry from /json/palx ``p`` object."""
+    out: list[tuple[int, int, int, int] | str] = []
+    if not isinstance(stops_raw, list):
+        return out
+    for stop in stops_raw:
+        if isinstance(stop, str):
+            out.append(stop.strip())
+            continue
+        if isinstance(stop, list) and len(stop) >= 4:
+            try:
+                out.append(
+                    (
+                        int(stop[0]),
+                        int(stop[1]),
+                        int(stop[2]),
+                        int(stop[3]),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def stops_to_css_gradient(stops: list[tuple[int, int, int, int] | str]) -> str | None:
+    """Convert WLED palette stops to a CSS linear-gradient preview."""
+    if not stops or any(isinstance(s, str) for s in stops):
+        return None
+    rgb_stops: list[str] = []
+    for stop in stops:
+        if not isinstance(stop, tuple):
+            continue
+        idx, r, g, b = stop
+        pct = round(max(0, min(255, idx)) / 255 * 100, 2)
+        rgb_stops.append(f"rgb({r},{g},{b}) {pct}%")
+    if len(rgb_stops) < 2:
+        return None
+    return f"linear-gradient(90deg, {', '.join(rgb_stops)})"
+
+
+def merge_palx_page(target: dict[int, str], page: dict[str, Any]) -> None:
+    """Merge one /json/palx page into palette_id → CSS gradient map."""
+    palettes = page.get("p")
+    if not isinstance(palettes, dict):
+        return
+    for key, raw in palettes.items():
+        try:
+            palette_id = int(key)
+        except (TypeError, ValueError):
+            continue
+        css = stops_to_css_gradient(parse_palx_stops(raw))
+        if css:
+            target[palette_id] = css
+
+
 def parse_fxdata_sound_flags(fxdata: str, effect_count: int) -> list[str | None]:
     """Section 4 char per effect: v=volume, f=freq, 2=2d-only, else None."""
     if not fxdata or effect_count < 1:

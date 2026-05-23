@@ -47,24 +47,30 @@ export function resolveThumbBasename(
   fxId: number,
   available: ReadonlySet<string> | readonly string[],
   variant: ThumbVariant = "strip",
-  fwVer?: string
+  fwVer?: string,
+  paletteId = 0
 ): string | undefined {
   const set =
     available instanceof Set ? available : new Set(available);
   if (!set.size) return undefined;
 
   const candidates = [
+    thumbFilenameForFx(fxId, variant, fwVer, paletteId),
     thumbFilenameForFx(fxId, variant, fwVer),
+    thumbFilenameForFx(fxId, variant, undefined, paletteId),
     thumbFilenameForFx(fxId, variant),
   ];
   for (const name of candidates) {
     if (set.has(name)) return name;
   }
 
-  const prefix = `${fxId}_`;
+  const prefix = paletteId ? `${fxId}_p${paletteId}_` : `${fxId}_`;
   const suffix = `_${variant}.webp`;
   for (const name of set) {
     if (name.startsWith(prefix) && name.endsWith(suffix)) return name;
+  }
+  if (paletteId) {
+    return resolveThumbBasename(fxId, set, variant, fwVer, 0);
   }
   return undefined;
 }
@@ -78,13 +84,14 @@ export function thumbUrlForFx(
   variant: ThumbVariant = "strip",
   fwVer?: string,
   hass?: HomeAssistant,
-  available?: ReadonlySet<string> | readonly string[]
+  available?: ReadonlySet<string> | readonly string[],
+  paletteId = 0
 ): string | undefined {
   if (!controllerId || fxId < 0) return undefined;
   const file =
     available !== undefined
-      ? resolveThumbBasename(fxId, available, variant, fwVer)
-      : thumbFilenameForFx(fxId, variant, fwVer);
+      ? resolveThumbBasename(fxId, available, variant, fwVer, paletteId)
+      : thumbFilenameForFx(fxId, variant, fwVer, paletteId);
   if (!file) return undefined;
   return withHaAuth(thumbLocalUrl(controllerId, file), hass);
 }

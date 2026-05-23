@@ -195,10 +195,14 @@ async def ws_get_state(
             "ok": True,
             "schema_version": SCHEMA_VERSION,
             "info": client.info if client else {},
+            "host": coord.host,
             "state": state,
             "segments": seg,
             "effects_by_name": client.effects_by_name if client else {},
             "palettes_by_name": client.palettes_by_name if client else {},
+            "palette_previews": {
+                str(k): v for k, v in (client.palette_previews if client else {}).items()
+            },
             "sound_flags": client.sound_flags if client else [],
             "fxdata": client.fxdata if client else "",
             "led_order": client.led_bus_order() if client else 0,
@@ -378,6 +382,45 @@ async def ws_effect_meta(
             "ok": True,
             "schema_version": SCHEMA_VERSION,
             "meta": meta,
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/get_palette_previews",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_get_palette_previews(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return palette id → CSS gradient from /json/palx."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None or coord.client is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    client = coord.client
+    try:
+        previews = await client.fetch_palette_previews()
+        client.palette_previews = previews
+    except Exception as err:
+        if _ws_client_error(connection, msg["id"], err):
+            return
+        raise
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "palette_previews": {str(k): v for k, v in previews.items()},
         },
     )
 
@@ -1237,6 +1280,7 @@ _WS_HANDLERS = (
     ws_apply_state,
     ws_get_presets,
     ws_effect_meta,
+    ws_get_palette_previews,
     ws_layout_list,
     ws_layout_get,
     ws_layout_upload_bg,

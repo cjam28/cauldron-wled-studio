@@ -15,6 +15,7 @@ from .effects import (
     build_effect_name_map,
     build_palette_name_map,
     effect_meta_for_id,
+    merge_palx_page,
     normalize_fxdata_response,
     parse_fxdata_sound_flags,
 )
@@ -94,6 +95,7 @@ class WledClient:
         self._base = f"http://{self.host}"
         self.effects_by_name: dict[str, int] = {}
         self.palettes_by_name: dict[str, int] = {}
+        self.palette_previews: dict[int, str] = {}
         self.sound_flags: list[str | None] = []
         self.fxdata: str = ""
         self.info: dict[str, Any] = {}
@@ -184,9 +186,27 @@ class WledClient:
             palettes.extend(chunk)
             page += 1
         self.palettes_by_name = build_palette_name_map(palettes)
+        self.palette_previews = await self.fetch_palette_previews()
 
         self.fxdata = await self._fetch_fxdata()
         self.sound_flags = parse_fxdata_sound_flags(self.fxdata, effect_count)
+
+    async def fetch_palette_previews(self) -> dict[int, str]:
+        """Fetch /json/palx pages and return palette id → CSS gradient."""
+        previews: dict[int, str] = {}
+        page = 0
+        max_page = 0
+        while page <= max_page and page < 64:
+            data = await self._request("GET", f"/json/palx?page={page}")
+            if not isinstance(data, dict):
+                break
+            try:
+                max_page = int(data.get("m", 0))
+            except (TypeError, ValueError):
+                max_page = page
+            merge_palx_page(previews, data)
+            page += 1
+        return previews
 
     async def get_state(self, *, refresh: bool = False) -> dict[str, Any]:
         if refresh or not self.state:

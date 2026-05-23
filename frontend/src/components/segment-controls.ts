@@ -14,6 +14,7 @@ import {
   entityForWledSegment,
   fetchDeviceState,
   fetchEffectMeta,
+  fetchPalettePreviews,
   fetchPresets,
   parseColSlot,
   type DeviceStateSnapshot,
@@ -33,6 +34,7 @@ import type { OptimisticApplyHandle } from "../api/state-writer.js";
 import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
 import "./effect-merge-toggle.js";
+import "./palette-chips.js";
 import "./preset-bar.js";
 import "./segment-advanced.js";
 import "./wled-skeleton.js";
@@ -239,6 +241,16 @@ export class WledSegmentControls extends BasePoweredElement {
     void this._refreshMeta();
     void this._syncSelToDevice();
     this._emitTargetsChanged();
+  }
+
+  private async _refreshPalettePreviews(): Promise<void> {
+    if (!this.connection || !this.controllerId || !this._snapshot) return;
+    try {
+      const previews = await fetchPalettePreviews(this.connection, this.controllerId);
+      this._snapshot = { ...this._snapshot, palette_previews: previews };
+    } catch {
+      /* keep cached previews */
+    }
   }
 
   private async _load(): Promise<void> {
@@ -689,6 +701,23 @@ export class WledSegmentControls extends BasePoweredElement {
           @awm-change=${this._onAwm}
         ></wled-color-wheel-rgbw>
 
+        ${meta?.palette_enabled !== false &&
+        Object.keys(this._snapshot?.palettes_by_name ?? {}).length
+          ? html`
+              <wled-palette-chips
+                ?compact=${this.compact}
+                ?collapsible=${this.compact}
+                .palettesByName=${this._snapshot?.palettes_by_name ?? {}}
+                .palettePreviews=${this._snapshot?.palette_previews ?? {}}
+                .selectedPal=${seg.pal ?? 0}
+                .deviceHost=${this._snapshot?.host ?? ""}
+                @palette-select=${(e: CustomEvent<{ paletteId: number }>) =>
+                  void this._patchSeg({ pal: e.detail.paletteId })}
+                @palette-catalog-changed=${() => void this._refreshPalettePreviews()}
+              ></wled-palette-chips>
+            `
+          : null}
+
         <wled-segment-advanced
           .segment=${seg}
           .meta=${meta}
@@ -722,6 +751,8 @@ export class WledSegmentControls extends BasePoweredElement {
                 .soundFlags=${this._snapshot?.sound_flags ?? []}
                 .selectedFx=${seg.fx ?? 0}
                 .filter=${this.compact ? "" : this._effectFilter}
+                .selectedPalette=${seg.pal ?? 0}
+                .paletteAware=${meta?.palette_enabled !== false}
                 @effect-select=${this._onEffectSelect}
               ></wled-effect-chips>
             `

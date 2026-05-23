@@ -74,10 +74,14 @@ export interface EffectMeta {
 export interface DeviceStateSnapshot {
   state: Record<string, unknown>;
   info?: Record<string, unknown>;
+  /** WLED device host (LAN IP or hostname) for deep links such as cpal.htm. */
+  host?: string;
   fw_ver?: string;
   segments: WledSegment[];
   effects_by_name: Record<string, number>;
   palettes_by_name: Record<string, number>;
+  /** Palette id → CSS gradient from device /json/palx (string keys in JSON). */
+  palette_previews?: Record<string, string>;
   sound_flags: Array<string | null>;
   fxdata: string;
   led_order: number;
@@ -182,6 +186,19 @@ export async function fetchPresets(
     controller_id: controllerId,
   })) as { presets?: Record<string, unknown> };
   return res.presets ?? {};
+}
+
+export async function fetchPalettePreviews(
+  connection: Connection,
+  controllerId: string
+): Promise<Record<string, string>> {
+  await waitForConnection(connection);
+  const res = (await connection.sendMessagePromise({
+    type: "wled_studio/get_palette_previews",
+    schema_version: SCHEMA_VERSION,
+    controller_id: controllerId,
+  })) as { palette_previews?: Record<string, string> };
+  return res.palette_previews ?? {};
 }
 
 /** WLED col slot → [R,G,B,W] */

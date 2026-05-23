@@ -26,6 +26,13 @@ describe("thumbnails", () => {
     );
   });
 
+  it("resolveThumbBasename prefers palette-specific file", () => {
+    const available = new Set(["7_p13_0.16.0_strip.webp", "7_0.16.0_strip.webp"]);
+    expect(resolveThumbBasename(7, available, "strip", "0.16.0", 13)).toBe(
+      "7_p13_0.16.0_strip.webp"
+    );
+  });
+
   it("resolveThumbBasename returns undefined when missing", () => {
     expect(resolveThumbBasename(99, [], "strip", "16.0.0")).toBeUndefined();
   });
