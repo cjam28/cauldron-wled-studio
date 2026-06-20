@@ -10,6 +10,7 @@ import { layoutList, type LayoutRecord } from "../api/layout.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
 import type { WledViewPaint } from "../panel/view-paint.js";
 import { pctTo255, readBrightnessPct } from "../utils/ha-brightness.js";
+import { StudioSelectionController } from "../core/studio-selection.js";
 import "../components/geometry-preview.js";
 import "../components/segment-controls.js";
 import "../panel/view-effects.js";
@@ -59,13 +60,24 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @query("wled-view-effects") private _effectsView?: import("../panel/view-effects.js").WledViewEffects;
   @query("wled-view-paint") private _paintPanel?: WledViewPaint;
 
-  @state() private _selectedSegId = -1;
-  @state() private _highlightSegIds: number[] = [];
+  private readonly _selection = new StudioSelectionController(this);
+
   /** Optimistic global brightness (0–100) while dragging until HA state catches up. */
   @state() private _globalBriPct: number | null = null;
   /** Last non-zero brightness for restore when dragging up from off. */
   @state() private _lastNonZeroBri = 100;
-  @state() private _segments: import("../api/wled-state.js").WledSegment[] = [];
+
+  // Segment selection is owned by the shared controller; getters keep the
+  // template and handlers reading the same `this._*` names unchanged.
+  private get _selectedSegId(): number {
+    return this._selection.selectedSegId;
+  }
+  private get _highlightSegIds(): number[] {
+    return this._selection.highlightSegIds;
+  }
+  private get _segments(): import("../api/wled-state.js").WledSegment[] {
+    return this._selection.segments;
+  }
 
   private _unsubLive?: () => void;
   private _bootstrapGen = 0;
@@ -440,7 +452,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _onStripSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
     if (this._cardTab === "paint") return;
-    this._selectedSegId = ev.detail.segmentId;
+    this._selection.selectSegment(ev.detail.segmentId);
     if (this._cardTab === "color") {
       this._segmentControls?.selectSegment(ev.detail.segmentId);
     } else if (this._cardTab === "effects") {
@@ -457,34 +469,22 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       highlightIds?: number[];
     }>
   ): void {
-    this._selectedSegId = ev.detail.segmentId;
-    if (ev.detail.highlightIds?.length) {
-      this._highlightSegIds = ev.detail.highlightIds;
-    } else if (ev.detail.editIds?.length) {
-      this._highlightSegIds = ev.detail.editIds;
-    } else {
-      this._highlightSegIds = [ev.detail.segmentId];
-    }
-    this.requestUpdate();
+    this._selection.applyTargetsChanged(ev.detail);
   }
 
   private _onSegmentChange(ev: CustomEvent<{ segmentId: number; editIds?: number[] }>): void {
-    this._selectedSegId = ev.detail.segmentId;
-    if (ev.detail.editIds?.length) {
-      this._highlightSegIds = ev.detail.editIds;
-    }
-    this.requestUpdate();
+    this._selection.applySegmentChange(ev.detail);
   }
 
   private async _loadSegments(): Promise<void> {
     if (!this.hass?.connection || !this._controllerId) return;
     try {
       const snap = await fetchDeviceState(this.hass.connection, this._controllerId);
-      this._segments = snap.segments ?? [];
-      if (this._segments.length && this._selectedSegId < 0) {
-        this._selectedSegId = this._segments[0].id;
+      const segs = snap.segments ?? [];
+      this._selection.setSegments(segs);
+      if (segs.length && this._selection.selectedSegId < 0) {
+        this._selection.selectSegment(segs[0].id);
       }
-      this.requestUpdate();
     } catch {
       /* tap-to-select degrades gracefully */
     }
@@ -492,7 +492,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _syncSegmentsFromControls(): void {
     const segs = this._segmentControls?.segments;
-    if (segs?.length) this._segments = segs;
+    if (segs?.length) this._selection.setSegments(segs);
   }
 
   private _readGlobalBrightnessPct(): number {

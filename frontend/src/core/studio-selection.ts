@@ -60,6 +60,19 @@ export class StudioSelectionController implements ReactiveController {
     this.host.requestUpdate();
   }
 
+  /**
+   * Apply a `segment-change` detail: always update the focused segment; update
+   * highlights only when editIds are supplied (unlike applyTargetsChanged, this
+   * leaves the existing highlight set in place when editIds is empty).
+   */
+  applySegmentChange(detail: { segmentId: number; editIds?: number[] }): void {
+    this._selectedSegId = detail.segmentId;
+    if (detail.editIds?.length) {
+      this._highlightSegIds = [...detail.editIds];
+    }
+    this.host.requestUpdate();
+  }
+
   /** Replace the cached segment list (card strip preview). */
   setSegments(segments: WledSegment[]): void {
     this._segments = segments;

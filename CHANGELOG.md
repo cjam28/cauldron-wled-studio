@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1
+
+Phase 2 (part) of the v2 architecture: the card joins the shared shell controllers. No user-facing change.
+
+### Internal
+- `wled-studio-card` now shares `StudioSelectionController` with the panel, removing its duplicate segment-selection state and the `segment-targets-changed` / `segment-change` reducers (delegated via getters; template unchanged).
+- The card's bootstrap/nav/live extraction (the larger, preview-coupled part of Phase 2) is folded into the Phase 4 `<wled-studio-shell>`, where it consolidates once instead of being extracted twice. CS-3/CS-4 move to the Phase 7.5 polish pass.
+
+### Tests
+- 143 vitest (was 141): +2 selection-controller tests.
+
 ## 0.12.0
 
 Phase 1 of the v2 architecture: shared shell controllers; panel adopts them. No user-facing change.

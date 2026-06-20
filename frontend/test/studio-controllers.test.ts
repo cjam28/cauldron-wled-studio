@@ -71,6 +71,26 @@ describe("StudioSelectionController", () => {
     src.push(3);
     expect(c.highlightSegIds).toEqual([1, 2]);
   });
+
+  it("applySegmentChange always sets selection, keeps highlights without editIds", () => {
+    const c = new StudioSelectionController(mockHost());
+    c.applyTargetsChanged({ segmentId: 1, highlightIds: [1, 2] });
+    c.applySegmentChange({ segmentId: 5 });
+    expect(c.selectedSegId).toBe(5);
+    expect(c.highlightSegIds).toEqual([1, 2]); // unchanged when no editIds
+    c.applySegmentChange({ segmentId: 7, editIds: [7, 8] });
+    expect(c.selectedSegId).toBe(7);
+    expect(c.highlightSegIds).toEqual([7, 8]);
+  });
+
+  it("setSegments replaces the cached list", () => {
+    const c = new StudioSelectionController(mockHost());
+    c.setSegments([
+      { id: 0 },
+      { id: 1 },
+    ] as unknown as import("../src/api/wled-state.js").WledSegment[]);
+    expect(c.segments.map((s) => s.id)).toEqual([0, 1]);
+  });
 });
 
 describe("StudioNavController", () => {
