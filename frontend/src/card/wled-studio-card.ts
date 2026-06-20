@@ -121,12 +121,20 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
     return `wled-card-panel-${tab}`;
   }
 
-  protected override updated(changed: PropertyValues): void {
-    super.updated(changed);
+  protected override willUpdate(changed: PropertyValues): void {
+    super.willUpdate(changed);
+    // P1-3: redirect away from a hidden tab BEFORE render so the change is
+    // absorbed into the same update cycle. Doing this in updated() set reactive
+    // state after render and scheduled a wasteful second update (Lit's
+    // "scheduled an update after an update completed" warning).
     const visibleTabs = this._visibleModeTabs().map((t) => t.id);
     if (!visibleTabs.includes(this._cardTab)) {
       this._cardTab = visibleTabs[0] ?? "color";
     }
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
     this._syncSegmentsFromControls();
     if (changed.has("hass") && this._globalBriPct !== null) {
       const actual = this._readGlobalBrightnessPct();

@@ -64,6 +64,20 @@ export function isMergeForEffectsActive(controllerId: string): boolean {
   return Boolean(map[controllerId]);
 }
 
+/**
+ * True only when the user has EXPLICITLY enabled merge-for-effects for this
+ * controller. Unlike {@link isMergeForEffectsActive} (which defaults to `true`
+ * for the toggle's UI state), this returns `false` until the user opts in, so
+ * the default-true flag never silently reshapes edit targets on load (P1-1).
+ */
+export function isMergeForEffectsExplicit(controllerId: string): boolean {
+  if (!controllerId) return false;
+  const map = readJson<boolean>(MERGE_FLAG_KEY);
+  // setMergeForEffectsActive() stores the key only when explicitly enabled and
+  // deletes it when disabled, so presence ⟺ explicit opt-in.
+  return controllerId in map && Boolean(map[controllerId]);
+}
+
 /** True when segment 0 spans most of the strip (merge already applied on device). */
 export function isWledLayoutMerged(
   segments: WledSegment[],

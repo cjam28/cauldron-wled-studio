@@ -162,13 +162,30 @@ export async function sceneCapture(
   name: string,
   options?: { sceneId?: string; layoutId?: string; transitionMs?: number }
 ): Promise<SceneRecord> {
-  const res = await ws<{ scene?: SceneRecord }>(connection, {
-    type: "wled_studio/scene_capture",
-    controller_id: controllerId,
-    name,
-    scene_id: options?.sceneId,
-    layout_id: options?.layoutId,
-    transition_ms: options?.transitionMs ?? 2500,
-  });
-  return res.scene ?? { id: "", controller_id: controllerId, name, wled_state: {} };
+  try {
+    const res = await ws<{ scene?: SceneRecord }>(connection, {
+      type: "wled_studio/scene_capture",
+      controller_id: controllerId,
+      name,
+      scene_id: options?.sceneId,
+      layout_id: options?.layoutId,
+      transition_ms: options?.transitionMs ?? 2500,
+    });
+    return res.scene ?? { id: "", controller_id: controllerId, name, wled_state: {} };
+  } catch (err: unknown) {
+    // SC-2: translate a server-side concurrency conflict into a typed error so
+    // the capture UI can preserve the name and react (mirrors sceneSave).
+    const e = err as {
+      code?: string;
+      message?: string;
+      data?: { scene?: SceneRecord; etag?: string };
+    };
+    if (e?.code === "conflict" && e.data?.scene) {
+      throw new SceneConflictError(
+        e.data.scene,
+        String(e.data.etag ?? e.message ?? "")
+      );
+    }
+    throw err;
+  }
 }

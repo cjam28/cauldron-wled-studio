@@ -18,6 +18,7 @@ import { sceneCapture } from "../api/scenes.js";
 import { toggleEditId } from "../utils/segment-edit.js";
 import {
   addEffectLibraryEntry,
+  clampSliderByte,
   getEffectDefaultSliders,
   loadEffectLibrary,
   saveEffectDefaultSliders,
@@ -27,6 +28,7 @@ import {
 import {
   buildMergeForEffectsState,
   isMergeForEffectsActive,
+  isMergeForEffectsExplicit,
   isWledLayoutMerged,
   mergedEffectTargetIds,
   saveSegmentLayoutSnapshot,
@@ -125,7 +127,10 @@ export class WledViewEffects extends BasePoweredElement {
       const wledMerged = isWledLayoutMerged(this._segments, pixelCount);
       this._needsMergeApply =
         this._mergeActive && this._segments.length > 1 && !wledMerged;
-      if (this._mergeActive && wledMerged) {
+      // P1-1: only reshape edit targets when merge was EXPLICITLY enabled for
+      // this controller. The default-true active flag must not silently mutate
+      // the user's segment selection on load.
+      if (isMergeForEffectsExplicit(this.controllerId) && wledMerged) {
         this._editIds = mergedEffectTargetIds(this._segments, true);
         this._focusSegId = this._editIds[0] ?? 0;
       }
@@ -409,7 +414,6 @@ export class WledViewEffects extends BasePoweredElement {
           ? html`
               <wled-effect-merge-toggle
                 ?compact=${compact}
-                class=${compact ? "compact-merge" : ""}
                 .connection=${this.connection}
                 .controllerId=${this.controllerId}
                 .segments=${this._segments}
@@ -667,7 +671,9 @@ export class WledViewEffects extends BasePoweredElement {
   }
 
   private _slider(key: keyof WledSegment, ev: Event): void {
-    const value = Number((ev.target as HTMLInputElement).value);
+    // EF-2: reject NaN/empty and clamp to the 0–255 byte range WLED accepts.
+    const value = clampSliderByte(Number((ev.target as HTMLInputElement).value));
+    if (value === null) return;
     void this._segPatch({ [key]: value } as Partial<WledSegment>);
   }
 
@@ -754,14 +760,6 @@ export class WledViewEffects extends BasePoweredElement {
       }
       .wrap.compact .search {
         max-width: 100%;
-      }
-      .compact-merge {
-        display: block;
-      }
-      :host(.compact-merge) .merge-row,
-      .compact-merge .merge-row {
-        padding: 8px 10px;
-        margin-bottom: 8px;
       }
       .merge-prompt {
         margin: 0 0 12px;

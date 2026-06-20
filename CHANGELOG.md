@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.5
+
+Phase 0 of the v2 redesign: P1 bug fixes and functional blockers on a clean baseline. No new features; behavior-preserving except where noted.
+
+### Fixes
+- **Scenes (blocker):** "Overwrite anyway" now passes the remote `etag` to `scene_save`, so resolving a scene conflict succeeds instead of looping on the same conflict. (SC-1)
+- **Scenes:** scene capture surfaces a server-side conflict as a typed error and keeps the typed name with an actionable message instead of a dead-end "Save failed" toast. (SC-2; defensive/forward-compatible — capture is a server-side upsert today.)
+- **Effects/Segments/Paint:** all numeric sliders (Effects, Segment controls, and Paint brush) reject `NaN`/empty input and clamp to WLED's 0–255 range instead of writing invalid values to the device — consistent across every tab. (EF-2)
+- **Effects/Segments:** "Merge for effects" no longer silently reshapes your segment selection on load — the merge reshape now requires an explicit per-controller opt-in (the default-on toggle state alone never mutates edit targets). (P1-1)
+- **Effects:** removed dead `.compact-merge` styles that could not cross the merge-toggle's shadow boundary; compact styling is driven solely by the toggle's `compact` property. (P1-2)
+- **Card:** the hidden-tab redirect runs in `willUpdate` instead of `updated`, eliminating a wasted extra render cycle. (P1-3)
+- **Audio reactive:** default tuning now matches WLED's documentation — frequency scale square-root (was linear), limiter rise 60 ms (was 100), limiter fall 800 ms (was 400). Device-reported values still take precedence. (AU-1)
+
+### Internal
+- Extracted pure, unit-tested helpers: `isMergeForEffectsExplicit`, `clampSliderByte`, `parseAudioReactiveConfig`.
+- Verified `_applyLibraryEntry`/`sliderValuesFromSegment` already filter undefined slider keys (P1-4 was already resolved in code); locked with a regression test.
+
+### Tests
+- 130 vitest (was 119): new coverage for scene conflict etag/translation, slider clamp/NaN, merge opt-in, and audio defaults.
+
 ## 0.11.4
 
 ### Palettes

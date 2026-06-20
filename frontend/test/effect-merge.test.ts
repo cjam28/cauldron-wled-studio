@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildMergeForEffectsState,
   buildRestoreSegmentsState,
+  isMergeForEffectsActive,
+  isMergeForEffectsExplicit,
   mergedEffectTargetIds,
+  setMergeForEffectsActive,
 } from "../src/utils/effect-merge.js";
 import type { WledSegment } from "../src/api/wled-state.js";
 
@@ -35,5 +38,30 @@ describe("effect-merge", () => {
   it("merged mode targets segment 0 only", () => {
     expect(mergedEffectTargetIds(four, true)).toEqual([0]);
     expect(mergedEffectTargetIds(four, false)).toEqual([]);
+  });
+});
+
+describe("merge opt-in (P1-1)", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("active defaults to true, but explicit stays false until opt-in", () => {
+    // The default-true active flag must NOT count as an explicit opt-in, so it
+    // can never silently reshape edit targets on load.
+    expect(isMergeForEffectsActive("ctrlA")).toBe(true);
+    expect(isMergeForEffectsExplicit("ctrlA")).toBe(false);
+  });
+
+  it("explicit is true only after opt-in and false again after opt-out", () => {
+    setMergeForEffectsActive("ctrlA", true);
+    expect(isMergeForEffectsExplicit("ctrlA")).toBe(true);
+
+    setMergeForEffectsActive("ctrlA", false);
+    expect(isMergeForEffectsExplicit("ctrlA")).toBe(false);
+    // Active falls back to its default-true UI state after opt-out.
+    expect(isMergeForEffectsActive("ctrlA")).toBe(true);
+  });
+
+  it("returns false for an empty controller id", () => {
+    expect(isMergeForEffectsExplicit("")).toBe(false);
   });
 });
