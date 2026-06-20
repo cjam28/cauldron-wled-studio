@@ -20,7 +20,10 @@ import "./view-audio.js";
 import "./view-voice.js";
 import "./view-schedules.js";
 import "./view-firmware.js";
-import { listControllers, type ControllerInfo } from "../api/live-stream.js";
+import type { ControllerInfo } from "../api/live-stream.js";
+import { StudioSessionController } from "../core/studio-session.js";
+import { StudioNavController } from "../core/studio-nav.js";
+import { StudioSelectionController } from "../core/studio-selection.js";
 
 export const PANEL_TAG = "wled-studio-panel";
 
@@ -64,16 +67,37 @@ function isMoreView(view: StudioView): boolean {
 }
 
 export class WledStudioPanel extends BasePoweredElement {
-  @state() private _view: StudioView = "color";
-  @state() private _controllerId = "";
-  @state() private _controllers: ControllerInfo[] = [];
+  private readonly _session = new StudioSessionController(this);
+  private readonly _nav = new StudioNavController<StudioView>(this, {
+    initial: "color",
+    // "segments" is not a panel view; never land on it.
+    normalize: (v) => ((v as string) === "segments" ? "color" : v),
+  });
+  private readonly _selection = new StudioSelectionController(this);
+
   @state() private _drawerOpen = false;
   @state() private _moreExpanded = false;
-  @state() private _previewSegId = -1;
-  @state() private _previewHighlightIds: number[] = [];
   @state() private _showOnboard = false;
 
   private _onboardKeyHandler?: (e: KeyboardEvent) => void;
+
+  // Shell state is owned by the controllers above; these getters keep the
+  // template and view-logic reading the same `this._*` names unchanged.
+  private get _view(): StudioView {
+    return this._nav.view;
+  }
+  private get _controllerId(): string {
+    return this._session.controllerId;
+  }
+  private get _controllers(): ControllerInfo[] {
+    return this._session.controllers;
+  }
+  private get _previewSegId(): number {
+    return this._selection.selectedSegId;
+  }
+  private get _previewHighlightIds(): number[] {
+    return this._selection.highlightSegIds;
+  }
 
   protected override onPoweredConnect(): void {
     try {
@@ -81,19 +105,10 @@ export class WledStudioPanel extends BasePoweredElement {
     } catch {
       this._showOnboard = false;
     }
-    if ((this._view as string) === "segments") {
-      this._view = "color";
-    }
     if (isMoreView(this._view)) {
       this._moreExpanded = true;
     }
     void this._loadController();
-  }
-
-  protected override willUpdate(changed: PropertyValues): void {
-    if (changed.has("_view") && (this._view as string) === "segments") {
-      this._view = "color";
-    }
   }
 
   protected override onPoweredDisconnect(): void {
@@ -113,22 +128,7 @@ export class WledStudioPanel extends BasePoweredElement {
 
   private async _loadController(): Promise<void> {
     if (!this.hass?.connection) return;
-    try {
-      const controllers = await listControllers(this.hass.connection);
-      this._controllers = controllers;
-      if (
-        this._controllerId &&
-        controllers.some((c) => c.entry_id === this._controllerId)
-      ) {
-        return;
-      }
-      const pick = controllers[0];
-      if (pick?.entry_id) {
-        this._controllerId = String(pick.entry_id);
-      }
-    } catch {
-      /* panel still usable */
-    }
+    await this._session.loadControllers(this.hass.connection);
   }
 
   private _dismissOnboard(): void {
@@ -178,8 +178,7 @@ export class WledStudioPanel extends BasePoweredElement {
   }
 
   private _onControllerPick(ev: Event): void {
-    const v = (ev.target as HTMLSelectElement).value;
-    if (v) this._controllerId = v;
+    this._session.setControllerId((ev.target as HTMLSelectElement).value);
   }
 
   protected override render() {
@@ -391,7 +390,7 @@ export class WledStudioPanel extends BasePoweredElement {
 
   private _onPreviewSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
     const id = ev.detail.segmentId;
-    this._previewSegId = id;
+    this._selection.selectSegment(id);
     if (this._view === "color") {
       this.renderRoot
         .querySelector<WledSegmentControls>("wled-segment-controls")
@@ -410,14 +409,7 @@ export class WledStudioPanel extends BasePoweredElement {
   private _onPreviewTargetsChanged(
     ev: CustomEvent<{ segmentId: number; highlightIds?: number[]; editIds?: number[] }>
   ): void {
-    this._previewSegId = ev.detail.segmentId;
-    if (ev.detail.highlightIds?.length) {
-      this._previewHighlightIds = ev.detail.highlightIds;
-    } else if (ev.detail.editIds?.length) {
-      this._previewHighlightIds = ev.detail.editIds;
-    } else {
-      this._previewHighlightIds = [ev.detail.segmentId];
-    }
+    this._selection.applyTargetsChanged(ev.detail);
   }
 
   private _livePreview(): WledStudioLivePreview | null {
@@ -436,10 +428,7 @@ export class WledStudioPanel extends BasePoweredElement {
   }
 
   private _masterEntityForController(): string {
-    return (
-      this._controllers.find((c) => c.entry_id === this._controllerId)
-        ?.master_entity_id ?? ""
-    );
+    return this._session.masterEntityFor(this._controllerId);
   }
 
   private _renderFirmwareView(conn: Connection, id: string) {
@@ -560,7 +549,7 @@ export class WledStudioPanel extends BasePoweredElement {
     if (leavingPaint) {
       void this._abortActivePaint();
     }
-    this._view = view;
+    this._nav.select(view);
     if (isMoreView(view)) {
       this._moreExpanded = true;
     }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+Phase 1 of the v2 architecture: shared shell controllers; panel adopts them. No user-facing change.
+
+### Internal
+- New `frontend/src/core/` Lit `ReactiveController`s extracting the duplicated shell logic: `StudioSessionController` (controller discovery/pick + master entity), `StudioNavController` (active view + normalize-based hidden-view redirect), `StudioSelectionController` (selected/highlight segments + targets-changed reducer).
+- `wled-studio-panel` now delegates its shell state to these controllers via getters; template and behavior unchanged. The "segments → color" redirect is enforced at the source (`normalize`) instead of a `willUpdate` guard.
+- First controller unit tests (`test/studio-controllers.test.ts`); the card adopts the same controllers in the next phase.
+
+### Tests
+- 141 vitest (was 130): +11 controller tests.
+
 ## 0.11.5
 
 Phase 0 of the v2 redesign: P1 bug fixes and functional blockers on a clean baseline. No new features; behavior-preserving except where noted.
