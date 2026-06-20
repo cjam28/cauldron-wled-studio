@@ -76,18 +76,18 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     frontend.async_register_built_in_panel(
         hass,
         component_name="custom",
-        sidebar_title="WLED Studio",
-        sidebar_icon="mdi:led-strip-variant",
+        sidebar_title="WLED Config",
+        sidebar_icon="mdi:cog-outline",
         frontend_url_path=PANEL_URL_PATH,
         config={
             "_panel_custom": {
                 "name": PANEL_MODULE,
                 "module_url": panel_url,
                 "embed_iframe": False,
-                "require_admin": False,
+                "require_admin": True,
             }
         },
-        require_admin=False,
+        require_admin=True,
     )
 
     # Do not use add_extra_js_url — loading the same card bundle twice causes

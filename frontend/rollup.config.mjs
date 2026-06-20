@@ -38,4 +38,13 @@ export default [
       warn(warning);
     },
   },
+  {
+    input: "src/painter-entry.ts",
+    output: { file: "../dist/wled-painter-card.js", ...sharedOutput },
+    plugins: sharedPlugins,
+    onwarn(warning, warn) {
+      if (warning.code === "CIRCULAR_DEPENDENCY") return;
+      warn(warning);
+    },
+  },
 ];
