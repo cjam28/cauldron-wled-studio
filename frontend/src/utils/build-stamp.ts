@@ -1,5 +1,5 @@
 /** Integration version — keep in sync with custom_components/wled_studio/manifest.json */
-export const WLED_STUDIO_BUILD = "0.11.4";
+export const WLED_STUDIO_BUILD = "0.11.5";
 
 declare global {
   interface Window {

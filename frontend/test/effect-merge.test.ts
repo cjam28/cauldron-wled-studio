@@ -4,6 +4,7 @@ import {
   buildRestoreSegmentsState,
   isMergeForEffectsActive,
   isMergeForEffectsExplicit,
+  isWledLayoutMerged,
   mergedEffectTargetIds,
   setMergeForEffectsActive,
 } from "../src/utils/effect-merge.js";
@@ -63,5 +64,34 @@ describe("merge opt-in (P1-1)", () => {
 
   it("returns false for an empty controller id", () => {
     expect(isMergeForEffectsExplicit("")).toBe(false);
+  });
+
+  it("fresh controller (active=true, explicit=false) does NOT enter the reshape branch", () => {
+    // Mirrors the load-path guard in view-effects._load() and
+    // segment-controls._load(): the edit-target reshape only fires when
+    // `isMergeForEffectsExplicit(id) && isWledLayoutMerged(segments, px)`.
+    // A never-opted-in controller defaults active=true but explicit=false, so
+    // even with a device layout that IS merged, the branch must stay closed —
+    // the default-true flag never silently reshapes the selection on load.
+    const merged: WledSegment[] = [
+      { id: 0, start: 0, stop: 210, on: true },
+      { id: 1, start: 210, stop: 210, on: false },
+    ];
+    const pixelCount = 210;
+
+    expect(isMergeForEffectsActive("freshCtrl")).toBe(true);
+    expect(isWledLayoutMerged(merged, pixelCount)).toBe(true);
+
+    const wouldReshape =
+      isMergeForEffectsExplicit("freshCtrl") &&
+      isWledLayoutMerged(merged, pixelCount);
+    expect(wouldReshape).toBe(false);
+
+    // After explicit opt-in the same condition flips true (guard, not a wall).
+    setMergeForEffectsActive("freshCtrl", true);
+    expect(
+      isMergeForEffectsExplicit("freshCtrl") &&
+        isWledLayoutMerged(merged, pixelCount)
+    ).toBe(true);
   });
 });

@@ -131,6 +131,63 @@ describe("StudioNavController", () => {
     c.revalidate();
     expect(c.view).toBe("color");
   });
+
+  // P1-3: hidden-tab redirect invariant — the active view must never be a
+  // view that is no longer visible. The card/panel express their visible set
+  // through `normalize`; `revalidate()` re-applies it whenever that set
+  // shrinks. Mirrors `_visibleModeTabs()` (card) / the "segments" guard
+  // (panel) without booting a full element.
+  describe("P1-3 hidden-tab redirect invariant", () => {
+    /** normalize() built from a live `visibleViews` set, like the card. */
+    const fromVisible = (visible: () => readonly string[]) => (v: string) => {
+      const views = visible();
+      return views.includes(v) ? v : (views[0] ?? "color");
+    };
+
+    it("normalizes a hidden initial view at construction", () => {
+      // "segments" is not in the visible set → must land on the first visible.
+      const visible = ["color", "effects", "paint"];
+      const c = new StudioNavController<string>(mockHost(), {
+        initial: "segments",
+        normalize: fromVisible(() => visible),
+      });
+      expect(c.view).toBe("color");
+    });
+
+    it("revalidate redirects off a now-hidden active view when visibleViews shrinks", () => {
+      let visible: string[] = ["color", "effects", "paint"];
+      const host = mockHost();
+      const c = new StudioNavController<string>(host, {
+        initial: "color",
+        normalize: fromVisible(() => visible),
+      });
+      c.select("effects");
+      expect(c.view).toBe("effects");
+
+      // Shrink the visible set so the active "effects" view disappears.
+      visible = ["color", "paint"];
+      const before = host.updates;
+      c.revalidate();
+      expect(c.view).toBe("color"); // redirected to first visible
+      expect(host.updates).toBe(before + 1); // exactly one update for the change
+    });
+
+    it("revalidate is an idempotent no-op while the active view stays visible", () => {
+      const visible = ["color", "effects", "paint"];
+      const host = mockHost();
+      const c = new StudioNavController<string>(host, {
+        initial: "effects",
+        normalize: fromVisible(() => visible),
+      });
+      expect(c.view).toBe("effects");
+
+      const before = host.updates;
+      c.revalidate();
+      c.revalidate();
+      expect(c.view).toBe("effects"); // unchanged
+      expect(host.updates).toBe(before); // no spurious host update
+    });
+  });
 });
 
 describe("StudioSessionController", () => {

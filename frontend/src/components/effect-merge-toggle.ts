@@ -49,7 +49,7 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         : null;
 
     return html`
-      <label class="merge-row ${this._merged ? "on" : ""} ${this.compact ? "compact" : ""}">
+      <label class="merge-row ${this._merged ? "on" : ""}">
         <input
           type="checkbox"
           .checked=${this._merged}
@@ -148,12 +148,12 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         border-color: var(--primary-color);
         background: color-mix(in srgb, var(--primary-color) 12%, transparent);
       }
-      .merge-row.compact {
+      :host([compact]) .merge-row {
         padding: 6px 10px;
         margin-bottom: 8px;
         align-items: center;
       }
-      .merge-row.compact .merge-label {
+      :host([compact]) .merge-row .merge-label {
         font-size: 0.8rem;
       }
       .merge-row input {
