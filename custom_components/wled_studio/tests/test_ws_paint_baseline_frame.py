@@ -28,10 +28,19 @@ _baseline_frame = ws_paint_baseline_frame.__wrapped__
 
 
 class FakeWledClient:
-    def __init__(self, *, pixel_count: int = 4, rgbw: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        pixel_count: int = 4,
+        rgbw: bool = True,
+        state: dict[str, Any] | None = None,
+    ) -> None:
         self.info: dict[str, Any] = {
             "leds": {"count": pixel_count, "rgbw": rgbw},
         }
+        # WLED cached state (segments drive the segment-expansion fallback when
+        # no live frame is available — the common painter case).
+        self.state: dict[str, Any] = state if isinstance(state, dict) else {}
 
 
 class FakeProxy:
@@ -51,8 +60,11 @@ class FakeCoordinator:
         rgbw: bool = True,
         frame: dict[str, Any] | None = None,
         proxy: bool = True,
+        state: dict[str, Any] | None = None,
     ) -> None:
-        self.client = FakeWledClient(pixel_count=pixel_count, rgbw=rgbw)
+        self.client = FakeWledClient(
+            pixel_count=pixel_count, rgbw=rgbw, state=state
+        )
         self.live_proxy = FakeProxy(frame) if proxy else None
 
 
@@ -141,6 +153,43 @@ async def test_baseline_frame_absent_returns_empty() -> None:
     assert result["ok"] is True
     assert result["count"] == 0
     assert result["pixels"] == []
+
+
+@pytest.mark.asyncio
+async def test_baseline_frame_falls_back_to_segment_colors() -> None:
+    """No live frame, but WLED state has segments → reconstruct the current look
+    from segment colors (the common painter case — proxy not ingesting). This is
+    the same source the preserve commit-merge uses, so canvas == commit result."""
+    pixel_count = 3
+    # One segment spanning all 3 LEDs, solid red; no live frame.
+    state = {"seg": [{"start": 0, "stop": 3, "col": [[255, 0, 0]]}]}
+    coord = FakeCoordinator(
+        pixel_count=pixel_count, rgbw=True, frame=None, state=state
+    )
+    hass = FakeHass()
+    cid = _register(hass, coord)
+
+    conn = FakeConnection()
+    await _baseline_frame(
+        hass,
+        conn,
+        {
+            "id": 5,
+            "type": "wled_studio/paint_baseline_frame",
+            "controller_id": cid,
+        },
+    )
+
+    assert conn.errors == []
+    result = conn.result
+    assert result["ok"] is True
+    assert result["count"] == pixel_count
+    # All 3 LEDs red, W=0 — NOT the empty fallback (the bug the owner saw on-device).
+    assert result["pixels"] == [
+        255, 0, 0, 0,
+        255, 0, 0, 0,
+        255, 0, 0, 0,
+    ]
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DOMAIN, INTEGRATION_VERSION, SCHEMA_VERSION
 from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
-from .paint_commit import live_frame_to_payload
+from .paint_commit import expand_segments_to_payload, live_frame_to_payload
 from .thumbnails import list_thumbs
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
@@ -1283,8 +1283,21 @@ async def ws_paint_baseline_frame(
     if isinstance(frame, dict) and pixel_count > 0:
         payload = live_frame_to_payload(frame, pixel_count, rgbw=rgbw)
 
+    # Mirror PaintSession._capture_baseline: when no live frame is available
+    # (the proxy is NOT ingesting — the common painter case, since the painter
+    # does not subscribe to the live stream), reconstruct the current look from
+    # the WLED state's segment colors. This is the SAME source the preserve
+    # commit-merge uses, so the canvas matches exactly what commit produces.
+    if not payload and pixel_count > 0:
+        state = getattr(client, "state", None)
+        state = state if isinstance(state, dict) else {}
+        segs_raw = state.get("seg")
+        segs = segs_raw if isinstance(segs_raw, list) else []
+        if segs:
+            payload = expand_segments_to_payload(segs, pixel_count, rgbw=rgbw)
+
     if not payload:
-        # No current frame (proxy not ingesting) — graceful empty fallback.
+        # Truly nothing available (no frame, no segments) — graceful empty fallback.
         connection.send_result(
             msg["id"],
             {
