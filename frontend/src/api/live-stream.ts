@@ -8,6 +8,12 @@ export interface LiveFrameEvent extends LvFrame {
   entry_id?: string;
   controller_id?: string;
   fps?: number;
+  /** LV-4 additive: proxy flags this frame as a re-broadcast of a stale buffer. */
+  stale?: boolean;
+  /** LV-4 additive: lifecycle hint, e.g. "live" | "stale" | "drop". */
+  status?: string;
+  /** LV-4 additive: count of frames the proxy dropped to keep up. */
+  dropped?: number;
 }
 
 type LiveWsEvent = {
@@ -42,6 +48,9 @@ export function subscribeLive(
           entry_id: data.entry_id as string | undefined,
           controller_id: data.controller_id as string | undefined,
           fps: data.fps as number | undefined,
+          stale: data.stale as boolean | undefined,
+          status: data.status as string | undefined,
+          dropped: data.dropped as number | undefined,
         });
       },
       {

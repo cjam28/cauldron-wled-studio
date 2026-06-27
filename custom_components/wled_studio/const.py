@@ -28,10 +28,22 @@ STORAGE_VERSION = 1
 
 # Live preview
 LIVE_TARGET_FPS = 20
+# Remote (Nabu Casa / WAN) subscribers are rate-limited to this cap so a single
+# remote viewer never throttles LAN viewers (LV-2). Local subs always get the
+# full LIVE_TARGET_FPS regardless of how many remote subs are present.
+LIVE_REMOTE_FPS = 10
 LIVE_LINGER_SECONDS = 5
 LIVE_RECONNECT_BASE_SEC = 0.25
 LIVE_RECONNECT_MAX_SEC = 8.0
 LIVE_NO_FRAME_PROBE_SEC = 5
+# Soft-stale threshold (LV-4): the held frame is considered genuinely OLD only
+# once it has aged past this many seconds with the ws still alive. DECOUPLED
+# from the broadcast tick (1/LIVE_TARGET_FPS = 50 ms) on purpose — upstream WLED
+# ingest is frequently slower than the broadcast tick during healthy steady
+# state, and a held-but-fresh frame must NOT be flagged stale. Only a real pause
+# (>= LIVE_STALE_SEC) is "stale". Kept well under LIVE_NO_FRAME_PROBE_SEC so the
+# soft-stale badge shows before the hard probe/reconnect window.
+LIVE_STALE_SEC = 0.75
 
 # HTTP client
 HTTP_MAX_IN_FLIGHT = 5

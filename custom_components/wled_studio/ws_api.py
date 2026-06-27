@@ -1116,7 +1116,7 @@ async def ws_paint_frame(
         connection.send_error(msg["id"], "invalid_payload", str(err))
         return
 
-    async def _send_frame() -> None:
+    async def _send_frame() -> dict[str, Any]:
         session = coord.get_paint_session()
         await session.send_frame(
             payload,
@@ -1127,15 +1127,22 @@ async def ws_paint_frame(
             brush=msg.get("brush"),
             fill=msg.get("fill"),
         )
+        return session.connection_status()
 
     try:
-        if await _ws_call(connection, msg["id"], _send_frame()) is None:
-            return
+        status = await _ws_call(connection, msg["id"], _send_frame())
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return
+    if status is None:
+        return
+    # Additive fields, no wire/DDP change. SP-4: connection-health so the painter
+    # can show a recovery banner. SP-5: seg_count/max_segments/seg_warn so it can
+    # warn (at ~80% of maxseg) before a commit would hard-fail. Both come from
+    # session.connection_status(); older frontends simply ignore them.
     connection.send_result(
-        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+        msg["id"],
+        {"ok": True, "schema_version": SCHEMA_VERSION, **status},
     )
 
 
@@ -1181,6 +1188,53 @@ async def ws_paint_stop(
                     _LOGGER.warning("paint_stop live clear failed", exc_info=True)
     connection.send_result(
         msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/paint_status",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Report paint-session connection health (SP-4 recovery banner source)."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    session = coord.paint_session
+    if session is None or not session.active:
+        connection.send_result(
+            msg["id"],
+            {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "active": False,
+                "connection_healthy": True,
+                "connection_reason": None,
+                "consecutive_send_failures": 0,
+                "last_success_ts": None,
+            },
+        )
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "active": True,
+            **session.connection_status(),
+        },
     )
 
 
@@ -1298,6 +1352,7 @@ _WS_HANDLERS = (
     ws_paint_start,
     ws_paint_frame,
     ws_paint_stop,
+    ws_paint_status,
     ws_thumb_capture_start,
     ws_thumb_capture_cancel,
     ws_register_lovelace_resource,

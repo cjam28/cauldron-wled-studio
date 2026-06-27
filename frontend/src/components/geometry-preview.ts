@@ -68,8 +68,25 @@ export class WledGeometryPreview extends BasePoweredElement {
       if (now - this._lastLivePaintMs < 50) return;
       this._lastLivePaintMs = now;
     }
+    // LV-4 frame-status contract:
+    //   "stale" — the held frame is GENUINELY OLD (upstream paused past
+    //     LIVE_STALE_SEC). Keep the last good pixels, surface the stale badge,
+    //     and stop updating the canvas. This is the ONLY case that freezes.
+    //   "drop"  — a FRESH frame whose subscriber had N intervening frames
+    //     coalesced/throttled away. dropped>0 is informational only: this IS
+    //     the freshest data, so we MUST paint it (a remote/throttled viewer
+    //     gets "drop" on nearly every steady-state delivery — freezing it
+    //     would stall the preview). We surface a subtle "throttled" hint but
+    //     never early-return.
+    //   "live"  — fresh frame, nothing skipped. Paint normally.
+    if (frame.stale === true || frame.status === "stale") {
+      this._status = "stale";
+      this.requestUpdate();
+      return;
+    }
     this._pixels = expandToFixture(frame, this.pixelCount);
-    this._status = "live";
+    this._status =
+      frame.status === "drop" || (frame.dropped ?? 0) > 0 ? "throttled" : "live";
     this._schedPaint();
   }
 
@@ -705,8 +722,14 @@ export class WledGeometryPreview extends BasePoweredElement {
       : this.compact
         ? "Live layout preview — tap the strip to select a segment"
         : "LED geometry preview — positions mapped from fixture layout";
+    // "throttled" (status:"drop") is still a fresh, painted frame — it must NOT
+    // raise the dark "stale/connecting" overlay that covers the canvas. Only
+    // genuinely non-live states (waiting/connecting/stale) get the overlay.
     const showOverlay =
-      !this.paintMode && this._status !== "live" && this._status !== "paint";
+      !this.paintMode &&
+      this._status !== "live" &&
+      this._status !== "throttled" &&
+      this._status !== "paint";
     return html`
       <div class="preview-shell ${this.compact ? "compact" : ""} ${this.paintMode ? "paint" : ""}">
         ${this.compact || this.paintMode

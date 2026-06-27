@@ -17,6 +17,8 @@ from .const import (
     LIVE_NO_FRAME_PROBE_SEC,
     LIVE_RECONNECT_BASE_SEC,
     LIVE_RECONNECT_MAX_SEC,
+    LIVE_REMOTE_FPS,
+    LIVE_STALE_SEC,
     LIVE_TARGET_FPS,
 )
 from .lv_frame import parse_lv_binary, parse_lv_message
@@ -25,13 +27,30 @@ _LOGGER = logging.getLogger(__name__)
 
 FrameCallback = Callable[[dict[str, Any]], None]
 
+# Per-subscriber status values surfaced as the additive `status` key on each
+# delivered frame so the frontend can render a liveness badge (LV-4).
+STATUS_LIVE = "live"
+STATUS_STALE = "stale"
+STATUS_DROP = "drop"
+
 
 @dataclass
 class _Subscription:
-    """HA WS subscriber."""
+    """HA WS subscriber with per-sub delivery rate-limiting state (LV-2)."""
 
     callback: FrameCallback
     remote: bool = False
+    # Loop-time of the last delivered tick; -inf so the first tick always fires.
+    last_sent: float = field(default=float("-inf"))
+    # Count of frames actually delivered to this subscriber (LV-4).
+    frames_delivered: int = 0
+    # Last ingest frame-counter value this subscriber saw delivered (LV-4); used
+    # to compute how many freshly-ingested frames were dropped between deliveries.
+    last_frame_seq: int = 0
+
+    def target_fps(self) -> int:
+        """Effective delivery rate for this subscriber kind."""
+        return LIVE_REMOTE_FPS if self.remote else LIVE_TARGET_FPS
 
 
 class LiveProxy:
@@ -59,7 +78,10 @@ class LiveProxy:
         self._reconnect_attempt = 0
         self._last_frame_at: float | None = None
         self._last_good_frame: dict[str, Any] | None = None
-        self._frame_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=3)
+        # Monotonically increasing ingest counter (LV-4). Each ingested frame
+        # bumps this; subscribers compare it against their own last-seen seq to
+        # report how many frames were dropped between deliveries.
+        self._frame_seq = 0
         self._broadcast_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
@@ -82,7 +104,14 @@ class LiveProxy:
 
         self._sub_id += 1
         sub_id = self._sub_id
-        self._subs[sub_id] = _Subscription(callback=callback, remote=remote)
+        # LV-4: seed last_frame_seq to the current ingest counter so a new/late
+        # subscriber's FIRST delivery reports dropped=0. Without this seed the
+        # first tick would compute dropped = _frame_seq - 0 - 1 (every frame the
+        # proxy has ever ingested), spuriously flagging a brand-new viewer as
+        # having "dropped" hundreds of frames it was never entitled to.
+        self._subs[sub_id] = _Subscription(
+            callback=callback, remote=remote, last_frame_seq=self._frame_seq
+        )
         asyncio.create_task(self._async_subscribe())
         return _unsub
 
@@ -216,18 +245,17 @@ class LiveProxy:
         self._ingest_frame(frame)
 
     def _ingest_frame(self, frame: dict[str, Any]) -> None:
+        # LV-1: single-slot "latest wins" coalescing buffer. The broadcast loop
+        # always reads _last_good_frame, so there is no queue — the freshest
+        # frame simply overwrites the previous one. This removes inter-frame
+        # jitter and the unbounded drop path the old maxsize=3 queue created.
         self._last_frame_at = asyncio.get_running_loop().time()
         frame["entry_id"] = self.entry_id
         frame["controller_id"] = self.entry_id
+        # LV-4: bump the monotonic ingest counter so subscribers can detect how
+        # many frames they missed between deliveries.
+        self._frame_seq += 1
         self._last_good_frame = frame
-        try:
-            self._frame_queue.put_nowait(frame)
-        except asyncio.QueueFull:
-            try:
-                self._frame_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            self._frame_queue.put_nowait(frame)
 
     async def _maybe_probe_stale(self) -> bool:
         if self._refcount == 0:
@@ -237,44 +265,107 @@ class LiveProxy:
             return False
         if loop.time() - self._last_frame_at < LIVE_NO_FRAME_PROBE_SEC:
             return False
-        # Liveness: no frame for 5s — connection likely dead
+        # Liveness: no frame for LIVE_NO_FRAME_PROBE_SEC — connection likely dead.
         _LOGGER.info(
             "live_proxy no frames for %ss, reconnecting entry=%s",
             LIVE_NO_FRAME_PROBE_SEC,
             self.entry_id,
             extra={"entry_id": self.entry_id},
         )
-        self._last_frame_at = loop.time()
+        # LV-5: hard, clean reconnect. Force-close the current ws so the
+        # _ws_loop reconnect path starts fresh, and reset freshness state so the
+        # broadcast loop's staleness guard suppresses the stale _last_good_frame
+        # during the reconnect window instead of replaying it. We deliberately
+        # leave _last_good_frame untouched as the paint baseline, but null
+        # _last_frame_at so it is treated as not-fresh until the next ingest.
+        await self._force_reconnect()
         if self._on_unreachable:
             self._on_unreachable()
         return True
 
+    async def _force_reconnect(self) -> None:
+        """Close the live ws and clear freshness so reconnect starts clean."""
+        # Null freshness first so any concurrent broadcast tick already sees the
+        # stale state and refuses to emit the carried-over last_good_frame.
+        self._last_frame_at = None
+        ws = self._ws
+        if ws is not None and not ws.closed:
+            try:
+                await ws.close()
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                pass
+
     async def _broadcast_loop(self) -> None:
+        # Loop ticks at the full local rate so local subs get every frame. Remote
+        # subs are individually rate-limited inside _deliver_tick (LV-2).
         interval = 1.0 / LIVE_TARGET_FPS
         while self._running:
             await asyncio.sleep(interval)
-            if not self._subs:
+            self._deliver_tick(asyncio.get_running_loop().time())
+
+    def _deliver_tick(self, now: float) -> None:
+        """Deliver the freshest frame to each subscriber for one loop tick.
+
+        Per-subscriber (LV-2): local subs receive every tick at LIVE_TARGET_FPS;
+        remote subs are throttled to LIVE_REMOTE_FPS by tracking last-sent
+        loop-time on each _Subscription. One remote viewer never lowers a local
+        subscriber's effective rate.
+
+        Per-subscriber status (LV-4): each delivered frame carries additive keys
+        — `fps` (the subscriber's kind rate), `dropped` (frames ingested but not
+        delivered to this sub since its last delivery), `stale` (bool) and
+        `status` ('live' | 'stale' | 'drop'). lv_frame.py output keys are never
+        mutated; only additive keys are added.
+        """
+        if not self._subs:
+            return
+        # LV-5 / staleness guard: when freshness has been nulled (probe-stale
+        # reconnect, or no frame ingested yet) refuse to replay the carried-over
+        # last_good_frame so the reconnect window emits NOTHING. _last_frame_at
+        # is None only after _force_reconnect() or before the first ingest.
+        if self._last_frame_at is None or self._last_good_frame is None:
+            return
+        age = now - self._last_frame_at
+        # Beyond the probe window the connection is presumed dead and the probe
+        # path will reconnect — never emit a frame this old.
+        if age > LIVE_NO_FRAME_PROBE_SEC:
+            return
+        base = self._last_good_frame
+        # Soft-stale: ws still alive but frames have genuinely PAUSED — the held
+        # frame has aged past LIVE_STALE_SEC (~0.75 s), DECOUPLED from the 50 ms
+        # broadcast tick. Crucially this must NOT fire merely because upstream
+        # ingest is slower than the broadcast tick during healthy steady state:
+        # a held-but-fresh frame is still the freshest data and is delivered as
+        # "live"/"drop", never "stale". Only a real pause flips to stale so the
+        # frontend may freeze pixels + badge it (LV-4) — distinct from the hard
+        # reconnect window above which emits nothing.
+        soft_stale = age > LIVE_STALE_SEC
+        for sub in list(self._subs.values()):
+            min_interval = 1.0 / sub.target_fps()
+            # Remote-throttle: skip this tick if the sub was delivered too
+            # recently for its target rate. Tiny epsilon absorbs float drift so
+            # a sub due "exactly now" still fires.
+            if now - sub.last_sent < min_interval - 1e-9:
                 continue
-            loop = asyncio.get_running_loop()
-            if (
-                self._last_frame_at is None
-                or loop.time() - self._last_frame_at > LIVE_NO_FRAME_PROBE_SEC
-            ):
-                continue
-            frame = dict(self._last_good_frame) if self._last_good_frame else None
-            if not frame:
-                continue
-            any_remote = any(s.remote for s in self._subs.values())
-            out = dict(frame)
-            if any_remote:
-                out["fps"] = 10
+            dropped = max(0, self._frame_seq - sub.last_frame_seq - 1)
+            if soft_stale:
+                status = STATUS_STALE
+            elif dropped > 0:
+                status = STATUS_DROP
             else:
-                out["fps"] = LIVE_TARGET_FPS
-            for sub in list(self._subs.values()):
-                try:
-                    sub.callback(out)
-                except Exception:  # noqa: BLE001
-                    _LOGGER.exception("live_proxy subscriber callback failed")
+                status = STATUS_LIVE
+            out = dict(base)
+            out["fps"] = sub.target_fps()
+            out["dropped"] = dropped
+            out["stale"] = soft_stale
+            out["status"] = status
+            sub.last_sent = now
+            sub.last_frame_seq = self._frame_seq
+            sub.frames_delivered += 1
+            try:
+                sub.callback(out)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("live_proxy subscriber callback failed")
 
     async def async_shutdown(self) -> None:
         async with self._lock:
