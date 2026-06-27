@@ -6,6 +6,7 @@
   "scripts": {
     "build": "rollup -c rollup.config.mjs && node scripts/copy-to-www.mjs",
     "dev": "rollup -c rollup.config.mjs --watch",
+    "preview": "WLED_PREVIEW=1 rollup -c rollup.config.mjs --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
@@ -14,6 +15,7 @@
     "@jaames/iro": "^5.5.2",
     "@lit-labs/signals": "^0.1.2",
     "@material/material-color-utilities": "^0.3.0",
+    "@material/web": "^2.4.1",
     "custom-card-helpers": "^2.0.0",
     "home-assistant-js-websocket": "^9.4.0",
     "immer": "^10.1.1",

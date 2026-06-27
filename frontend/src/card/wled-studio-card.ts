@@ -11,6 +11,7 @@ import type { WledGeometryPreview } from "../components/geometry-preview.js";
 import type { WledViewPaint } from "../panel/view-paint.js";
 import { pctTo255, readBrightnessPct } from "../utils/ha-brightness.js";
 import { StudioSelectionController } from "../core/studio-selection.js";
+import { StudioSessionController } from "../core/studio-session.js";
 import "../components/geometry-preview.js";
 import "../components/segment-controls.js";
 import "../panel/view-effects.js";
@@ -61,6 +62,8 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   @query("wled-view-paint") private _paintPanel?: WledViewPaint;
 
   private readonly _selection = new StudioSelectionController(this);
+  /** Owns the accent-from-LED scheme regen for this card host. */
+  private readonly _session = new StudioSessionController(this);
 
   /** Optimistic global brightness (0–100) while dragging until HA state catches up. */
   @state() private _globalBriPct: number | null = null;
@@ -453,6 +456,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   private _onStripSegmentSelect(ev: CustomEvent<{ segmentId: number }>): void {
     if (this._cardTab === "paint") return;
     this._selection.selectSegment(ev.detail.segmentId);
+    this._refreshAccent();
     if (this._cardTab === "color") {
       this._segmentControls?.selectSegment(ev.detail.segmentId);
     } else if (this._cardTab === "effects") {
@@ -474,6 +478,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
 
   private _onSegmentChange(ev: CustomEvent<{ segmentId: number; editIds?: number[] }>): void {
     this._selection.applySegmentChange(ev.detail);
+    this._refreshAccent();
   }
 
   private async _loadSegments(): Promise<void> {
@@ -485,6 +490,7 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
       if (segs.length && this._selection.selectedSegId < 0) {
         this._selection.selectSegment(segs[0].id);
       }
+      this._refreshAccent();
     } catch {
       /* tap-to-select degrades gracefully */
     }
@@ -493,6 +499,18 @@ export class WledStudioCard extends BasePoweredElement implements LovelaceCard {
   private _syncSegmentsFromControls(): void {
     const segs = this._segmentControls?.segments;
     if (segs?.length) this._selection.setSegments(segs);
+    this._refreshAccent();
+  }
+
+  /**
+   * Drive the accent-from-LED scheme off the active segment's primary color.
+   * No-op (falls back to the inherited scheme) when nothing is selected.
+   */
+  private _refreshAccent(): void {
+    const segs = this._selection.segments;
+    const sel = this._selection.selectedSegId;
+    const seg = segs.find((s) => s.id === sel);
+    this._session.applyAccentFromSegment(seg);
   }
 
   private _readGlobalBrightnessPct(): number {
