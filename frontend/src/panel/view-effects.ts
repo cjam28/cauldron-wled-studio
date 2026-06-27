@@ -466,6 +466,8 @@ export class WledViewEffects extends BasePoweredElement {
                     .tileGrid=${compact}
                     .selectedPalette=${seg.pal ?? 0}
                     .paletteAware=${meta?.palette_enabled !== false}
+                    .palettesByName=${snap.palettes_by_name ?? {}}
+                    .palettePreviews=${snap.palette_previews ?? {}}
                     @effect-select=${(
                       e: CustomEvent<{ effectId: number; toggledOff?: boolean }>
                     ) => this._onFx(e.detail.effectId, e.detail.toggledOff)}
