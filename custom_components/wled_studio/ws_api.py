@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DOMAIN, INTEGRATION_VERSION, SCHEMA_VERSION
 from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
+from .paint_commit import live_frame_to_payload
 from .thumbnails import list_thumbs
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
@@ -1240,6 +1241,76 @@ async def ws_paint_status(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "wled_studio/paint_baseline_frame",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_baseline_frame(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the controller's current per-LED frame ("the current look").
+
+    The painter "Keep current look" (preserve) fill mode seeds its canvas with
+    this so the user paints over the device's ACTUAL current colors instead of a
+    gray placeholder. Source is live_proxy's last good frame (the DDP-decoded
+    rendered WLED output — includes effects). Additive command; the FROZEN DDP
+    wire is untouched (we only read the already-decoded frame). When no frame is
+    available (proxy not ingesting) we return ok with count 0 / no pixels so the
+    client falls back to its dim placeholder gracefully.
+    """
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+
+    client = coord.client
+    info = client.info if (client and isinstance(client.info, dict)) else {}
+    leds_raw = info.get("leds") if isinstance(info, dict) else {}
+    leds = leds_raw if isinstance(leds_raw, dict) else {}
+    pixel_count = int(leds.get("count") or 0)
+    rgbw = bool(leds.get("rgbw", True))
+
+    proxy = coord.live_proxy
+    frame = proxy.last_good_frame if proxy is not None else None
+    payload: bytes | None = None
+    if isinstance(frame, dict) and pixel_count > 0:
+        payload = live_frame_to_payload(frame, pixel_count, rgbw=rgbw)
+
+    if not payload:
+        # No current frame (proxy not ingesting) — graceful empty fallback.
+        connection.send_result(
+            msg["id"],
+            {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "rgbw": rgbw,
+                "count": 0,
+                "pixels": [],
+            },
+        )
+        return
+
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "rgbw": rgbw,
+            "count": pixel_count,
+            "pixels": list(payload),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "wled_studio/thumb_capture_start",
         vol.Required("controller_id"): str,
         vol.Optional("schema_version", default=SCHEMA_VERSION): int,
@@ -1353,6 +1424,7 @@ _WS_HANDLERS = (
     ws_paint_frame,
     ws_paint_stop,
     ws_paint_status,
+    ws_paint_baseline_frame,
     ws_thumb_capture_start,
     ws_thumb_capture_cancel,
     ws_register_lovelace_resource,

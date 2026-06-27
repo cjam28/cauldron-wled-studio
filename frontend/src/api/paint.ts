@@ -176,6 +176,43 @@ export async function paintStatus(
   };
 }
 
+/**
+ * The controller's current per-LED frame ("the current look"), returned by the
+ * additive ``paint_baseline_frame`` command. ``pixels`` is the flat RGB(W) byte
+ * array from live_proxy's last good frame. When the proxy is not ingesting the
+ * backend returns ``count: 0`` / empty ``pixels`` and the caller falls back to
+ * its dim placeholder.
+ */
+export interface PaintBaselineFrame {
+  rgbw: boolean;
+  count: number;
+  pixels: number[];
+}
+
+/**
+ * Fetch the device's current per-LED frame so the painter "Keep current look"
+ * (preserve) fill mode can seed its canvas with the real colors. Returns an
+ * empty frame (count 0) when no current frame is available.
+ */
+export async function fetchPaintBaselineFrame(
+  connection: Connection,
+  controllerId: string
+): Promise<PaintBaselineFrame> {
+  const result = await ws<{
+    rgbw?: boolean;
+    count?: number;
+    pixels?: number[];
+  }>(connection, {
+    type: "wled_studio/paint_baseline_frame",
+    controller_id: controllerId,
+  });
+  return {
+    rgbw: result?.rgbw ?? true,
+    count: typeof result?.count === "number" ? result.count : 0,
+    pixels: Array.isArray(result?.pixels) ? result.pixels : [],
+  };
+}
+
 export async function paintStop(
   connection: Connection,
   controllerId: string,

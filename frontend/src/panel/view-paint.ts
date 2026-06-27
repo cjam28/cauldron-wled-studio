@@ -9,7 +9,13 @@ import { throttle } from "../utils/throttle.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
-import { paintFrame, paintStart, paintStatus, paintStop } from "../api/paint.js";
+import {
+  fetchPaintBaselineFrame,
+  paintFrame,
+  paintStart,
+  paintStatus,
+  paintStop,
+} from "../api/paint.js";
 import type { PaintConnectionHealth } from "../api/paint.js";
 import {
   brushToPaintMode,
@@ -64,6 +70,14 @@ export class WledViewPaint extends BasePoweredElement {
   private _buffer: Uint8Array | null = null;
   private _previewPixels: Uint8ClampedArray | null = null;
   private _touched = new Set<number>();
+  /**
+   * "Keep current look" baseline: the device's ACTUAL current per-LED frame
+   * (live_proxy's last good frame), stored as a flat RGB(W) buffer aligned to
+   * _pixelCount + _rgbw. Seeds the UNPAINTED LEDs of the canvas in preserve mode
+   * so the user paints over the real colors, not a gray placeholder. Null until
+   * fetched, or when the fetch came back empty (→ dim-placeholder fallback).
+   */
+  private _baselineFrame: Uint8Array | null = null;
   /** SP-4: active-session health poll timer (idle-disconnect detection). */
   private _healthPollTimer: ReturnType<typeof setInterval> | null = null;
   private _healthPollInFlight = false;
@@ -246,6 +260,9 @@ export class WledViewPaint extends BasePoweredElement {
       this._previewEl()?.setStatus("live paint");
       this._status = "Live paint";
       this._startHealthPoll();
+      // Preserve mode: seed the canvas with the device's current look so the
+      // user paints over the real colors from the start of the session.
+      if (this._fill.mode === "preserve") void this._refreshBaselineFrame();
       return true;
     } catch (err) {
       this._status = formatHaError(err);
@@ -364,6 +381,26 @@ export class WledViewPaint extends BasePoweredElement {
 
   private _applyFillToBuffer(): void {
     if (!this._buffer) return;
+    // Preserve ("Keep current look"): seed each UNPAINTED LED from the device's
+    // actual current frame so the canvas shows the real colors the user is
+    // painting over. Falls back to the dim placeholder when no baseline frame
+    // has been fetched (or it came back empty) — no regression vs. the old gray.
+    if (this._fill.mode === "preserve" && this._hasBaselineFrame()) {
+      const base = this._baselineFrame!;
+      const bpp = this._rgbw ? 4 : 3;
+      for (let i = 0; i < this._pixelCount; i++) {
+        if (this._touched.has(i)) continue;
+        const o = i * bpp;
+        const rgbw: [number, number, number, number] = [
+          base[o] ?? 0,
+          base[o + 1] ?? 0,
+          base[o + 2] ?? 0,
+          this._rgbw ? (base[o + 3] ?? 0) : 0,
+        ];
+        this._writeLed(i, rgbw);
+      }
+      return;
+    }
     const fillRgb: [number, number, number] =
       this._fill.mode === "off"
         ? [0, 0, 0]
@@ -374,6 +411,70 @@ export class WledViewPaint extends BasePoweredElement {
       if (this._touched.has(i)) continue;
       this._writeLed(i, fillRgb);
     }
+  }
+
+  /** True when a baseline ("current look") frame is cached and aligned. */
+  private _hasBaselineFrame(): boolean {
+    const bpp = this._rgbw ? 4 : 3;
+    return (
+      this._baselineFrame !== null &&
+      this._baselineFrame.length >= this._pixelCount * bpp
+    );
+  }
+
+  /**
+   * Fetch the device's current per-LED frame for preserve ("Keep current look")
+   * mode and seed the canvas's unpainted LEDs from it. No-op when not in
+   * preserve mode. On an empty/failed fetch the baseline is cleared so
+   * _applyFillToBuffer falls back to the dim placeholder (no regression).
+   * Painted (_touched) LEDs are never disturbed — _applyFillToBuffer skips them.
+   */
+  private async _refreshBaselineFrame(): Promise<void> {
+    if (this._fill.mode !== "preserve") return;
+    if (!this.connection || !this.controllerId) return;
+    try {
+      const frame = await fetchPaintBaselineFrame(
+        this.connection,
+        this.controllerId
+      );
+      // The fill mode may have changed while the fetch was in flight.
+      if (this._fill.mode !== "preserve") return;
+      if (frame.count > 0 && frame.pixels.length) {
+        const buf = Uint8Array.from(frame.pixels);
+        // Align the source bpp (frame.rgbw) to our buffer's bpp (_rgbw).
+        this._baselineFrame =
+          frame.rgbw === this._rgbw
+            ? buf
+            : this._realignBaseline(buf, frame.rgbw, frame.count);
+      } else {
+        this._baselineFrame = null;
+      }
+    } catch {
+      // Network/RPC failure → dim-placeholder fallback (no regression).
+      this._baselineFrame = null;
+    }
+    this._applyFillToBuffer();
+    this._syncPreviewPixels();
+  }
+
+  /** Re-pack a baseline frame from its source bpp into the canvas's bpp. */
+  private _realignBaseline(
+    src: Uint8Array,
+    srcRgbw: boolean,
+    count: number
+  ): Uint8Array {
+    const srcBpp = srcRgbw ? 4 : 3;
+    const dstBpp = this._rgbw ? 4 : 3;
+    const out = new Uint8Array(count * dstBpp);
+    for (let i = 0; i < count; i++) {
+      const s = i * srcBpp;
+      const d = i * dstBpp;
+      out[d] = src[s] ?? 0;
+      out[d + 1] = src[s + 1] ?? 0;
+      out[d + 2] = src[s + 2] ?? 0;
+      if (this._rgbw) out[d + 3] = srcRgbw ? (src[s + 3] ?? 0) : 0;
+    }
+    return out;
   }
 
   private _scheduleFlush(): void {
@@ -560,9 +661,14 @@ export class WledViewPaint extends BasePoweredElement {
 
   private _onFillModeChange(mode: UnpaintedFillMode): void {
     this._fill = defaultFillSettings(mode);
+    // Leaving preserve mode drops the stale baseline so a later re-entry refetches.
+    if (mode !== "preserve") this._baselineFrame = null;
     this._applyFillToBuffer();
     this._syncPreviewPixels();
     if (this._active) void this._flushNow();
+    // Switching the Fill dropdown to "Keep current look" fetches the device's
+    // current frame and reseeds the canvas's unpainted LEDs from it.
+    if (mode === "preserve") void this._refreshBaselineFrame();
   }
 
   private async _commit(): Promise<void> {
