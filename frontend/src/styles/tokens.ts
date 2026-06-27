@@ -141,6 +141,11 @@ export const wledDesignTokens = css`
      * =================================================================== */
     --wled-accent: var(--md-sys-color-primary, var(--primary-color, #6750a4));
     --wled-accent-soft: color-mix(in srgb, var(--wled-accent) 18%, transparent);
+    /* LED-specific accent: defaults to the theme accent; accent-from-LED
+       (studio-session) overrides ONLY these tokens inline when a segment is
+       selected, so the M3 chrome keeps following Material You. */
+    --wled-led-accent: var(--wled-accent);
+    --wled-on-led-accent: var(--md-sys-color-on-primary, #ffffff);
     --wled-surface: var(
       --md-sys-color-surface,
       var(--card-background-color, #fef7ff)

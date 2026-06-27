@@ -6,15 +6,12 @@ import {
   resolveDark,
 } from "../src/core/studio-session.js";
 import type { WledSegment } from "../src/api/wled-state.js";
-import {
-  generateSchemeFromRgb,
-  M3_COLOR_ROLE_TOKEN_NAMES,
-} from "../src/core/m3-color.js";
+import { accentPairFromRgb } from "../src/core/m3-color.js";
 
 /**
- * A host stub that also records the CSS custom properties the accent-from-LED
- * path writes/clears, so we can assert the m3-color engine drove the host's
- * `--md-sys-color-*` scheme from an LED color.
+ * A host stub that records the CSS custom properties the accent-from-LED path
+ * writes/clears, so we can assert it tints ONLY the scoped --wled-led-accent
+ * tokens (never the --md-sys-color-* roles — the card follows Material You).
  */
 interface RecordingHost extends ReactiveControllerHost {
   props: Map<string, string>;
@@ -49,7 +46,8 @@ function seg(id: number, rgb?: number[]): WledSegment {
   return { id, col: rgb ? [rgb] : undefined } as WledSegment;
 }
 
-const PRIMARY = "--md-sys-color-primary";
+const LED_ACCENT = "--wled-led-accent";
+const LED_ON_ACCENT = "--wled-on-led-accent";
 
 describe("primaryRgbForSegment (seed derivation)", () => {
   it("reads col slot 0 as the RGB seed", () => {
@@ -104,21 +102,21 @@ describe("StudioSessionController accent-from-LED", () => {
 
     vi.runAllTimers();
 
-    const expected = generateSchemeFromRgb(255, 87, 34, { dark: false });
-    expect(host.props.get(PRIMARY)).toBe(expected[PRIMARY]);
-    // every contract token landed on the host
-    for (const token of M3_COLOR_ROLE_TOKEN_NAMES) {
-      expect(host.props.get(token)).toBe(expected[token]);
-    }
+    const expected = accentPairFromRgb(255, 87, 34, { dark: false });
+    expect(host.props.get(LED_ACCENT)).toBe(expected.accent);
+    expect(host.props.get(LED_ON_ACCENT)).toBe(expected.onAccent);
+    // ONLY the two scoped LED-accent tokens are written — never --md-sys-color-*.
+    expect(host.props.size).toBe(2);
+    expect(host.props.get("--md-sys-color-primary")).toBeUndefined();
   });
 
-  it("seed derivation: writes the MCU scheme for the segment's primary color", () => {
+  it("seed derivation: writes the MCU accent for the segment's primary color", () => {
     const host = recordingHost();
     const c = new StudioSessionController(host);
     c.applyAccentFromSegment(seg(0, [255, 87, 34]), { dark: true });
     vi.runAllTimers();
-    expect(host.props.get(PRIMARY)).toBe(
-      generateSchemeFromRgb(255, 87, 34, { dark: true })[PRIMARY],
+    expect(host.props.get(LED_ACCENT)).toBe(
+      accentPairFromRgb(255, 87, 34, { dark: true }).accent,
     );
   });
 
@@ -127,19 +125,19 @@ describe("StudioSessionController accent-from-LED", () => {
     const c = new StudioSessionController(host);
     c.applyAccentFromSegment(seg(0, [255, 87, 34]), { dark: false });
     vi.runAllTimers();
-    const written = host.props.get(PRIMARY);
+    const written = host.props.get(LED_ACCENT);
 
     // mutate the recorded value, re-apply the SAME seed -> must not rewrite
-    host.props.set(PRIMARY, "#sentinel");
+    host.props.set(LED_ACCENT, "#sentinel");
     c.applyAccentFromSegment(seg(0, [255, 87, 34]), { dark: false });
     vi.runAllTimers();
-    expect(host.props.get(PRIMARY)).toBe("#sentinel");
+    expect(host.props.get(LED_ACCENT)).toBe("#sentinel");
 
     // a different seed DOES regen
     c.applyAccentFromSegment(seg(0, [10, 120, 240]), { dark: false });
     vi.runAllTimers();
-    expect(host.props.get(PRIMARY)).not.toBe("#sentinel");
-    expect(host.props.get(PRIMARY)).not.toBe(written);
+    expect(host.props.get(LED_ACCENT)).not.toBe("#sentinel");
+    expect(host.props.get(LED_ACCENT)).not.toBe(written);
   });
 
   it("no-op + clear when no segment/color: inherited scheme restored", () => {

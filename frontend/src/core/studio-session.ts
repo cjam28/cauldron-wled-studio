@@ -4,11 +4,15 @@ import { listControllers, type ControllerInfo } from "../api/live-stream.js";
 import type { WledSegment } from "../api/wled-state.js";
 import { normalizeCols } from "../api/wled-state.js";
 import { debounce } from "../utils/debounce.js";
-import {
-  applyDynamicSchemeFromRgb,
-  M3_COLOR_ROLE_TOKEN_NAMES,
-  type DynamicSchemeOptions,
-} from "./m3-color.js";
+import { accentPairFromRgb, type DynamicSchemeOptions } from "./m3-color.js";
+
+/**
+ * Scoped LED-accent tokens written by accent-from-LED. We deliberately do NOT
+ * touch `--md-sys-color-*` — the card stays fully themed by Material You; the
+ * selected LED color only tints LED-specific affordances via these aliases.
+ */
+const LED_ACCENT_TOKEN = "--wled-led-accent";
+const LED_ON_ACCENT_TOKEN = "--wled-on-led-accent";
 
 /** Minimal style surface we write/clear M3 tokens through. */
 interface TokenStyleTarget {
@@ -71,12 +75,16 @@ export class StudioSessionController implements ReactiveController {
   /** Last RGB seed actually applied (dedupes redundant scheme regen). */
   private _lastSeed: string | null = null;
 
-  /** Debounced accent regeneration; coalesces rapid segment-color edits. */
+  /** Debounced LED-accent write; coalesces rapid segment-color edits. */
   private readonly _applyAccentDebounced = debounce(
     (rgb: [number, number, number], options: DynamicSchemeOptions) => {
       const style = (this.host as StyleableHost).style;
       if (!style) return; // host can't receive token writes (e.g. test stub)
-      applyDynamicSchemeFromRgb({ style }, rgb[0], rgb[1], rgb[2], options);
+      // Scoped tint only — never the full --md-sys-color-* scheme (the card
+      // follows Material You; the LED color drives only --wled-led-accent).
+      const { accent, onAccent } = accentPairFromRgb(rgb[0], rgb[1], rgb[2], options);
+      style.setProperty(LED_ACCENT_TOKEN, accent);
+      style.setProperty(LED_ON_ACCENT_TOKEN, onAccent);
     },
     50,
     100,
@@ -123,9 +131,10 @@ export class StudioSessionController implements ReactiveController {
 
   /**
    * Accent-from-LED entry point. Reads the active segment's primary color and
-   * (debounced) regenerates the host's `--md-sys-color-*` scheme from it. A
-   * no-op when no segment/color is available — the local override is cleared so
-   * the inherited (HA / Material You) scheme shows through again.
+   * (debounced) writes a scoped `--wled-led-accent` (+ on-accent) from it. The
+   * card's M3 chrome stays fully themed by Material You — this only tints
+   * LED-specific affordances. A no-op when no segment/color is available — the
+   * scoped tokens are cleared so they fall back to the theme accent default.
    *
    * @param segment the active segment, or `undefined` when none is selected.
    * @param options scheme options; `dark` should follow HA / Material You.
@@ -147,19 +156,18 @@ export class StudioSessionController implements ReactiveController {
   }
 
   /**
-   * Drop any locally-applied accent scheme so the inherited `--md-sys-color-*`
-   * tokens (owned by HA / the Material You module) apply again. Idempotent.
+   * Drop the scoped LED-accent tokens so `--wled-led-accent` falls back to its
+   * theme-accent default (the Material You primary). Idempotent. The M3 color
+   * roles are never touched here — they were never overridden.
    */
   clearAccent(): void {
     this._applyAccentDebounced.cancel();
     if (this._lastSeed === null) return;
     this._lastSeed = null;
-    const host = this.host as StyleableHost;
-    const style = host.style;
+    const style = (this.host as StyleableHost).style;
     if (!style) return;
-    for (const token of M3_COLOR_ROLE_TOKEN_NAMES) {
-      style.removeProperty?.(token);
-    }
+    style.removeProperty?.(LED_ACCENT_TOKEN);
+    style.removeProperty?.(LED_ON_ACCENT_TOKEN);
   }
 
   /**

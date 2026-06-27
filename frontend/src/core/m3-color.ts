@@ -265,6 +265,33 @@ export function applyDynamicSchemeFromRgb(
   return scheme;
 }
 
+/** A scoped accent pair derived from an LED color (no full-scheme override). */
+export interface M3AccentPair {
+  /** The accent color (`#rrggbb`) — M3 `primary` tone for the seed RGB. */
+  accent: string;
+  /** A legible on-accent color (`#rrggbb`) — M3 `on-primary` for the seed. */
+  onAccent: string;
+}
+
+/**
+ * PURE: derive ONLY an accent pair (accent + MCU-contrast on-accent) from an LED
+ * RGB triplet. Use this for the accent-from-LED path so the card stays fully
+ * themed by Material You (`--md-sys-color-*`) and the LED color only drives a
+ * scoped `--wled-led-accent` token — it never overrides the M3 color roles.
+ */
+export function accentPairFromRgb(
+  r: number,
+  g: number,
+  b: number,
+  options: DynamicSchemeOptions = {},
+): M3AccentPair {
+  const scheme = buildDynamicSchemeFromRgb(r, g, b, options);
+  return {
+    accent: hexFromArgb(MaterialDynamicColors.primary.getArgb(scheme)),
+    onAccent: hexFromArgb(MaterialDynamicColors.onPrimary.getArgb(scheme)),
+  };
+}
+
 /**
  * PURE: WCAG-style contrast ratio (1–21) between two `#rrggbb` hex colors,
  * computed via MCU's tone-based `Contrast.ratioOfTones` (L* of each color).
