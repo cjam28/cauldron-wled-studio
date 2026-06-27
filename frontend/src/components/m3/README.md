@@ -83,15 +83,23 @@ Bundle budget is a first-class constraint (spec §"Risks": *import only ~5
 components*). We import each family by its deep path and **never** import
 `@material/web/all.js`.
 
-| Tag | WLED surface | Module imported |
-|---|---|---|
-| `<md-slider>` | master / brightness | `@material/web/slider/slider.js` |
-| `<md-tabs>`, `<md-primary-tab>`, `<md-secondary-tab>` | view nav (compact tab-bar) | `@material/web/tabs/{tabs,primary-tab,secondary-tab}.js` |
-| `<md-navigation-bar>`, `<md-navigation-tab>` | adaptive nav — compact bar | `@material/web/labs/{navigationbar/navigation-bar,navigationtab/navigation-tab}.js` |
-| `<md-navigation-drawer>` | adaptive nav — wide rail/drawer | `@material/web/labs/navigationdrawer/navigation-drawer.js` |
-| `<md-switch>` | settings toggles | `@material/web/switch/switch.js` |
-| `<md-icon-button>` (+ filled / filled-tonal / outlined variants) | buttons / affordances | `@material/web/iconbutton/*.js` |
-| `<md-fab>` | expand / primary action | `@material/web/fab/fab.js` |
+Two things differ: the adopted **vocabulary** (`M3_TAGS` in `register.ts`) is the
+full hybrid set the card AND the Phase-5 panel may use; the **eager imports** in
+`index.ts` are only the families the shell (`core/studio-shell.ts`) renders
+*today*. Tags marked "panel (deferred)" are part of the vocabulary but are NOT
+imported until the panel surface renders them (importing them now would only add
+dead weight to the card bundle on the wall).
+
+| Tag | WLED surface | Module | Imported by `index.ts`? |
+|---|---|---|---|
+| `<md-slider>` | master / brightness | `@material/web/slider/slider.js` | ✅ eager (shell) |
+| `<md-navigation-bar>`, `<md-navigation-tab>` | adaptive nav — compact bar | `@material/web/labs/{navigationbar/navigation-bar,navigationtab/navigation-tab}.js` | ✅ eager (shell) |
+| `<md-navigation-drawer>` | adaptive nav — wide rail/drawer | `@material/web/labs/navigationdrawer/navigation-drawer.js` | ✅ eager (shell) |
+| `<md-icon-button>` | buttons / affordances | `@material/web/iconbutton/icon-button.js` | ✅ eager (shell) |
+| `<md-fab>` | expand / primary action | `@material/web/fab/fab.js` | ✅ eager (shell) |
+| `<md-tabs>`, `<md-primary-tab>`, `<md-secondary-tab>` | in-content tabs | `@material/web/tabs/{tabs,primary-tab,secondary-tab}.js` | ⏳ panel (deferred) |
+| `<md-switch>` | settings toggles | `@material/web/switch/switch.js` | ⏳ panel (deferred) |
+| `<md-filled-icon-button>` / `<md-filled-tonal-icon-button>` / `<md-outlined-icon-button>` | button variants | `@material/web/iconbutton/*.js` | ⏳ panel (deferred) |
 
 > The `navigationbar` / `navigationtab` / `navigationdrawer` elements are in
 > `@material/web/labs/*` (not yet stable). They cover the spec's "compact tab-bar

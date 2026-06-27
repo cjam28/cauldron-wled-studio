@@ -57,6 +57,13 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if str(prev_version or "") != version:
         hass.data.pop(f"{DOMAIN}_frontend_registered", None)
 
+    # Serve the WHOLE www/ dir (not just the entry files). After the Phase 3
+    # build split the bundle is many files: the entry chunks plus the shared
+    # `wled-studio-core` chunk and the lazily-imported heavy-view chunks
+    # (view-layout / view-paint / view-audio / …). Each entry imports its sibling
+    # chunks by relative URL, so all of them must be reachable under the same
+    # prefix. cache_headers=False keeps every chunk revalidated; the entry
+    # resource URLs additionally carry ?hacstag for an explicit cache-bust.
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(

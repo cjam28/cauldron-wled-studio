@@ -5,9 +5,11 @@
  * This module is the SINGLE entry point that makes the high-value standard
  * Material 3 components usable inside WLED Studio cards/panels. Per the M3
  * foundation spec (`docs/superpowers/specs/2026-06-26-wled-m3-foundation-design.md`,
- * §"Components of the foundation" / "Hybrid components"), only this small,
- * fixed set of `@material/web` elements is adopted — everything else bespoke
- * stays token-themed custom Lit:
+ * §"Components of the foundation" / "Hybrid components"), only a small, fixed
+ * vocabulary of `@material/web` elements is adopted — everything else bespoke
+ * stays token-themed custom Lit. The adopted *vocabulary* (declared in
+ * `register.ts` as `M3_TAGS`) is the full hybrid set the card AND the Phase-5
+ * panel may use:
  *
  *   - <md-slider>            master / brightness
  *   - <md-tabs> + tabs       view nav (compact tab-bar)
@@ -23,14 +25,29 @@
  *       <md-outlined-icon-button>
  *   - <md-fab>               expand / primary action
  *
- * IMPORTANT — bundle budget
- * -------------------------
- * Import ONLY the modules above. `@material/web` ships an `all.js` barrel that
- * pulls in every component (~hundreds of KB). We never import it. Each adopted
- * family is imported by its own deep path so the tree-shaker / rollup keeps the
- * footprint to ~5 components. Do not add new `@material/web` imports here
- * without an owner decision — that is the bundle-weight risk called out in the
- * spec ("import only ~5 components").
+ * IMPORTANT — bundle budget (import only what the shell renders TODAY)
+ * -------------------------------------------------------------------
+ * `@material/web` ships an `all.js` barrel that pulls in every component
+ * (~hundreds of KB); we never import it. But we also do NOT eagerly import every
+ * tag in the adopted vocabulary — only the families the shell
+ * (`core/studio-shell.ts`) actually renders right now. As of Phase 4 the shell
+ * renders exactly six families:
+ *
+ *   <md-slider> · <md-fab> · <md-icon-button> ·
+ *   <md-navigation-bar> · <md-navigation-tab> · <md-navigation-drawer>
+ *
+ * The remaining vocabulary tags (<md-tabs>/<md-primary-tab>/<md-secondary-tab>,
+ * <md-switch>, <md-filled-icon-button>/<md-filled-tonal-icon-button>/
+ * <md-outlined-icon-button>) are NOT rendered by the shell, so importing them
+ * here would only add dead weight to the bundle on the wall. They stay declared
+ * in `M3_TAGS` (the sanctioned vocabulary) but are imported by whichever surface
+ * first renders them (e.g. the Phase-5 panel) — at which point that import is
+ * added here behind the same registration guard. Do not add a side-effect import
+ * below for a tag the shell/card does not render, and do not import `all.js`.
+ *
+ * (Because only the rendered subset is imported, `isM3Registered()` — which
+ * checks the FULL vocabulary — will report false until the panel surface imports
+ * its tags too. Nothing in the card path depends on it; it is informational.)
  *
  * IMPORTANT — idempotent registration (safeCustomElement-style)
  * ------------------------------------------------------------
@@ -93,21 +110,16 @@ import { beginM3Registration, endM3Registration } from "./register.js";
 
 beginM3Registration();
 
-// 2. Side-effect imports — ONLY the adopted M3 chrome (bundle budget). Each of
-//    these runs `customElements.define(<tag>, …)` at evaluation time; the guard
-//    makes a re-eval (duplicate tag) a no-op instead of a throw.
+// 2. Side-effect imports — ONLY the families the shell renders today (bundle
+//    budget). Each of these runs `customElements.define(<tag>, …)` at
+//    evaluation time; the guard makes a re-eval (duplicate tag) a no-op instead
+//    of a throw. Keep this list == the set of `<md-*>` tags in
+//    `core/studio-shell.ts`; do not add a tag the shell/card does not render.
 import "@material/web/slider/slider.js";
-import "@material/web/tabs/tabs.js";
-import "@material/web/tabs/primary-tab.js";
-import "@material/web/tabs/secondary-tab.js";
 import "@material/web/labs/navigationbar/navigation-bar.js";
 import "@material/web/labs/navigationtab/navigation-tab.js";
 import "@material/web/labs/navigationdrawer/navigation-drawer.js";
-import "@material/web/switch/switch.js";
 import "@material/web/iconbutton/icon-button.js";
-import "@material/web/iconbutton/filled-icon-button.js";
-import "@material/web/iconbutton/filled-tonal-icon-button.js";
-import "@material/web/iconbutton/outlined-icon-button.js";
 import "@material/web/fab/fab.js";
 
 // 3. Restore the global `customElements.define` to its normal (throwing)
