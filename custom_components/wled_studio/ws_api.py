@@ -1277,10 +1277,19 @@ async def ws_paint_baseline_frame(
     pixel_count = int(leds.get("count") or 0)
     rgbw = bool(leds.get("rgbw", True))
 
+    payload: bytes | None = None
+
+    # During an ACTIVE paint session, return the session's FROZEN pre-paint
+    # baseline (captured at start = "the current look" the commit-merge uses).
+    # Re-reading the live device here would capture the live-paint state instead,
+    # wiping the current look out from under the user's strokes.
+    session = coord.paint_session
+    if session is not None and session.active and session.baseline_payload:
+        payload = session.baseline_payload
+
     proxy = coord.live_proxy
     frame = proxy.last_good_frame if proxy is not None else None
-    payload: bytes | None = None
-    if isinstance(frame, dict) and pixel_count > 0:
+    if not payload and isinstance(frame, dict) and pixel_count > 0:
         payload = live_frame_to_payload(frame, pixel_count, rgbw=rgbw)
 
     # Mirror PaintSession._capture_baseline: when no live frame is available

@@ -68,6 +68,13 @@ class PaintSession:
         return self._active
 
     @property
+    def baseline_payload(self) -> bytes | None:
+        """The frozen pre-paint frame captured at session start ("the current
+        look" the preserve commit-merge uses). The painter seeds its canvas from
+        this so re-fetching mid-session can't capture the live-paint state."""
+        return self._baseline_payload
+
+    @property
     def connection_healthy(self) -> bool:
         """False once consecutive send failures cross the unhealthy threshold."""
         return self._consecutive_send_failures < UNHEALTHY_FAILURE_THRESHOLD

@@ -245,6 +245,13 @@ export class WledViewPaint extends BasePoweredElement {
   private async _ensureSession(): Promise<boolean> {
     if (this._active || !this.connection || !this.controllerId) return this._active;
     try {
+      // Preserve mode: capture the device's current look BEFORE paintStart puts
+      // the device into live paint. Fetching AFTER start would capture the
+      // live-paint state (wiping the current look out from under the strokes).
+      // The backend also freezes this baseline for the session as a backstop.
+      if (this._fill.mode === "preserve") {
+        await this._refreshBaselineFrame();
+      }
       const res = await paintStart(this.connection, this.controllerId);
       this._active = true;
       this._touched.clear();
@@ -260,9 +267,9 @@ export class WledViewPaint extends BasePoweredElement {
       this._previewEl()?.setStatus("live paint");
       this._status = "Live paint";
       this._startHealthPoll();
-      // Preserve mode: seed the canvas with the device's current look so the
-      // user paints over the real colors from the start of the session.
-      if (this._fill.mode === "preserve") void this._refreshBaselineFrame();
+      // Baseline was captured BEFORE paintStart (above) and _allocBuffer() has
+      // already seeded the unpainted LEDs from it — do NOT re-fetch here, that
+      // would read the live-paint state and wipe the current look.
       return true;
     } catch (err) {
       this._status = formatHaError(err);

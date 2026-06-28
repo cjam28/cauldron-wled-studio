@@ -52,6 +52,14 @@ class FakeProxy:
         return self._frame
 
 
+class FakePaintSession:
+    """Active paint session exposing the frozen pre-paint baseline payload."""
+
+    def __init__(self, *, active: bool, baseline_payload: bytes | None) -> None:
+        self.active = active
+        self.baseline_payload = baseline_payload
+
+
 class FakeCoordinator:
     def __init__(
         self,
@@ -61,11 +69,13 @@ class FakeCoordinator:
         frame: dict[str, Any] | None = None,
         proxy: bool = True,
         state: dict[str, Any] | None = None,
+        paint_session: FakePaintSession | None = None,
     ) -> None:
         self.client = FakeWledClient(
             pixel_count=pixel_count, rgbw=rgbw, state=state
         )
         self.live_proxy = FakeProxy(frame) if proxy else None
+        self.paint_session = paint_session
 
 
 class FakeHass:
@@ -153,6 +163,35 @@ async def test_baseline_frame_absent_returns_empty() -> None:
     assert result["ok"] is True
     assert result["count"] == 0
     assert result["pixels"] == []
+
+
+@pytest.mark.asyncio
+async def test_active_session_returns_frozen_baseline_not_live_state() -> None:
+    """During an ACTIVE paint session the handler returns the session's FROZEN
+    pre-paint baseline — NOT the live device frame (which would be the live-paint
+    state, wiping the current look out from under the user's strokes)."""
+    pixel_count = 3
+    # Live proxy would return GREEN (the live-paint state) — must be ignored.
+    live = {"leds_hex": ["00ff00", "00ff00", "00ff00"]}
+    # Frozen session baseline = RED (the captured pre-paint current look).
+    frozen = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0])
+    coord = FakeCoordinator(
+        pixel_count=pixel_count,
+        rgbw=True,
+        frame=live,
+        paint_session=FakePaintSession(active=True, baseline_payload=frozen),
+    )
+    hass = FakeHass()
+    cid = _register(hass, coord)
+
+    conn = FakeConnection()
+    await _baseline_frame(
+        hass, conn,
+        {"id": 7, "type": "wled_studio/paint_baseline_frame", "controller_id": cid},
+    )
+    assert conn.errors == []
+    # RED (frozen), not GREEN (live) — the current look is preserved.
+    assert conn.result["pixels"] == list(frozen)
 
 
 @pytest.mark.asyncio
