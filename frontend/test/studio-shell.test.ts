@@ -380,6 +380,54 @@ describe("wled-studio-shell — density is a pure-CSS container query", () => {
   });
 });
 
+// --- (e) NAV THEMING + WIDE-LAYOUT CAP (layout & responsiveness polish) -----
+describe("wled-studio-shell — M3 nav theming + wide-layout cap", () => {
+  /** Compiled static styles for token/selector assertions. */
+  function compiledCss(): string {
+    return (WledStudioShell as unknown as { styles: Array<{ cssText?: string }> })
+      .styles.map((s) => s.cssText ?? "")
+      .join("\n");
+  }
+
+  it("pins the nav container tokens to the M3 scheme so dark mode is never white", () => {
+    const css = compiledCss();
+    // The drawer's stock container-color defaults to #fff — it MUST be themed
+    // off our scheme (transparent so the .glass surface shows through).
+    expect(css).toContain("--md-navigation-drawer-container-color: transparent");
+    expect(css).toContain("--md-navigation-bar-container-color: transparent");
+    // No raw white literal leaks into the nav container theming.
+    expect(css).not.toMatch(/--md-navigation-[a-z-]*container-color:\s*#fff/i);
+    // Active indicator + on-surface roles wired from --md-sys-color-* (whitespace
+    // between the property and its var() is irrelevant — match loosely).
+    expect(css).toMatch(
+      /--md-navigation-bar-active-indicator-color:\s*var\(\s*--md-sys-color-secondary-container/
+    );
+    expect(css).toMatch(
+      /--md-navigation-bar-inactive-icon-color:\s*var\(\s*--md-sys-color-on-surface-variant/
+    );
+  });
+
+  it("caps AND centers the full-density row so it never stretches edge-to-edge or pools dead space", () => {
+    const css = compiledCss();
+    // Explicit full density caps + centers the whole rail+content row (and the
+    // header), not just the main column — so the row stays balanced/centered.
+    expect(css).toMatch(/\.shell\.is-full \.layout[\s\S]*?max-width/);
+    expect(css).toMatch(/\.shell\.is-full \.(layout|header)[\s\S]*?margin-inline:\s*auto/);
+    // The wide auto layout caps + centers it inside the @container query (NOT a
+    // viewport media query — container queries only).
+    expect(css).toContain("@container wled-studio (min-width: 600px)");
+    expect(css).toMatch(/\.shell\.is-auto \.layout[\s\S]*?max-width/);
+    expect(css).not.toMatch(/@media[^{]*\bmin-width\b/);
+  });
+
+  it("the full-rail host carries a fixed width so the row stays balanced", () => {
+    const css = compiledCss();
+    expect(css).toMatch(/\.nav-rail\s*{[^}]*width:\s*var\(--wled-rail-width/);
+    // and the drawer's stock 360px container width is overridden to match.
+    expect(css).toContain("--md-navigation-drawer-container-width: var(--wled-rail-width");
+  });
+});
+
 // --- (d) default_view ------------------------------------------------------
 describe("wled-studio-shell — default_view seeds the active view", () => {
   let el: WledStudioShell;

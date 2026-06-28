@@ -912,20 +912,119 @@ export class WledStudioShell extends BasePoweredElement {
       :host {
         display: block;
         color: var(--md-sys-color-on-surface, var(--primary-text-color, #1d1b20));
+
+        /*
+         * Theme the @material/web navigation chrome to OUR M3 scheme.
+         * ----------------------------------------------------------------
+         * These components default several container tokens to a LIGHT M3
+         * surface (md-navigation-drawer's --md-navigation-drawer-container-color
+         * falls back to #fff !), so in dark mode they paint an opaque white box
+         * over the dark glass. We pin every nav container/label/icon/indicator
+         * token to a --md-sys-color-* role so the chrome ALWAYS follows the
+         * inherited scheme (dark or light) and the glass surface shows through.
+         * Token names verified against the installed @material/web nav
+         * components (node_modules/@material/web/labs/navigation*).
+         */
+
+        /* Drawer (full left rail): keep the container TRANSPARENT so the
+           .glass background painted on the same element is what shows — never
+           the component's own #fff default. */
+        --md-navigation-drawer-container-color: transparent;
+        --md-navigation-drawer-divider-color: var(
+          --md-sys-color-outline-variant,
+          var(--divider-color, #cac4d0)
+        );
+        /* The drawer's stock 360px container width would dominate the row; pin
+           it to the compact rail width so its internal scroller matches the
+           .nav-rail host width and the content column gets the rest. */
+        --md-navigation-drawer-container-width: var(--wled-rail-width, 112px);
+
+        /* Bar (compact bottom bar): transparent container (the .glass/host
+           surface shows), M3 active indicator + label/icon roles. */
+        --md-navigation-bar-container-color: transparent;
+        --md-navigation-bar-active-indicator-color: var(
+          --md-sys-color-secondary-container
+        );
+        --md-navigation-bar-active-icon-color: var(--md-sys-color-on-surface);
+        --md-navigation-bar-active-label-text-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-focus-icon-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-focus-label-text-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-hover-icon-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-hover-label-text-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-pressed-icon-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-active-pressed-label-text-color: var(
+          --md-sys-color-on-surface
+        );
+        --md-navigation-bar-inactive-icon-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-label-text-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-focus-icon-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-focus-label-text-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-hover-icon-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-hover-label-text-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-pressed-icon-color: var(
+          --md-sys-color-on-surface-variant
+        );
+        --md-navigation-bar-inactive-pressed-label-text-color: var(
+          --md-sys-color-on-surface-variant
+        );
       }
       .shell {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
         padding: 12px;
       }
       .layout {
         display: flex;
-        gap: 12px;
+        gap: 16px;
         min-height: 0;
       }
       .shell.is-full .layout {
         flex-direction: row;
+      }
+      /*
+       * Wide-layout cap. At full density on a wide container the rail + content
+       * row would otherwise stretch edge-to-edge (e.g. ~1680px), which is
+       * unusable. Cap the WHOLE rail+content row (rail + gap + content) to a
+       * sensible max-width and CENTER it (margin-inline:auto) so the dead space
+       * splits evenly instead of pooling on the right. The header is capped +
+       * centered to the same width so its edges line up with the content.
+       * Explicit full density always gets the cap; the auto layout only gets it
+       * once the container query flips to the wide (row) layout — so compact
+       * (<600px) auto stays FULL-BLEED, unchanged.
+       */
+      .shell.is-full .layout,
+      .shell.is-full .header {
+        max-width: calc(
+          var(--wled-rail-width, 112px) + 16px + var(--wled-content-max, 1100px)
+        );
+        margin-inline: auto;
+        width: 100%;
+        box-sizing: border-box;
       }
       /* auto density: pure-CSS @container reflow (no JS width measurement). */
       .shell.is-auto .layout {
@@ -952,19 +1051,32 @@ export class WledStudioShell extends BasePoweredElement {
         .shell.is-auto .bar-slot {
           display: none;
         }
+        /* Wide auto layout (row): cap + CENTER the whole rail+content row (and
+           the header) like is-full so it does not stretch edge-to-edge on a
+           wide (e.g. 1680px) container and the dead space splits evenly. */
+        .shell.is-auto .layout,
+        .shell.is-auto .header {
+          max-width: calc(
+            var(--wled-rail-width, 112px) + 16px +
+              var(--wled-content-max, 1100px)
+          );
+          margin-inline: auto;
+          width: 100%;
+          box-sizing: border-box;
+        }
       }
       .main {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
         flex: 1 1 auto;
         min-width: 0;
       }
       .header {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
+        gap: 12px;
+        padding: 8px 16px;
       }
       .title {
         font: var(--md-sys-typescale-title-medium, 600 16px/1.2 system-ui);
@@ -973,7 +1085,7 @@ export class WledStudioShell extends BasePoweredElement {
       }
       .badge {
         font-size: 0.75rem;
-        padding: 2px 8px;
+        padding: 4px 12px;
         border-radius: 999px;
         background: var(--md-sys-color-tertiary-container, var(--warning-color, orange));
         color: var(--md-sys-color-on-tertiary-container, var(--primary-text-color, #1a1200));
@@ -999,21 +1111,23 @@ export class WledStudioShell extends BasePoweredElement {
         position: sticky;
         bottom: 0;
       }
-      /* Full: left rail. */
+      /* Full: left rail. Fixed width so the row stays balanced against the
+         capped content column (see .shell.is-full .main / wide auto layout). */
       .nav-rail {
         flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 4px;
         padding: 8px;
-        min-width: 96px;
+        width: var(--wled-rail-width, 112px);
+        box-sizing: border-box;
       }
       .rail-item {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 2px;
-        padding: 8px 6px;
+        gap: 4px;
+        padding: 8px;
         border: none;
         border-radius: var(--md-sys-shape-corner-large, 16px);
         background: transparent;
@@ -1034,14 +1148,14 @@ export class WledStudioShell extends BasePoweredElement {
         white-space: nowrap;
       }
       .controls {
-        padding: 8px 10px;
+        padding: 12px 16px;
       }
       .bri-row {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
         gap: 8px;
-        margin-bottom: 4px;
+        margin-bottom: 8px;
       }
       .bri-label {
         font-size: 0.8rem;
