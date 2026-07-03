@@ -43,7 +43,7 @@ await conn.sendMessagePromise({
   type: "wled_studio/list_controllers",
   schema_version: 1,
 });
-// Expect: { ok: true, controllers: [{ entry_id, master_entity_id: "light.cloud", pixel_count: 210, host: "192.168.20.71" }] }
+// Expect: { ok: true, controllers: [{ entry_id, master_entity_id: "light.cloud", pixel_count: 210, host: "192.168.1.50" }] }
 
 // Ping (optional)
 await conn.sendMessagePromise({
@@ -75,7 +75,7 @@ After opening the dashboard with the card visible:
 
 ```text
 # Should appear (debug/info):
-live_proxy connected entry=... host=192.168.20.71
+live_proxy connected entry=... host=192.168.1.50
 ```
 
 No repeating `unknown_command` or `AwesomeVersion` errors.
