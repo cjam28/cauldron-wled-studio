@@ -9,6 +9,7 @@ import {
   type LiveFrameEvent,
 } from "../api/live-stream.js";
 import { fetchDeviceState, type WledSegment } from "../api/wled-state.js";
+import { StatusHold } from "../utils/status-hold.js";
 import type { WledStripPreview } from "./strip-preview.js";
 import "./strip-preview.js";
 
@@ -49,7 +50,13 @@ export class WledStudioLivePreview extends BasePoweredElement {
   @state() private _pixelCount = 210;
   @state() private _segments: WledSegment[] = [];
   @state() private _status = "connecting";
+  /** Sticky throttled hint — per-frame status flaps live/throttled at frame
+   * rate; rendering the hint from it directly strobes and shifts layout. */
+  @state() private _throttledHold = false;
 
+  private readonly _hold = new StatusHold((active) => {
+    this._throttledHold = active;
+  });
   private _unsubLive?: () => void;
 
   protected override willUpdate(
@@ -71,6 +78,7 @@ export class WledStudioLivePreview extends BasePoweredElement {
   protected override onPoweredDisconnect(): void {
     this._unsubLive?.();
     this._unsubLive = undefined;
+    this._hold.clear();
   }
 
   private async _bootstrap(): Promise<void> {
@@ -99,6 +107,7 @@ export class WledStudioLivePreview extends BasePoweredElement {
       this.controllerId,
       (frame) => {
         this._status = statusLabelForFrame(frame);
+        if (this._status === "throttled") this._hold.ping();
         this._preview()?.setStatus(this._status);
         // FRAME-STATUS CONTRACT: a "drop"/"throttled" frame is still the
         // freshest data — PAINT IT (no freeze). Only a genuinely "stale" frame
@@ -169,15 +178,17 @@ export class WledStudioLivePreview extends BasePoweredElement {
           .highlightSegIds=${this.highlightSegIds}
           @segment-select=${this._onSegmentSelect}
         ></wled-strip-preview>
-        ${this._isStale()
-          ? html`<span class="status status-badge" role="status"
-              >reconnecting</span
-            >`
-          : this._isThrottled()
-            ? html`<span class="status status-hint">throttled</span>`
-            : this._status !== "live"
+        <div class="status-row">
+          ${this._isStale()
+            ? html`<span class="status status-badge" role="status"
+                >reconnecting</span
+              >`
+            : this._status !== "live" && !this._isThrottled()
               ? html`<span class="status">${this._status}</span>`
-              : null}
+              : this._throttledHold
+                ? html`<span class="status status-hint">throttled</span>`
+                : null}
+        </div>
       </div>
     `;
   }
@@ -197,9 +208,14 @@ export class WledStudioLivePreview extends BasePoweredElement {
         letter-spacing: 0.04em;
         opacity: 0.65;
       }
+      /* Fixed-height slot for the status text: the hint/label may come and
+         go, but the content below the strip must NEVER shift with it. */
+      .status-row {
+        min-height: 20px;
+        margin-top: 4px;
+      }
       .status {
         display: block;
-        margin-top: 4px;
         font-size: 0.75rem;
         opacity: 0.6;
       }
@@ -209,7 +225,6 @@ export class WledStudioLivePreview extends BasePoweredElement {
          badge and NEVER implying a freeze (the strip keeps painting). */
       .status-hint {
         display: inline-block;
-        margin-top: 4px;
         font-size: 0.68rem;
         letter-spacing: 0.02em;
         opacity: 0.45;

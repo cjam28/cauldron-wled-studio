@@ -6,6 +6,15 @@ import type { LiveFrameEvent } from "../api/live-stream.js";
 import { expandToFixture } from "../api/lv-frame-parser.js";
 import type { WledSegment } from "../api/wled-state.js";
 
+/**
+ * Whether a status warrants the dimming canvas overlay. Per the FRAME-STATUS
+ * CONTRACT a "throttled" frame is still painted fresh — overlaying it would
+ * strobe the strip at frame rate on remote viewers, so it never overlays.
+ */
+export function stripOverlayVisible(status: string): boolean {
+  return status !== "live" && status !== "throttled";
+}
+
 /** Live strip preview — 2D canvas with optional bloom; WebGL path in Phase 1 uses 2D glow. */
 @safeCustomElement("wled-strip-preview")
 export class WledStripPreview extends BasePoweredElement {
@@ -197,7 +206,7 @@ export class WledStripPreview extends BasePoweredElement {
           height=${this.heightPx}
           style="cursor: crosshair"
         ></canvas>
-        ${this._status !== "live"
+        ${stripOverlayVisible(this._status)
           ? html`<span class="overlay">${this._status}</span>`
           : null}
       </div>
