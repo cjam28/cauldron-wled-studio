@@ -332,7 +332,18 @@ export class WledViewScenes extends BasePoweredElement {
       showToast(this, `Saved ${saved.name}`);
       await this._load();
     } catch (err) {
-      showToast(this, `Save failed: ${(err as Error).message || "error"}`);
+      if (err instanceof SceneConflictError) {
+        // SC-2: keep the typed name (not cleared above) and surface a clear,
+        // actionable message rather than a generic failure. Capture is a
+        // server-side upsert today, so this is defensive/forward-compatible
+        // for when capture becomes concurrency-checked.
+        showToast(
+          this,
+          `"${name}" was changed on another device — reload and save again.`
+        );
+      } else {
+        showToast(this, `Save failed: ${(err as Error).message || "error"}`);
+      }
     } finally {
       this._busy = false;
     }
@@ -363,13 +374,21 @@ export class WledViewScenes extends BasePoweredElement {
     if (!scene) return;
     this._busy = true;
     try {
-      await sceneSave(this.connection, this.controllerId, scene);
+      // SC-1 (blocker): pass the remote etag so the overwrite satisfies the
+      // server's optimistic-concurrency check instead of looping on conflict.
+      await sceneSave(this.connection, this.controllerId, scene, {
+        ifMatchEtag: this._conflict.etag,
+      });
       this._conflict = undefined;
       showToast(this, "Scene overwritten");
       await this._load();
     } catch (err) {
       if (err instanceof SceneConflictError) {
         this._conflict = err.remote;
+      } else {
+        // SC-2: surface non-conflict failures (network/server) instead of
+        // swallowing them silently, matching _capture's error feedback.
+        showToast(this, `Overwrite failed: ${(err as Error).message || "error"}`);
       }
     } finally {
       this._busy = false;

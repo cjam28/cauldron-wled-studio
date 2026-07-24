@@ -57,12 +57,34 @@ function writeJson<T>(key: string, map: Record<string, T>): void {
   }
 }
 
+/**
+ * True when the user has enabled merge-for-effects for this controller.
+ *
+ * This used to default to TRUE for unknown controllers ("default-true UI
+ * state"), which made every fresh browser render the merge toggle checked with
+ * no layout snapshot behind it — unchecking then threw "No saved segment
+ * layout to restore" even though the device was never merged. Merge state now
+ * exists only after an explicit opt-in: presence in storage ⟺ opted in.
+ */
 export function isMergeForEffectsActive(controllerId: string): boolean {
+  return isMergeForEffectsExplicit(controllerId);
+}
+
+/**
+ * True only when the user has EXPLICITLY enabled merge-for-effects for this
+ * controller (P1-1). {@link isMergeForEffectsActive} now shares these
+ * semantics; both names are kept for call-site intent.
+ */
+export function isMergeForEffectsExplicit(controllerId: string): boolean {
   if (!controllerId) return false;
   const map = readJson<boolean>(MERGE_FLAG_KEY);
-  if (!(controllerId in map)) return true;
-  return Boolean(map[controllerId]);
+  // setMergeForEffectsActive() stores the key only when explicitly enabled and
+  // deletes it when disabled, so presence ⟺ explicit opt-in.
+  return controllerId in map && Boolean(map[controllerId]);
 }
+
+/** Name stamped on the merged span so a Studio merge is recognizable later. */
+export const MERGED_SEGMENT_NAME = "Merged (effects)";
 
 /** True when segment 0 spans most of the strip (merge already applied on device). */
 export function isWledLayoutMerged(
@@ -73,6 +95,23 @@ export function isWledLayoutMerged(
   if (!seg0 || pixelCount <= 0) return false;
   const span = (seg0.stop ?? 0) - (seg0.start ?? 0);
   return span >= pixelCount * 0.9;
+}
+
+/**
+ * True when the device layout looks like the result of a Studio merge:
+ * one strip-spanning segment 0 carrying the {@link MERGED_SEGMENT_NAME} stamp.
+ * Distinguishes "Studio merged this" from a naturally single-segment strip so
+ * clearing a stale merge flag never errors for users who never merged.
+ */
+export function isStudioMergedLayout(
+  segments: WledSegment[],
+  pixelCount: number
+): boolean {
+  if (!isWledLayoutMerged(segments, pixelCount)) return false;
+  const seg0 = segments.find((s) => s.id === 0) as
+    | (WledSegment & { n?: string })
+    | undefined;
+  return seg0?.n === MERGED_SEGMENT_NAME;
 }
 
 export function setMergeForEffectsActive(
@@ -131,7 +170,14 @@ export function buildRestoreSegmentsState(
   };
 }
 
-/** One active segment spanning the union of targets; others zeroed on WLED. */
+/**
+ * One active segment spanning the union of the TARGETED segments; the other
+ * targeted segments are folded (deleted on WLED via stop <= start). Segments
+ * outside the target set are left completely untouched — a partial-subset
+ * merge must never destroy segments the user did not select. (WLED patches
+ * `seg` entries by id, so omitting a segment preserves it.) The merged span
+ * takes the lowest targeted id rather than hijacking id 0.
+ */
 export function buildMergeForEffectsState(
   segments: WledSegment[],
   pixelCount: number,
@@ -149,23 +195,25 @@ export function buildMergeForEffectsState(
   const start = Math.min(...use.map((s) => s.start ?? 0));
   const stop = Math.max(...use.map((s) => s.stop ?? pixelCount));
   const primary = use[0];
+  const mergedId = primary.id;
 
   const merged: Record<string, unknown> = {
-    id: 0,
+    id: mergedId,
     start,
     stop,
     on: primary.on !== false,
     sel: true,
     bri: primary.bri ?? 255,
     fx: primary.fx ?? 0,
-    n: "Merged (effects)",
+    n: MERGED_SEGMENT_NAME,
   };
   if (primary.col !== undefined) merged.col = primary.col;
   if (primary.pal !== undefined) merged.pal = primary.pal;
 
+  const foldIds = new Set(use.map((s) => s.id));
   const payload: Record<string, unknown>[] = [merged];
   for (const s of list) {
-    if (s.id === 0) continue;
+    if (s.id === mergedId || !foldIds.has(s.id)) continue;
     const end = s.stop ?? s.start ?? 0;
     payload.push({
       id: s.id,

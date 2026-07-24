@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.12.2
+
+### Fixed
+- **"No saved segment layout to restore" on un-merge.** The merge-for-effects flag defaulted to ON for any browser that had never toggled it, so the toggle rendered checked with no layout snapshot behind it — unchecking then errored even though the device still had its real segments. The flag now defaults to OFF (presence in storage ⟺ explicit opt-in), unchecking with a stale flag on an un-merged device is a clean no-op, and the error only appears when the device genuinely holds a Studio-merged span that this browser cannot reconstruct (clearer message included). The merged span is recognized by its `Merged (effects)` name stamp, so naturally single-segment strips are never mistaken for merged ones.
+- The merge toggle now reflects device truth: a Studio-stamped merged span shows as checked even if the merge was applied from another browser.
+- Merge toggle no longer dereferences a stale `Event.target` after awaits when reverting the checkbox on error.
+
+### Fixed (review pass)
+- **Captured multi-segment scenes replay each segment's own look.** `expand_scene_state` broadcast the FIRST scene segment as the template for every target id, so applying a captured scene collapsed a 4-segment design to segment 0's color/effect everywhere. Scene segments are now matched by id, with the first entry kept as the broadcast fallback for starter scenes.
+- **Merge state is now grounded in the device layout everywhere.** `view-effects` and `segment-controls` treated the localStorage merge flag as "merged" even when the device still had its real segments — hiding the segment bar and silently collapsing effect/color writes to segment 0 while the UI claimed whole-strip. `_mergeActive` now requires the device layout to actually be merged; flag-on-but-unmerged keeps per-segment targeting (and, in Effects, shows the apply-merge prompt).
+- **Partial merges no longer destroy unselected segments.** `buildMergeForEffectsState` deleted every non-zero segment and hijacked id 0 even when only a subset was selected; it now folds only the targeted segments (merged span takes the lowest targeted id) and leaves the rest untouched.
+- **Paint commit no longer double-applies brush brightness.** The frontend bakes `bri/255` into the paint buffer for the WYSIWYG DDP preview, and the commit path scaled the payload by brush brightness again — committing `col x (bri/255)^2` (visibly darker than painted at any brightness below 255). Commit now uses the payload color verbatim.
+- **`paint_start` is race-safe.** Backend `PaintSession.start()` takes a lock (overlapping ws calls leaked UDP transports and duplicated keepalive tasks); the painter frontend shares one in-flight start promise across the pointermove burst that begins a stroke.
+- Floorplan uploads no longer block the event loop (disk writes moved to the executor, both the ws command and the HTTP view).
+- Frontend re-registration on integration update now works without an HA restart: the version check ran after the registered-guard early-return (unreachable), pinning the panel/card to the previous `?hacstag` until reboot.
+- Sleep-fade minutes input is clamped (an empty/invalid value silently skipped the fade); thumbnail-capture cancel surfaces errors instead of rejecting unhandled.
+
+### Tests
+- Regression tests for the phantom-merge state (fresh controller renders unchecked; stale-flag uncheck succeeds; real merged-without-snapshot still errors), partial-merge preservation, and per-segment scene replay.
+- `test/setup.ts` shims `localStorage` when Node's experimental global shadows happy-dom's (Node ≥22 broke every localStorage-touching suite locally).
+
+## 0.12.1
+
+Phase 2 (part) of the v2 architecture: the card joins the shared shell controllers. No user-facing change.
+
+### Internal
+- `wled-studio-card` now shares `StudioSelectionController` with the panel, removing its duplicate segment-selection state and the `segment-targets-changed` / `segment-change` reducers (delegated via getters; template unchanged).
+- The card's bootstrap/nav/live extraction (the larger, preview-coupled part of Phase 2) is folded into the Phase 4 `<wled-studio-shell>`, where it consolidates once instead of being extracted twice. CS-3/CS-4 move to the Phase 7.5 polish pass.
+
+### Tests
+- 143 vitest (was 141): +2 selection-controller tests.
+
+## 0.12.0
+
+Phase 1 of the v2 architecture: shared shell controllers; panel adopts them. No user-facing change.
+
+### Internal
+- New `frontend/src/core/` Lit `ReactiveController`s extracting the duplicated shell logic: `StudioSessionController` (controller discovery/pick + master entity), `StudioNavController` (active view + normalize-based hidden-view redirect), `StudioSelectionController` (selected/highlight segments + targets-changed reducer).
+- `wled-studio-panel` now delegates its shell state to these controllers via getters; template and behavior unchanged. The "segments → color" redirect is enforced at the source (`normalize`) instead of a `willUpdate` guard.
+- First controller unit tests (`test/studio-controllers.test.ts`); the card adopts the same controllers in the next phase.
+
+### Tests
+- 141 vitest (was 130): +11 controller tests.
+
+## 0.11.5
+
+Phase 0 of the v2 redesign: P1 bug fixes and functional blockers on a clean baseline. No new features; behavior-preserving except where noted.
+
+### Fixes
+- **Scenes (blocker):** "Overwrite anyway" now passes the remote `etag` to `scene_save`, so resolving a scene conflict succeeds instead of looping on the same conflict. (SC-1)
+- **Scenes:** scene capture surfaces a server-side conflict as a typed error and keeps the typed name with an actionable message instead of a dead-end "Save failed" toast. (SC-2; defensive/forward-compatible — capture is a server-side upsert today.)
+- **Effects/Segments/Paint:** all numeric sliders (Effects, Segment controls, and Paint brush) reject `NaN`/empty input and clamp to WLED's 0–255 range instead of writing invalid values to the device — consistent across every tab. (EF-2)
+- **Effects/Segments:** "Merge for effects" no longer silently reshapes your segment selection on load — the merge reshape now requires an explicit per-controller opt-in (the default-on toggle state alone never mutates edit targets). (P1-1)
+- **Effects:** removed dead `.compact-merge` styles that could not cross the merge-toggle's shadow boundary; compact styling is driven solely by the toggle's `compact` property. (P1-2)
+- **Card:** the hidden-tab redirect runs in `willUpdate` instead of `updated`, eliminating a wasted extra render cycle. (P1-3)
+- **Audio reactive:** default tuning now matches WLED's documentation — frequency scale square-root (was linear), limiter rise 60 ms (was 100), limiter fall 800 ms (was 400). Device-reported values still take precedence. (AU-1)
+
+### Internal
+- Extracted pure, unit-tested helpers: `isMergeForEffectsExplicit`, `clampSliderByte`, `parseAudioReactiveConfig`.
+- Verified `_applyLibraryEntry`/`sliderValuesFromSegment` already filter undefined slider keys (P1-4 was already resolved in code); locked with a regression test.
+
+### Tests
+- 130 vitest (was 119): new coverage for scene conflict etag/translation, slider clamp/NaN, merge opt-in, and audio defaults.
+
 ## 0.11.4
 
 ### Palettes

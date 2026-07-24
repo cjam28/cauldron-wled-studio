@@ -13,6 +13,7 @@ import {
 } from "../api/wled-state.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { solidEffectId } from "../utils/effect-categories.js";
+import { clampSliderByte } from "../utils/effect-presets-storage.js";
 import type { PaintBrushSettings } from "../utils/paint-settings-types.js";
 import "./color-wheel-rgbw.js";
 import "./effect-chips.js";
@@ -112,9 +113,14 @@ export class WledPaintSettings extends BasePoweredElement {
 
   private _slider(key: keyof PaintBrushSettings, ev: Event): void {
     const raw = (ev.target as HTMLInputElement).value;
-    const value = key.startsWith("o")
-      ? Number(raw) > 0
-      : Number(raw);
+    if (key.startsWith("o")) {
+      // o1/o2/o3 are boolean effect options (checkbox), not 0–255 sliders.
+      this._emit({ [key]: Number(raw) > 0 } as Partial<PaintBrushSettings>);
+      return;
+    }
+    // EF-2: reject NaN/empty and clamp to 0–255 (all numeric brush sliders use max=255).
+    const value = clampSliderByte(Number(raw));
+    if (value === null) return;
     this._emit({ [key]: value } as Partial<PaintBrushSettings>);
   }
 

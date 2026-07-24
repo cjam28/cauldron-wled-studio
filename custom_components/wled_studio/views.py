@@ -126,8 +126,10 @@ class WledStudioLayoutBgView(HomeAssistantView):
         raw = await field.read()
         ctype = (field.headers.get("Content-Type") or "").lower()
         try:
-            background_url = save_layout_background(
-                self.hass, controller_id, layout_id, raw, ctype
+            # Disk write runs in the executor — an 8 MiB floorplan must not
+            # block the event loop.
+            background_url = await self.hass.async_add_executor_job(
+                save_layout_background, self.hass, controller_id, layout_id, raw, ctype
             )
         except ValueError:
             raise web.HTTPBadRequest from None

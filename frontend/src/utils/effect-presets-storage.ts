@@ -23,6 +23,17 @@ export interface EffectLibraryEntry extends EffectSliderValues {
   savedAt: number;
 }
 
+/**
+ * Validate and clamp a raw WLED effect-slider value to the byte range WLED
+ * accepts (EF-2). Returns `null` for non-finite input (e.g. an empty or
+ * malformed slider value) so callers can skip the write entirely instead of
+ * sending `NaN` to the device.
+ */
+export function clampSliderByte(raw: number): number | null {
+  if (!Number.isFinite(raw)) return null;
+  return Math.min(255, Math.max(0, Math.round(raw)));
+}
+
 function readMap<T>(key: string): Record<string, T> {
   try {
     const raw = localStorage.getItem(key);

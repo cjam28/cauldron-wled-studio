@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WLED Studio — M3 design harness</title>
+    <!-- inline favicon so the harness console stays clean (no 404) -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%2365558f'/%3E%3C/svg%3E"
+    />
+    <style>
+      /*
+       * Bare page chrome only. ALL Material 3 tokens (--md-sys-color-*,
+       * --md-sys-typescale-*, --md-sys-shape-corner-*) are injected onto :root
+       * by preview-entry.ts so the card consumes them exactly as it would under
+       * the Material You HACS module on the wall. Do not hand-author M3 token
+       * values here — keep generation in one place (preview-entry.ts).
+       *
+       * The synthetic wallpaper + the dashboards' scrim are also applied by
+       * preview-entry.ts onto <body> (see preview/wallpaper-note.md).
+       */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        font-family:
+          "Roboto", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+      }
+      body {
+        /* fallback bg until preview-entry paints the wallpaper + scrim */
+        background: #0a0c12;
+        color: #fff;
+      }
+      /* The harness root element owns all layout; it is defined in TS. */
+      wled-studio-preview {
+        display: block;
+      }
+      noscript {
+        display: block;
+        padding: 24px;
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>
+      This is a JavaScript design harness. Run <code>npm run preview</code> and
+      open <code>http://localhost:5174/</code>.
+    </noscript>
+
+    <!--
+      The harness element. preview-entry.ts:
+        1. injects the M3 --md-sys-color-* / typescale / shape token set on :root
+        2. paints the synthetic wallpaper + scrim on <body>
+        3. renders <wled-studio-card> at 414 / 500 / 1680 widths,
+           in compact + full density, side by side.
+    -->
+    <wled-studio-preview></wled-studio-preview>
+
+    <!-- Built by rollup (preview entry) -> preview/preview-bundle.js -->
+    <script type="module" src="./preview-bundle.js"></script>
+  </body>
+</html>

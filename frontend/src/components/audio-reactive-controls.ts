@@ -17,6 +17,29 @@ const SYNC_LABELS = ["Off", "Send", "Receive"];
 const FREQ_LABELS = ["Linear", "Square root", "Logarithmic"];
 const SIM_LABELS = ["Off", "GEQ pulse", "WaveSin", "Sweep"];
 
+/**
+ * Build an {@link AudioReactiveConfig} from a device's `AudioReactive` block,
+ * falling back to WLED's documented tuning defaults when a field is absent
+ * (AU-1: `freqDist` 1 = square-root scale, limiter rise 60 ms, fall 800 ms —
+ * the prior 0 / 100 / 400 contradicted the documented recommendations).
+ */
+export function parseAudioReactiveConfig(
+  ar: Record<string, unknown>
+): AudioReactiveConfig {
+  return {
+    inputLevel: typeof ar.inputLevel === "number" ? ar.inputLevel : 128,
+    squelch: typeof ar.squelch === "number" ? ar.squelch : 10,
+    gain: typeof ar.gain === "number" ? ar.gain : 40,
+    AGC: typeof ar.AGC === "number" ? ar.AGC : 2,
+    sync: typeof ar.sync === "number" ? ar.sync : 0,
+    port: typeof ar.port === "number" ? ar.port : 11988,
+    freqDist: typeof ar.freqDist === "number" ? ar.freqDist : 1,
+    limiterRise: typeof ar.limiterRise === "number" ? ar.limiterRise : 60,
+    limiterFall: typeof ar.limiterFall === "number" ? ar.limiterFall : 800,
+    PalAR: ar.PalAR === true,
+  };
+}
+
 @safeCustomElement(AUDIO_REACTIVE_TAG)
 export class WledAudioReactiveControls extends BasePoweredElement {
   @property({ attribute: false }) connection?: Connection;
@@ -50,18 +73,7 @@ export class WledAudioReactiveControls extends BasePoweredElement {
       const snap = await fetchDeviceState(this.connection, this.controllerId);
       const stateRaw = snap.state as Record<string, unknown>;
       const ar = (stateRaw?.AudioReactive ?? {}) as Record<string, unknown>;
-      this._cfg = {
-        inputLevel: typeof ar.inputLevel === "number" ? ar.inputLevel : 128,
-        squelch: typeof ar.squelch === "number" ? ar.squelch : 10,
-        gain: typeof ar.gain === "number" ? ar.gain : 40,
-        AGC: typeof ar.AGC === "number" ? ar.AGC : 2,
-        sync: typeof ar.sync === "number" ? ar.sync : 0,
-        port: typeof ar.port === "number" ? ar.port : 11988,
-        freqDist: typeof ar.freqDist === "number" ? ar.freqDist : 0,
-        limiterRise: typeof ar.limiterRise === "number" ? ar.limiterRise : 100,
-        limiterFall: typeof ar.limiterFall === "number" ? ar.limiterFall : 400,
-        PalAR: ar.PalAR === true,
-      };
+      this._cfg = parseAudioReactiveConfig(ar);
       this._info = ar;
       this._status = "ready";
     } catch (err) {

@@ -1,190 +1,267 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { WledStudioCard, CARD_TAG } from "../src/card/wled-studio-card.js";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+
+// The card mounts <wled-studio-shell>, whose view-registry heavy loaders pull
+// konva-backed modules. konva's node entry require("canvas") is a native module
+// not installed in the test env — stub it so any ensureViewLoaded() that reaches
+// a heavy view can evaluate without throwing (mirrors studio-shell.test.ts).
+vi.mock("konva", () => ({ default: class {}, Stage: class {}, Layer: class {} }));
+
+import {
+  WledStudioCard,
+  CARD_TAG,
+  getStubConfig,
+  type WledStudioCardConfig,
+} from "../src/card/wled-studio-card.js";
+import type { WledStudioShell } from "../src/core/studio-shell.js";
+import { WledViewPaint } from "../src/panel/view-paint.js";
 import { defineCustomElement } from "../src/utils/safe-custom-element.js";
+// Registers <wled-studio-card-editor> so getConfigElement() resolves it.
+import "../src/card/wled-studio-card-editor.js";
 
 defineCustomElement(CARD_TAG, WledStudioCard);
 
-async function flushRaf(): Promise<void> {
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+/** The shell the card renders (the card is a thin wrapper). */
+function shell(el: WledStudioCard): WledStudioShell {
+  const node = el.shadowRoot?.querySelector<WledStudioShell>("wled-studio-shell");
+  if (!node) throw new Error("wled-studio-shell missing");
+  return node;
 }
 
-function tabLabels(el: WledStudioCard): string[] {
-  const root = el.shadowRoot;
-  if (!root) return [];
-  return [...root.querySelectorAll(".mode-tab-label")].map(
-    (n) => n.textContent?.trim() ?? ""
-  );
+/** The ordered nav ids the shell will render for its current props. */
+function shellNavIds(el: WledStudioCard): string[] {
+  const sh = shell(el) as unknown as { visibleNav(): Array<{ id: string }> };
+  return sh.visibleNav().map((n) => n.id);
 }
 
-function activeTabId(el: WledStudioCard): string | undefined {
-  return el.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')
-    ?.id;
+async function mount(config: WledStudioCardConfig): Promise<WledStudioCard> {
+  const el = new WledStudioCard();
+  el.setConfig(config);
+  document.body.appendChild(el);
+  await el.updateComplete;
+  await shell(el).updateComplete;
+  return el;
 }
 
-function dispatchTabKey(el: WledStudioCard, key: string): void {
-  const tablist = el.shadowRoot?.querySelector('[role="tablist"]');
-  if (!tablist) throw new Error("tablist missing");
-  tablist.dispatchEvent(
-    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
-  );
-}
+describe("WledStudioCard — LovelaceCard contract", () => {
+  it("setConfig throws on a non-custom type", () => {
+    const el = new WledStudioCard();
+    expect(() => el.setConfig({ type: "wled-studio-card" })).toThrow();
+    expect(() => el.setConfig({ type: "custom:wled-studio-card" })).not.toThrow();
+  });
 
-function dispatchTabSwipe(el: WledStudioCard, deltaX: number): void {
-  const panel = el.shadowRoot?.querySelector(".tab-body");
-  if (!panel) throw new Error("tab-body missing");
-  const startX = 200;
-  const startY = 300;
-  panel.dispatchEvent(
-    new TouchEvent("touchstart", {
-      bubbles: true,
-      cancelable: true,
-      touches: [new Touch({ identifier: 0, target: panel, clientX: startX, clientY: startY })],
-    })
-  );
-  panel.dispatchEvent(
-    new TouchEvent("touchmove", {
-      bubbles: true,
-      cancelable: true,
-      touches: [
-        new Touch({
-          identifier: 0,
-          target: panel,
-          clientX: startX + deltaX,
-          clientY: startY,
-        }),
-      ],
-    })
-  );
-  panel.dispatchEvent(
-    new TouchEvent("touchend", {
-      bubbles: true,
-      cancelable: true,
-      changedTouches: [
-        new Touch({
-          identifier: 0,
-          target: panel,
-          clientX: startX + deltaX,
-          clientY: startY,
-        }),
-      ],
-    })
-  );
-}
+  it("exposes getCardSize and getGridOptions", () => {
+    const el = new WledStudioCard();
+    expect(el.getCardSize()).toBeTypeOf("number");
+    expect(el.getGridOptions()).toEqual({ columns: 12, min_columns: 6 });
+  });
 
-describe("WledStudioCard mode tabs", () => {
+  it("getConfigElement returns the editor element", () => {
+    const editor = WledStudioCard.getConfigElement();
+    expect(editor.tagName.toLowerCase()).toBe("wled-studio-card-editor");
+  });
+
+  it("getStubConfig / getStubConfig() use the custom type", () => {
+    expect(WledStudioCard.getStubConfig().type).toBe(`custom:${CARD_TAG}`);
+    expect(getStubConfig().type).toBe(`custom:${CARD_TAG}`);
+  });
+});
+
+describe("WledStudioCard — renders the shell wrapper", () => {
   let el: WledStudioCard;
+  afterEach(() => el?.remove());
 
-  beforeEach(() => {
-    el = new WledStudioCard();
-    el.setConfig({ type: "custom:wled-studio-card", show_scenes: true });
-    document.body.appendChild(el);
+  it("renders a single <wled-studio-shell surface=card>", async () => {
+    el = await mount({ type: "custom:wled-studio-card" });
+    const sh = shell(el);
+    expect(sh.surface).toBe("card");
+  });
+});
+
+describe("WledStudioCard — config maps to shell props", () => {
+  let el: WledStudioCard;
+  afterEach(() => el?.remove());
+
+  it("controller / layout_id map straight through", async () => {
+    el = await mount({
+      type: "custom:wled-studio-card",
+      controller: "Cloud",
+      layout_id: "lay-1",
+    });
+    const sh = shell(el);
+    expect(sh.controller).toBe("Cloud");
+    expect(sh.layoutId).toBe("lay-1");
   });
 
-  afterEach(() => {
+  it("config.height maps to shell.previewHeight (NOT a card-height cap)", async () => {
+    el = await mount({ type: "custom:wled-studio-card", height: 321 });
+    expect(shell(el).previewHeight).toBe(321);
+  });
+
+  it("density defaults to 'auto' and passes through when set", async () => {
+    el = await mount({ type: "custom:wled-studio-card" });
+    expect(shell(el).density).toBe("auto");
+
     el.remove();
+    el = await mount({ type: "custom:wled-studio-card", density: "full" });
+    expect(shell(el).density).toBe("full");
   });
 
-  it("renders Color, Effects, Scenes, and Paint tabs by default", async () => {
-    await el.updateComplete;
-    expect(tabLabels(el)).toEqual([
-      "Color",
-      "Effects",
-      "Scenes",
-      "Paint",
+  it("config.views maps to shell.visibleViews verbatim (order preserved)", async () => {
+    el = await mount({
+      type: "custom:wled-studio-card",
+      views: ["scenes", "color", "home"],
+    });
+    expect(shell(el).visibleViews).toEqual(["scenes", "color", "home"]);
+    // and the shell renders nav from exactly those ids, in order.
+    expect(shellNavIds(el)).toEqual(["scenes", "color", "home"]);
+  });
+
+  it("default_view passes through; defaults to 'home' when absent", async () => {
+    el = await mount({ type: "custom:wled-studio-card" });
+    expect(shell(el).defaultView).toBe("home");
+
+    el.remove();
+    el = await mount({ type: "custom:wled-studio-card", default_view: "color" });
+    expect(shell(el).defaultView).toBe("color");
+  });
+});
+
+describe("WledStudioCard — deprecated show_* aliases synthesize views", () => {
+  let el: WledStudioCard;
+  afterEach(() => el?.remove());
+
+  it("default (show_scenes:true) => Color, Effects, Scenes, Paint", async () => {
+    el = await mount({ type: "custom:wled-studio-card", show_scenes: true });
+    expect(shell(el).visibleViews).toEqual([
+      "color",
+      "effects",
+      "scenes",
+      "paint",
     ]);
   });
 
-  it("hides Scenes tab when show_scenes is false", async () => {
-    el.setConfig({ type: "custom:wled-studio-card", show_scenes: false });
-    await el.updateComplete;
-    expect(tabLabels(el)).toEqual(["Color", "Effects", "Paint"]);
+  it("show_scenes:false hides scenes", async () => {
+    el = await mount({ type: "custom:wled-studio-card", show_scenes: false });
+    expect(shell(el).visibleViews).toEqual(["color", "effects", "paint"]);
   });
 
-  it("shows Segments tab only when show_segments is true", async () => {
-    el.setConfig({
+  it("show_segments:true shows segments (and keeps scenes order)", async () => {
+    el = await mount({
       type: "custom:wled-studio-card",
       show_scenes: false,
       show_segments: true,
     });
-    await el.updateComplete;
-    expect(tabLabels(el)).toEqual(["Color", "Effects", "Segments", "Paint"]);
+    expect(shell(el).visibleViews).toEqual([
+      "color",
+      "effects",
+      "segments",
+      "paint",
+    ]);
   });
 
-  it("hides optional tabs when show_* flags are false", async () => {
-    el.setConfig({
+  it("turning effects+paint+segments off leaves Color + Scenes", async () => {
+    el = await mount({
       type: "custom:wled-studio-card",
       show_effects: false,
       show_paint: false,
       show_segments: false,
     });
-    await el.updateComplete;
-    expect(tabLabels(el)).toEqual(["Color", "Scenes"]);
+    expect(shell(el).visibleViews).toEqual(["color", "scenes"]);
   });
 
-  it("ArrowRight selects next tab and moves focus", async () => {
-    await el.updateComplete;
-    expect(el["_cardTab"]).toBe("color");
-    expect(activeTabId(el)).toBe("wled-card-tab-color");
+  it("explicit views wins over deprecated aliases", async () => {
+    el = await mount({
+      type: "custom:wled-studio-card",
+      views: ["home", "color"],
+      // aliases that would otherwise add scenes/effects/paint are ignored:
+      show_scenes: true,
+      show_segments: true,
+    });
+    expect(shell(el).visibleViews).toEqual(["home", "color"]);
+  });
+});
 
-    dispatchTabKey(el, "ArrowRight");
-    await el.updateComplete;
-    await flushRaf();
+describe("WledStudioCard — selection / brightness / paint routing preserved", () => {
+  let el: WledStudioCard;
+  afterEach(() => el?.remove());
 
-    expect(el["_cardTab"]).toBe("effects");
-    expect(activeTabId(el)).toBe("wled-card-tab-effects");
+  it("the shell owns selection, brightness and paint wiring", async () => {
+    el = await mount({ type: "custom:wled-studio-card", show_segments: true });
+    const sh = shell(el) as unknown as {
+      _selection: {
+        setSegments(s: unknown[]): void;
+        selectSegment(id: number): void;
+        selectedSegId: number;
+      };
+      _onStripSegmentSelect(ev: CustomEvent): void;
+      _setGlobalBrightness(ev: Event): void;
+      _onSegmentChange(ev: CustomEvent): void;
+    };
+
+    // selection routing: a strip select updates the shared selection controller.
+    sh._selection.setSegments([{ id: 2 } as unknown]);
+    sh._onStripSegmentSelect(
+      new CustomEvent("segment-select", { detail: { segmentId: 2 } })
+    );
+    expect(sh._selection.selectedSegId).toBe(2);
+
+    // brightness + paint handlers exist on the shell (the card no longer owns
+    // them) — calling them must not throw without an attached master entity.
+    expect(() =>
+      sh._setGlobalBrightness({ target: { value: 50 } } as unknown as Event)
+    ).not.toThrow();
+    expect(() =>
+      sh._onSegmentChange(
+        new CustomEvent("segment-change", { detail: { segmentId: 2 } })
+      )
+    ).not.toThrow();
   });
 
-  it("Home selects first tab and End selects last tab", async () => {
-    await el.updateComplete;
-    el["_cardTab"] = "segments";
-    await el.updateComplete;
+  it("paint routing survives the card wrapper: the shell binds + routes a preview stroke", async () => {
+    const bindSpy = vi.spyOn(WledViewPaint.prototype, "bindExternalPreview");
+    const strokeSpy = vi.spyOn(
+      WledViewPaint.prototype,
+      "handleExternalPaintStroke"
+    );
 
-    dispatchTabKey(el, "Home");
-    await el.updateComplete;
-    await flushRaf();
-    expect(el["_cardTab"]).toBe("color");
-    expect(activeTabId(el)).toBe("wled-card-tab-color");
+    // density:full => left rail (avoids md-navigation-bar jsdom slot warning);
+    // default_view:paint mounts the heavy paint panel inside the shell.
+    el = await mount({
+      type: "custom:wled-studio-card",
+      density: "full",
+      default_view: "paint",
+      views: ["paint"],
+    });
+    const sh = shell(el);
+    await new Promise((r) => setTimeout(r, 20));
+    await sh.updateComplete;
 
-    dispatchTabKey(el, "End");
-    await el.updateComplete;
-    await flushRaf();
-    expect(el["_cardTab"]).toBe("paint");
-    expect(activeTabId(el)).toBe("wled-card-tab-paint");
+    const panel = sh.shadowRoot!.querySelector("wled-view-paint");
+    expect(panel).toBeTruthy();
+    expect(bindSpy).toHaveBeenCalled();
+
+    const preview = sh.shadowRoot!.querySelector("wled-geometry-preview")!;
+    preview.dispatchEvent(
+      new CustomEvent("paint-stroke", {
+        detail: { led: 9, leds: [8, 9, 10] },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    expect(strokeSpy).toHaveBeenCalledTimes(1);
+
+    vi.restoreAllMocks();
   });
+});
 
-  it("swipe left on tab panel selects next tab", async () => {
-    await el.updateComplete;
-    expect(el["_cardTab"]).toBe("color");
-
-    dispatchTabSwipe(el, -60);
-    await el.updateComplete;
-
-    expect(el["_cardTab"]).toBe("effects");
+describe("WledStudioCard — Material You / theme discipline", () => {
+  let el: WledStudioCard;
+  beforeEach(async () => {
+    el = await mount({ type: "custom:wled-studio-card" });
   });
+  afterEach(() => el?.remove());
 
-  it("swipe right on tab panel selects previous tab", async () => {
-    await el.updateComplete;
-    el["_cardTab"] = "effects";
-    await el.updateComplete;
-
-    dispatchTabSwipe(el, 60);
-    await el.updateComplete;
-
-    expect(el["_cardTab"]).toBe("color");
-  });
-
-  it("ignores swipe shorter than 50px", async () => {
-    await el.updateComplete;
-    el["_cardTab"] = "color";
-    await el.updateComplete;
-
-    dispatchTabSwipe(el, -30);
-    await el.updateComplete;
-
-    expect(el["_cardTab"]).toBe("color");
-  });
-
-  it("renders mode tabs when Graphite-like document theme vars are set", async () => {
+  it("renders under Graphite-like document theme vars without throwing", async () => {
     const root = document.documentElement;
     root.style.setProperty("--primary-color", "#8ab4f8");
     root.style.setProperty("--card-background-color", "#1a1a1a");
@@ -192,17 +269,7 @@ describe("WledStudioCard mode tabs", () => {
     root.style.setProperty("--ha-card-border-radius", "16px");
 
     await el.updateComplete;
-
-    const card = el.shadowRoot?.querySelector(".card");
-    const tablist = el.shadowRoot?.querySelector('[role="tablist"]');
-    expect(card).toBeTruthy();
-    expect(tablist?.getAttribute("aria-label")).toBe("Control mode");
-    expect(tabLabels(el)).toEqual([
-      "Color",
-      "Effects",
-      "Scenes",
-      "Paint",
-    ]);
+    expect(shell(el)).toBeTruthy();
 
     root.style.removeProperty("--primary-color");
     root.style.removeProperty("--card-background-color");

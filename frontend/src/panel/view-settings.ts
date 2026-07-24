@@ -65,9 +65,14 @@ export class WledViewSettings extends BasePoweredElement {
 
   private async _cancelCapture(): Promise<void> {
     if (!this.connection || !this.controllerId) return;
-    await thumbCaptureCancel(this.connection, this.controllerId);
-    this._capturing = false;
-    this._thumbStatus = "Cancel requested";
+    try {
+      await thumbCaptureCancel(this.connection, this.controllerId);
+      this._thumbStatus = "Cancel requested";
+    } catch (err) {
+      this._thumbStatus = formatHaError(err);
+    } finally {
+      this._capturing = false;
+    }
   }
 
   private _clearOnboard(): void {

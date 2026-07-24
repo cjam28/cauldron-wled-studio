@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from .ddp import build_ddp_packets
 from .paint_commit import (
     build_paint_commit_state,
+    count_paint_segments,
     expand_segments_to_payload,
     live_frame_to_payload,
 )
@@ -25,6 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 DDP_PORT = 4048
 KEEPALIVE_SEC = 1.5
 EFFECT_PREVIEW_DEBOUNCE_SEC = 0.1
+# Consecutive failed sends (DDP keepalive / device pushes) before a session is
+# reported unhealthy so the painter can surface a "reconnecting" banner.
+UNHEALTHY_FAILURE_THRESHOLD = 3
 
 
 class PaintSession:
@@ -48,35 +53,137 @@ class PaintSession:
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()
         self._effect_preview_task: asyncio.Task[None] | None = None
         self._active = False
         self._coordinator: WledStudioCoordinator | None = None
+        # Mid-paint disconnect tracking (SP-4). A run of failed sends/keepalives
+        # flips ``connection_healthy`` to False with a human-readable reason so
+        # the painter can show a "reconnecting" recovery banner.
+        self._consecutive_send_failures = 0
+        self._last_success_ts: float | None = None
+        self._last_failure_reason: str | None = None
 
     @property
     def active(self) -> bool:
         return self._active
 
+    @property
+    def baseline_payload(self) -> bytes | None:
+        """The frozen pre-paint frame captured at session start ("the current
+        look" the preserve commit-merge uses). The painter seeds its canvas from
+        this so re-fetching mid-session can't capture the live-paint state."""
+        return self._baseline_payload
+
+    @property
+    def connection_healthy(self) -> bool:
+        """False once consecutive send failures cross the unhealthy threshold."""
+        return self._consecutive_send_failures < UNHEALTHY_FAILURE_THRESHOLD
+
+    @property
+    def connection_reason(self) -> str | None:
+        """Human-readable cause when unhealthy, else None.
+
+        Falls back to the WiFi-sleep warning (a common root cause of dropped
+        DDP/device pushes) when no explicit send failure has been recorded yet.
+        """
+        if not self.connection_healthy:
+            return self._last_failure_reason or "paint connection lost — reconnecting"
+        return self.wifi_sleep_warning()
+
+    @property
+    def last_success_ts(self) -> float | None:
+        return self._last_success_ts
+
+    def _record_send_success(self) -> None:
+        self._consecutive_send_failures = 0
+        self._last_failure_reason = None
+        self._last_success_ts = time.monotonic()
+
+    def _record_send_failure(self, reason: str) -> None:
+        self._consecutive_send_failures += 1
+        self._last_failure_reason = reason
+
+    def connection_status(self) -> dict[str, Any]:
+        """Additive health snapshot embedded in WS results / paint_status."""
+        return {
+            "connection_healthy": self.connection_healthy,
+            "connection_reason": self.connection_reason,
+            "consecutive_send_failures": self._consecutive_send_failures,
+            "last_success_ts": self._last_success_ts,
+            **self.segment_count_status(),
+        }
+
+    def _leds_info(self) -> dict[str, Any]:
+        info = self._client.info if isinstance(self._client.info, dict) else {}
+        leds_raw = info.get("leds")
+        return leds_raw if isinstance(leds_raw, dict) else {}
+
+    def segment_count_status(self) -> dict[str, Any]:
+        """SP-5: pre-commit segment-count estimate for the live warning chip.
+
+        Mirrors the inputs :meth:`_commit_buffer_to_state` would use so the
+        reported count matches what an actual commit produces. Non-throwing and
+        additive — older painters ignore the extra fields. Returns an empty dict
+        when there is no buffer yet (nothing to estimate).
+        """
+        if not self._last_payload:
+            return {}
+        leds = self._leds_info()
+        bpp = 4 if self._last_rgbw else 3
+        pixel_count = int(leds.get("count") or 0)
+        if pixel_count <= 0 and bpp > 0:
+            pixel_count = len(self._last_payload) // bpp
+        max_seg = int(leds.get("maxseg") or 32)
+        try:
+            return count_paint_segments(
+                self._last_payload,
+                rgbw=self._last_rgbw,
+                live_segments=self._segment_snapshot,
+                pixel_count=pixel_count,
+                effects_by_name=self._client.effects_by_name,
+                touched=self._touched,
+                baseline=self._baseline_payload,
+                paint_mode=self._paint_mode,
+                touched_fx=self._touched_fx,
+                max_segments=max_seg,
+                brush=self._brush,
+                fill=self._fill,
+            )
+        except Exception:  # noqa: BLE001 — estimate must never break a frame
+            _LOGGER.debug("segment-count estimate failed", exc_info=True)
+            return {}
+
     async def start(self, coordinator: WledStudioCoordinator | None = None) -> None:
         if self._active:
             return
-        self._coordinator = coordinator
-        await self._client.get_state(refresh=True)
-        await self._capture_baseline(coordinator)
-        loop = asyncio.get_running_loop()
-        self._transport, _ = await loop.create_datagram_endpoint(
-            asyncio.DatagramProtocol,
-            local_addr=("0.0.0.0", 0),
-            family=2,  # AF_INET
-        )
-        self._active = True
-        self._touched.clear()
-        self._touched_fx.clear()
-        self._paint_mode = "color"
-        self._brush = {}
-        self._fill = {"mode": "off"}
-        self._ddp_live = True
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        await self._client.apply_state({"live": True})
+        # ws handlers run as independent tasks; overlapping paint_start /
+        # paint_frame calls would otherwise each pass the _active check during
+        # the awaits below and leak UDP transports + duplicate keepalive tasks.
+        async with self._start_lock:
+            if self._active:
+                return
+            self._coordinator = coordinator
+            await self._client.get_state(refresh=True)
+            await self._capture_baseline(coordinator)
+            loop = asyncio.get_running_loop()
+            self._transport, _ = await loop.create_datagram_endpoint(
+                asyncio.DatagramProtocol,
+                local_addr=("0.0.0.0", 0),
+                family=2,  # AF_INET
+            )
+            self._active = True
+            self._touched.clear()
+            self._touched_fx.clear()
+            self._paint_mode = "color"
+            self._brush = {}
+            self._fill = {"mode": "off"}
+            self._ddp_live = True
+            self._consecutive_send_failures = 0
+            self._last_failure_reason = None
+            self._last_success_ts = time.monotonic()
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+            await self._client.apply_state({"live": True})
 
     async def stop(self, *, commit: bool = False) -> None:
         was_active = self._active
@@ -170,17 +277,39 @@ class PaintSession:
                     if paint_mode == "effect" and effect_id is not None:
                         self._touched_fx[led] = int(effect_id)
         if self._paint_mode == "effect" and self._touched:
+            # SP-1: light the just-painted LEDs instantly via DDP (1-2ms) using
+            # the painted color buffer, then let the debounced device-effect
+            # preview animate on top once it catches up. Re-enable DDP live like
+            # the color path before sending — _apply_effect_preview() flips
+            # _ddp_live=False, so without this the immediate frame would be
+            # suppressed by the device's non-live state.
+            if not self._ddp_live:
+                await self._client.apply_state({"live": True})
+                self._ddp_live = True
+            self._send_ddp_frame(payload, rgbw=rgbw)
             self._schedule_effect_preview()
             return
         if self._paint_mode == "color" and not self._ddp_live:
             await self._client.apply_state({"live": True})
             self._ddp_live = True
-        packets = build_ddp_packets(
-            payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
-        )
-        self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
-        for pkt in packets:
-            self._transport.sendto(pkt, (self._host, DDP_PORT))
+        self._send_ddp_frame(payload, rgbw=rgbw)
+
+    def _send_ddp_frame(self, payload: bytes, *, rgbw: bool) -> None:
+        """Build + emit a DDP frame over UDP, tracking send health (SP-4)."""
+        if not self._transport:
+            return
+        try:
+            packets = build_ddp_packets(
+                payload, rgbw=rgbw, byte_offset=0, start_seq=self._seq
+            )
+            self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
+            for pkt in packets:
+                self._transport.sendto(pkt, (self._host, DDP_PORT))
+        except Exception as err:  # noqa: BLE001
+            self._record_send_failure(f"DDP send failed: {err}")
+            _LOGGER.debug("paint DDP send failed on %s", self._host, exc_info=True)
+            return
+        self._record_send_success()
 
     def _schedule_effect_preview(self) -> None:
         """Debounce WLED /json/state pushes so paint strokes stay responsive."""
@@ -347,23 +476,17 @@ class PaintSession:
                 ):
                     try:
                         await self._apply_effect_preview()
-                    except Exception:  # noqa: BLE001
+                    except Exception as err:  # noqa: BLE001
+                        self._record_send_failure(
+                            f"effect keepalive failed: {err}"
+                        )
                         _LOGGER.debug(
                             "paint effect keepalive failed", exc_info=True
                         )
+                    else:
+                        self._record_send_success()
                 continue
-            try:
-                packets = build_ddp_packets(
-                    self._last_payload,
-                    rgbw=self._last_rgbw,
-                    byte_offset=0,
-                    start_seq=self._seq,
-                )
-                self._seq = (self._seq + len(packets) - 1) & 0x0F or 1
-                for pkt in packets:
-                    self._transport.sendto(pkt, (self._host, DDP_PORT))
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("paint keepalive failed", exc_info=True)
+            self._send_ddp_frame(self._last_payload, rgbw=self._last_rgbw)
 
     def wifi_sleep_warning(self) -> str | None:
         wifi = self._client.info.get("wifi") if self._client.info else {}

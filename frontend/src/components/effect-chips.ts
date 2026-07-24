@@ -9,6 +9,7 @@ import {
   solidEffectId,
   type EffectCategory,
 } from "../utils/effect-categories.js";
+import { effectPreviewBackgroundCss } from "../utils/effect-preview.js";
 import {
   getRecentEffects,
   maxItemsForRowWidth,
@@ -42,6 +43,10 @@ export class WledEffectChips extends BasePoweredElement {
   /** When set, prefer palette-specific effect thumbnails. */
   @property({ type: Number }) selectedPalette = 0;
   @property({ type: Boolean, attribute: "palette-aware" }) paletteAware = false;
+  /** Palette name → id (resolve selected palette name for preview fallbacks). */
+  @property({ type: Object }) palettesByName: Record<string, number> = {};
+  /** Device palette gradients keyed by palette id (palx) for preview chips. */
+  @property({ type: Object }) palettePreviews: Record<string, string> = {};
 
   @state() private _category: EffectCategory = "all";
   @state() private _recentEntries: RecentEffectEntry[] = [];
@@ -100,6 +105,11 @@ export class WledEffectChips extends BasePoweredElement {
       Object.entries(this.effectsByName).find(([, id]) => id === effectId)?.[0] ??
       `Effect ${effectId}`
     );
+  }
+
+  private _selectedPaletteName(): string | undefined {
+    const id = this.selectedPalette;
+    return Object.entries(this.palettesByName).find(([, pid]) => pid === id)?.[0];
   }
 
   protected override render() {
@@ -242,25 +252,37 @@ export class WledEffectChips extends BasePoweredElement {
                     ></wled-effect-tile>
                   `;
                 }
+                const previewBg = effectPreviewBackgroundCss(name, {
+                  flag,
+                  isSolid: id === solidId,
+                  paletteAware: this.paletteAware,
+                  selectedPaletteId: this.selectedPalette,
+                  selectedPaletteName: this._selectedPaletteName(),
+                  palettePreviews: this.palettePreviews,
+                });
                 return html`
                   <button
                     type="button"
-                    class="chip ${active ? "active" : ""}"
+                    class="chip preview ${active ? "active" : ""}"
                     role="option"
                     aria-selected=${active ? "true" : "false"}
                     aria-label=${tileLabel}
+                    style=${`--chip-preview: ${previewBg}`}
                     @click=${() => this._pick(id, solidId)}
                   >
-                    ${name}
-                    ${flag === "v"
-                      ? html`<span class="badge" title="Volume reactive">♪</span>`
-                      : null}
-                    ${flag === "f"
-                      ? html`<span class="badge" title="Frequency reactive">♫</span>`
-                      : null}
-                    ${flag === "2"
-                      ? html`<span class="badge dim" title="2D matrix">2D</span>`
-                      : null}
+                    <span class="chip-bg" aria-hidden="true"></span>
+                    <span class="chip-name">
+                      ${name}
+                      ${flag === "v"
+                        ? html`<span class="badge" title="Volume reactive">♪</span>`
+                        : null}
+                      ${flag === "f"
+                        ? html`<span class="badge" title="Frequency reactive">♫</span>`
+                        : null}
+                      ${flag === "2"
+                        ? html`<span class="badge dim" title="2D matrix">2D</span>`
+                        : null}
+                    </span>
                   </button>
                 `;
               })}
@@ -459,6 +481,50 @@ export class WledEffectChips extends BasePoweredElement {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
         border-color: transparent;
+      }
+      /* Visual preview chip: color/gradient derived from palette or category. */
+      .chip.preview {
+        position: relative;
+        overflow: hidden;
+        padding: 0;
+        display: flex;
+        align-items: flex-end;
+        min-height: 3rem;
+        color: #fff;
+        background: var(--card-background-color, transparent);
+      }
+      .chip.preview .chip-bg {
+        position: absolute;
+        inset: 0;
+        background: var(--chip-preview, var(--card-background-color, #333));
+        background-size: cover;
+      }
+      .chip.preview .chip-name {
+        position: relative;
+        z-index: 1;
+        display: block;
+        width: 100%;
+        padding: 6px 8px;
+        font-size: 0.76rem;
+        line-height: 1.2;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+        /* Legible scrim so the name reads on any gradient. */
+        background: linear-gradient(
+          to top,
+          rgba(0, 0, 0, 0.72) 0%,
+          rgba(0, 0, 0, 0.32) 70%,
+          rgba(0, 0, 0, 0) 100%
+        );
+      }
+      .chip.preview.active {
+        background: var(--card-background-color, transparent);
+        color: #fff;
+        border-color: transparent;
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+      }
+      .chip.preview .badge {
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
       }
       .badge {
         margin-left: 4px;

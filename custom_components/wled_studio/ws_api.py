@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DOMAIN, INTEGRATION_VERSION, SCHEMA_VERSION
 from .lovelace_resources import async_register_lovelace_resources, card_resource_url
 from .geometry import Layout, fixture_to_wled_segments, resolve_led_positions
+from .paint_commit import expand_segments_to_payload, live_frame_to_payload
 from .thumbnails import list_thumbs
 from .scene_store import SceneConflictError, SceneRecord
 from .views import save_layout_background
@@ -626,7 +627,10 @@ async def ws_layout_upload_bg(
         connection.send_error(msg["id"], "invalid_format", "Invalid image data")
         return
     try:
-        background_url = save_layout_background(
+        # Disk write runs in the executor — an 8 MiB floorplan must not
+        # block the event loop.
+        background_url = await hass.async_add_executor_job(
+            save_layout_background,
             hass,
             msg["controller_id"],
             msg["layout_id"],
@@ -1116,7 +1120,7 @@ async def ws_paint_frame(
         connection.send_error(msg["id"], "invalid_payload", str(err))
         return
 
-    async def _send_frame() -> None:
+    async def _send_frame() -> dict[str, Any]:
         session = coord.get_paint_session()
         await session.send_frame(
             payload,
@@ -1127,15 +1131,22 @@ async def ws_paint_frame(
             brush=msg.get("brush"),
             fill=msg.get("fill"),
         )
+        return session.connection_status()
 
     try:
-        if await _ws_call(connection, msg["id"], _send_frame()) is None:
-            return
+        status = await _ws_call(connection, msg["id"], _send_frame())
     except Exception as err:
         connection.send_error(msg["id"], "paint_error", str(err))
         return
+    if status is None:
+        return
+    # Additive fields, no wire/DDP change. SP-4: connection-health so the painter
+    # can show a recovery banner. SP-5: seg_count/max_segments/seg_warn so it can
+    # warn (at ~80% of maxseg) before a commit would hard-fail. Both come from
+    # session.connection_status(); older frontends simply ignore them.
     connection.send_result(
-        msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+        msg["id"],
+        {"ok": True, "schema_version": SCHEMA_VERSION, **status},
     )
 
 
@@ -1181,6 +1192,145 @@ async def ws_paint_stop(
                     _LOGGER.warning("paint_stop live clear failed", exc_info=True)
     connection.send_result(
         msg["id"], {"ok": True, "schema_version": SCHEMA_VERSION}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/paint_status",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Report paint-session connection health (SP-4 recovery banner source)."""
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+    session = coord.paint_session
+    if session is None or not session.active:
+        connection.send_result(
+            msg["id"],
+            {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "active": False,
+                "connection_healthy": True,
+                "connection_reason": None,
+                "consecutive_send_failures": 0,
+                "last_success_ts": None,
+            },
+        )
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "active": True,
+            **session.connection_status(),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wled_studio/paint_baseline_frame",
+        vol.Required("controller_id"): str,
+        vol.Optional("schema_version", default=SCHEMA_VERSION): int,
+    }
+)
+@websocket_api.async_response
+async def ws_paint_baseline_frame(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the controller's current per-LED frame ("the current look").
+
+    The painter "Keep current look" (preserve) fill mode seeds its canvas with
+    this so the user paints over the device's ACTUAL current colors instead of a
+    gray placeholder. Source is live_proxy's last good frame (the DDP-decoded
+    rendered WLED output — includes effects). Additive command; the FROZEN DDP
+    wire is untouched (we only read the already-decoded frame). When no frame is
+    available (proxy not ingesting) we return ok with count 0 / no pixels so the
+    client falls back to its dim placeholder gracefully.
+    """
+    if not _check_schema(msg):
+        connection.send_error(msg["id"], "schema_mismatch", "Reload to update")
+        return
+    coord = _get_coordinator(hass, msg["controller_id"])
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "Unknown controller")
+        return
+
+    client = coord.client
+    info = client.info if (client and isinstance(client.info, dict)) else {}
+    leds_raw = info.get("leds") if isinstance(info, dict) else {}
+    leds = leds_raw if isinstance(leds_raw, dict) else {}
+    pixel_count = int(leds.get("count") or 0)
+    rgbw = bool(leds.get("rgbw", True))
+
+    payload: bytes | None = None
+
+    # During an ACTIVE paint session, return the session's FROZEN pre-paint
+    # baseline (captured at start = "the current look" the commit-merge uses).
+    # Re-reading the live device here would capture the live-paint state instead,
+    # wiping the current look out from under the user's strokes.
+    session = coord.paint_session
+    if session is not None and session.active and session.baseline_payload:
+        payload = session.baseline_payload
+
+    proxy = coord.live_proxy
+    frame = proxy.last_good_frame if proxy is not None else None
+    if not payload and isinstance(frame, dict) and pixel_count > 0:
+        payload = live_frame_to_payload(frame, pixel_count, rgbw=rgbw)
+
+    # Mirror PaintSession._capture_baseline: when no live frame is available
+    # (the proxy is NOT ingesting — the common painter case, since the painter
+    # does not subscribe to the live stream), reconstruct the current look from
+    # the WLED state's segment colors. This is the SAME source the preserve
+    # commit-merge uses, so the canvas matches exactly what commit produces.
+    if not payload and pixel_count > 0:
+        state = getattr(client, "state", None)
+        state = state if isinstance(state, dict) else {}
+        segs_raw = state.get("seg")
+        segs = segs_raw if isinstance(segs_raw, list) else []
+        if segs:
+            payload = expand_segments_to_payload(segs, pixel_count, rgbw=rgbw)
+
+    if not payload:
+        # Truly nothing available (no frame, no segments) — graceful empty fallback.
+        connection.send_result(
+            msg["id"],
+            {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "rgbw": rgbw,
+                "count": 0,
+                "pixels": [],
+            },
+        )
+        return
+
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "schema_version": SCHEMA_VERSION,
+            "rgbw": rgbw,
+            "count": pixel_count,
+            "pixels": list(payload),
+        },
     )
 
 
@@ -1298,6 +1448,8 @@ _WS_HANDLERS = (
     ws_paint_start,
     ws_paint_frame,
     ws_paint_stop,
+    ws_paint_status,
+    ws_paint_baseline_frame,
     ws_thumb_capture_start,
     ws_thumb_capture_cancel,
     ws_register_lovelace_resource,

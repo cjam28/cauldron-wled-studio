@@ -9,7 +9,14 @@ import { throttle } from "../utils/throttle.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { fetchDeviceState } from "../api/wled-state.js";
 import { layoutList, type LayoutRecord } from "../api/layout.js";
-import { paintFrame, paintStart, paintStop } from "../api/paint.js";
+import {
+  fetchPaintBaselineFrame,
+  paintFrame,
+  paintStart,
+  paintStatus,
+  paintStop,
+} from "../api/paint.js";
+import type { PaintConnectionHealth } from "../api/paint.js";
 import {
   brushToPaintMode,
   defaultBrushSettings,
@@ -21,6 +28,13 @@ import { bufferToPreviewPixels } from "../utils/paint-buffer.js";
 import type { WledGeometryPreview } from "../components/geometry-preview.js";
 import "../components/paint-settings.js";
 import "../components/geometry-preview.js";
+
+/**
+ * SP-4: while a paint session is active, poll the backend paint_status on this
+ * cadence so an IDLE mid-paint disconnect (no new strokes → no paint_frame) is
+ * surfaced on the recovery banner. Polling stops the moment the session ends.
+ */
+const PAINT_HEALTH_POLL_MS = 2000;
 
 @safeCustomElement("wled-view-paint")
 export class WledViewPaint extends BasePoweredElement {
@@ -45,10 +59,28 @@ export class WledViewPaint extends BasePoweredElement {
   @state() private _layouts: LayoutRecord[] = [];
   @state() private _layoutId = "";
   @state() private _fixtureId = "";
+  /** SP-4: paint-session connection health; drives the recovery banner. */
+  @state() private _connectionHealthy = true;
+  @state() private _connectionReason = "";
+  /** SP-5: live pre-commit segment-count warning (chip shown near 80% of maxseg). */
+  @state() private _segWarn = false;
+  @state() private _segCount: number | null = null;
+  @state() private _maxSegments: number | null = null;
 
   private _buffer: Uint8Array | null = null;
   private _previewPixels: Uint8ClampedArray | null = null;
   private _touched = new Set<number>();
+  /**
+   * "Keep current look" baseline: the device's ACTUAL current per-LED frame
+   * (live_proxy's last good frame), stored as a flat RGB(W) buffer aligned to
+   * _pixelCount + _rgbw. Seeds the UNPAINTED LEDs of the canvas in preserve mode
+   * so the user paints over the real colors, not a gray placeholder. Null until
+   * fetched, or when the fetch came back empty (→ dim-placeholder fallback).
+   */
+  private _baselineFrame: Uint8Array | null = null;
+  /** SP-4: active-session health poll timer (idle-disconnect detection). */
+  private _healthPollTimer: ReturnType<typeof setInterval> | null = null;
+  private _healthPollInFlight = false;
   @query("wled-geometry-preview") private _internalPreview?: WledGeometryPreview;
   private _externalPreview?: WledGeometryPreview;
 
@@ -198,6 +230,7 @@ export class WledViewPaint extends BasePoweredElement {
   protected override async onPoweredDisconnect(): Promise<void> {
     this._flushColor.cancel();
     this._flushEffect.cancel();
+    this._stopHealthPoll();
     if (this._active && this.connection && this.controllerId) {
       try {
         await paintStop(this.connection, this.controllerId, false);
@@ -209,18 +242,53 @@ export class WledViewPaint extends BasePoweredElement {
     this._touched.clear();
   }
 
-  private async _ensureSession(): Promise<boolean> {
-    if (this._active || !this.connection || !this.controllerId) return this._active;
+  /** In-flight start, so a burst of pointermove strokes shares ONE paint_start. */
+  private _startPromise: Promise<boolean> | null = null;
+
+  private _ensureSession(): Promise<boolean> {
+    if (this._active || !this.connection || !this.controllerId) {
+      return Promise.resolve(this._active);
+    }
+    // pointermove fires paint-stroke events faster than the paint_start
+    // round-trip resolves; without this guard every early stroke issued its
+    // own paint_start (leaking transports/keepalives server-side too).
+    if (!this._startPromise) {
+      this._startPromise = this._startSession().finally(() => {
+        this._startPromise = null;
+      });
+    }
+    return this._startPromise;
+  }
+
+  private async _startSession(): Promise<boolean> {
+    const connection = this.connection;
+    if (!connection || !this.controllerId) return false;
     try {
-      const res = await paintStart(this.connection, this.controllerId);
+      // Preserve mode: capture the device's current look BEFORE paintStart puts
+      // the device into live paint. Fetching AFTER start would capture the
+      // live-paint state (wiping the current look out from under the strokes).
+      // The backend also freezes this baseline for the session as a backstop.
+      if (this._fill.mode === "preserve") {
+        await this._refreshBaselineFrame();
+      }
+      const res = await paintStart(connection, this.controllerId);
       this._active = true;
       this._touched.clear();
+      this._connectionHealthy = true;
+      this._connectionReason = "";
+      this._segWarn = false;
+      this._segCount = null;
+      this._maxSegments = null;
       this._warn = res.wifi_sleep_warning ?? "";
       if (res.pixel_count) this._pixelCount = res.pixel_count;
       if (typeof res.rgbw === "boolean") this._rgbw = res.rgbw;
       this._allocBuffer();
       this._previewEl()?.setStatus("live paint");
       this._status = "Live paint";
+      this._startHealthPoll();
+      // Baseline was captured BEFORE paintStart (above) and _allocBuffer() has
+      // already seeded the unpainted LEDs from it — do NOT re-fetch here, that
+      // would read the live-paint state and wipe the current look.
       return true;
     } catch (err) {
       this._status = formatHaError(err);
@@ -269,11 +337,25 @@ export class WledViewPaint extends BasePoweredElement {
   }
 
   private _brushRgb(): [number, number, number] {
+    const [r, g, b] = this._brushRgbw();
+    return [r, g, b];
+  }
+
+  /**
+   * Brush color scaled by brush brightness, including the W (white) channel.
+   *
+   * Mirrors the Python commit path (`_scale_col_by_bri`): all four channels are
+   * multiplied by `bri/255`. `_writeLed` consumes the W element on RGBW strips so
+   * the paint buffer (and thus the DDP frame + preview) preserves white. RGB
+   * strips ignore the 4th element.
+   */
+  private _brushRgbw(): [number, number, number, number] {
     const f = Math.max(0, Math.min(255, this._brush.bri)) / 255;
     return [
       Math.round(this._brush.col[0] * f),
       Math.round(this._brush.col[1] * f),
       Math.round(this._brush.col[2] * f),
+      Math.round((this._brush.col[3] ?? 0) * f),
     ];
   }
 
@@ -282,6 +364,7 @@ export class WledViewPaint extends BasePoweredElement {
     if (!this._active || !this.connection || !this.controllerId) return false;
     this._flushColor.cancel();
     this._flushEffect.cancel();
+    this._stopHealthPoll();
     try {
       await paintStop(this.connection, this.controllerId, false);
       this._status = "Live paint ended — layout segments restored";
@@ -301,18 +384,49 @@ export class WledViewPaint extends BasePoweredElement {
     return true;
   }
 
-  private _writeLed(led: number, rgb: [number, number, number]): void {
+  /**
+   * Write one LED into the paint buffer.
+   *
+   * `rgb` may carry an optional 4th element (W). On an RGBW strip the W channel
+   * is written through to the buffer (the brush supplies a scaled W; the fill
+   * path omits it so unpainted W stays 0). On an RGB strip no 4th byte exists,
+   * so any W is ignored.
+   */
+  private _writeLed(
+    led: number,
+    rgb: [number, number, number] | [number, number, number, number]
+  ): void {
     if (!this._buffer) return;
     const bpp = this._rgbw ? 4 : 3;
     const o = led * bpp;
     this._buffer[o] = rgb[0];
     this._buffer[o + 1] = rgb[1];
     this._buffer[o + 2] = rgb[2];
-    if (this._rgbw) this._buffer[o + 3] = 0;
+    if (this._rgbw) this._buffer[o + 3] = rgb[3] ?? 0;
   }
 
   private _applyFillToBuffer(): void {
     if (!this._buffer) return;
+    // Preserve ("Keep current look"): seed each UNPAINTED LED from the device's
+    // actual current frame so the canvas shows the real colors the user is
+    // painting over. Falls back to the dim placeholder when no baseline frame
+    // has been fetched (or it came back empty) — no regression vs. the old gray.
+    if (this._fill.mode === "preserve" && this._hasBaselineFrame()) {
+      const base = this._baselineFrame!;
+      const bpp = this._rgbw ? 4 : 3;
+      for (let i = 0; i < this._pixelCount; i++) {
+        if (this._touched.has(i)) continue;
+        const o = i * bpp;
+        const rgbw: [number, number, number, number] = [
+          base[o] ?? 0,
+          base[o + 1] ?? 0,
+          base[o + 2] ?? 0,
+          this._rgbw ? (base[o + 3] ?? 0) : 0,
+        ];
+        this._writeLed(i, rgbw);
+      }
+      return;
+    }
     const fillRgb: [number, number, number] =
       this._fill.mode === "off"
         ? [0, 0, 0]
@@ -323,6 +437,70 @@ export class WledViewPaint extends BasePoweredElement {
       if (this._touched.has(i)) continue;
       this._writeLed(i, fillRgb);
     }
+  }
+
+  /** True when a baseline ("current look") frame is cached and aligned. */
+  private _hasBaselineFrame(): boolean {
+    const bpp = this._rgbw ? 4 : 3;
+    return (
+      this._baselineFrame !== null &&
+      this._baselineFrame.length >= this._pixelCount * bpp
+    );
+  }
+
+  /**
+   * Fetch the device's current per-LED frame for preserve ("Keep current look")
+   * mode and seed the canvas's unpainted LEDs from it. No-op when not in
+   * preserve mode. On an empty/failed fetch the baseline is cleared so
+   * _applyFillToBuffer falls back to the dim placeholder (no regression).
+   * Painted (_touched) LEDs are never disturbed — _applyFillToBuffer skips them.
+   */
+  private async _refreshBaselineFrame(): Promise<void> {
+    if (this._fill.mode !== "preserve") return;
+    if (!this.connection || !this.controllerId) return;
+    try {
+      const frame = await fetchPaintBaselineFrame(
+        this.connection,
+        this.controllerId
+      );
+      // The fill mode may have changed while the fetch was in flight.
+      if (this._fill.mode !== "preserve") return;
+      if (frame.count > 0 && frame.pixels.length) {
+        const buf = Uint8Array.from(frame.pixels);
+        // Align the source bpp (frame.rgbw) to our buffer's bpp (_rgbw).
+        this._baselineFrame =
+          frame.rgbw === this._rgbw
+            ? buf
+            : this._realignBaseline(buf, frame.rgbw, frame.count);
+      } else {
+        this._baselineFrame = null;
+      }
+    } catch {
+      // Network/RPC failure → dim-placeholder fallback (no regression).
+      this._baselineFrame = null;
+    }
+    this._applyFillToBuffer();
+    this._syncPreviewPixels();
+  }
+
+  /** Re-pack a baseline frame from its source bpp into the canvas's bpp. */
+  private _realignBaseline(
+    src: Uint8Array,
+    srcRgbw: boolean,
+    count: number
+  ): Uint8Array {
+    const srcBpp = srcRgbw ? 4 : 3;
+    const dstBpp = this._rgbw ? 4 : 3;
+    const out = new Uint8Array(count * dstBpp);
+    for (let i = 0; i < count; i++) {
+      const s = i * srcBpp;
+      const d = i * dstBpp;
+      out[d] = src[s] ?? 0;
+      out[d + 1] = src[s + 1] ?? 0;
+      out[d + 2] = src[s + 2] ?? 0;
+      if (this._rgbw) out[d + 3] = srcRgbw ? (src[s + 3] ?? 0) : 0;
+    }
+    return out;
   }
 
   private _scheduleFlush(): void {
@@ -337,9 +515,10 @@ export class WledViewPaint extends BasePoweredElement {
     if (!this._buffer || !leds.length) return;
     const effectBrush = this._brushIsEffect();
     if (!effectBrush) {
-      const rgb = this._brushRgb();
+      // RGBW strips keep the scaled W channel; RGB strips need only [r,g,b].
+      const col = this._rgbw ? this._brushRgbw() : this._brushRgb();
       for (const idx of leds) {
-        this._writeLed(idx, rgb);
+        this._writeLed(idx, col);
         this._touched.add(idx);
       }
       this._syncPreviewPixels(leds);
@@ -365,17 +544,27 @@ export class WledViewPaint extends BasePoweredElement {
     }
     this._flushInFlight = true;
     try {
-      await paintFrame(this.connection, this.controllerId, this._buffer, {
-        rgbw: this._rgbw,
-        touched: [...this._touched],
-        brush: this._brush,
-        fill: this._fill,
-        effectsByName: this._effectsByName,
-      });
+      const health = await paintFrame(
+        this.connection,
+        this.controllerId,
+        this._buffer,
+        {
+          rgbw: this._rgbw,
+          touched: [...this._touched],
+          brush: this._brush,
+          fill: this._fill,
+          effectsByName: this._effectsByName,
+        }
+      );
+      this._applyPaintHealth(health);
       const modeLabel = this._brushIsEffect() ? "effect (device preview)" : "color";
       this._status = `Live paint · ${this._touched.size} LEDs · ${modeLabel} · fill: ${this._fill.mode}`;
     } catch (err) {
       this._status = formatHaError(err);
+      // SP-4: a flush failure may be the first sign of a lost connection — probe
+      // paint_status immediately so the recovery banner updates without waiting
+      // for the next poll tick.
+      void this._pollHealthNow();
     } finally {
       this._flushInFlight = false;
       if (this._flushQueued) {
@@ -383,6 +572,104 @@ export class WledViewPaint extends BasePoweredElement {
         void this._flushNow();
       }
     }
+  }
+
+  /** SP-4: surface a "paint connection lost — reconnecting" recovery banner. */
+  private _applyPaintHealth(health: PaintConnectionHealth): void {
+    this._connectionHealthy = health.connectionHealthy;
+    this._connectionReason = health.connectionHealthy
+      ? ""
+      : health.connectionReason || "Paint connection lost — reconnecting…";
+    // SP-5: live segment-count warning. Keep the last reported count so the chip
+    // shows e.g. "Using 26/32 segments" even between frames.
+    this._segWarn = health.segWarn;
+    if (health.segCount !== null) this._segCount = health.segCount;
+    if (health.maxSegments !== null) this._maxSegments = health.maxSegments;
+  }
+
+  /**
+   * SP-4: begin polling paint_status while a session is active so an IDLE
+   * mid-paint disconnect surfaces on the recovery banner WITHOUT requiring new
+   * strokes. Idempotent; cleaned up on disconnect via addUnsub.
+   */
+  private _startHealthPoll(): void {
+    if (this._healthPollTimer !== null) return;
+    this._healthPollTimer = setInterval(
+      () => void this._pollHealthNow(),
+      PAINT_HEALTH_POLL_MS
+    );
+    this.addUnsub(() => this._stopHealthPoll());
+  }
+
+  /** SP-4: stop the active-session health poll (session ended / element gone). */
+  private _stopHealthPoll(): void {
+    if (this._healthPollTimer !== null) {
+      clearInterval(this._healthPollTimer);
+      this._healthPollTimer = null;
+    }
+    this._healthPollInFlight = false;
+  }
+
+  /**
+   * SP-4: one paint_status probe. Feeds the result into _applyPaintHealth so the
+   * "connection lost — reconnecting" banner updates between strokes. A failed
+   * probe (the idle-disconnect signal) drives the banner unhealthy directly.
+   * Also invoked on flush failure for a faster signal.
+   */
+  private async _pollHealthNow(): Promise<void> {
+    if (!this._active || !this.connection || !this.controllerId) return;
+    if (this._healthPollInFlight) return;
+    this._healthPollInFlight = true;
+    try {
+      const status = await paintStatus(this.connection, this.controllerId);
+      // The session may have ended while the probe was in flight.
+      if (!this._active) return;
+      if (!status.active) {
+        // Backend dropped the session out from under us — treat as a lost
+        // connection so the banner shows even though no stroke is happening.
+        this._applyPaintHealth({
+          ...status,
+          connectionHealthy: false,
+          connectionReason:
+            status.connectionReason || "Paint connection lost — reconnecting…",
+        });
+        return;
+      }
+      this._applyPaintHealth(status);
+    } catch {
+      // An idle poll failure IS the disconnect signal: surface the banner.
+      // Preserve the last-known segment-count state (don't clobber the chip).
+      if (this._active) {
+        this._applyPaintHealth({
+          connectionHealthy: false,
+          connectionReason: "Paint connection lost — reconnecting…",
+          consecutiveSendFailures: 0,
+          segCount: this._segCount,
+          maxSegments: this._maxSegments,
+          segWarn: this._segWarn,
+        });
+      }
+    } finally {
+      this._healthPollInFlight = false;
+    }
+  }
+
+  /** SP-5: human-readable segment-budget warning, or "" when not warning. */
+  private _segWarnText(): string {
+    if (!this._segWarn) return "";
+    const max = this._maxSegments ?? "?";
+    const count = this._segCount ?? "?";
+    return `Using ${count}/${max} segments — simplify to avoid commit failure`;
+  }
+
+  /** Read-only view of the live paint connection health (test/host hook). */
+  get paintConnectionHealthy(): boolean {
+    return this._connectionHealthy;
+  }
+
+  /** SP-5 test/host hook: true when the segment-budget warning chip is shown. */
+  get paintSegmentWarn(): boolean {
+    return this._segWarn;
   }
 
   private _onBrushChange(ev: CustomEvent<PaintBrushSettings>): void {
@@ -400,15 +687,21 @@ export class WledViewPaint extends BasePoweredElement {
 
   private _onFillModeChange(mode: UnpaintedFillMode): void {
     this._fill = defaultFillSettings(mode);
+    // Leaving preserve mode drops the stale baseline so a later re-entry refetches.
+    if (mode !== "preserve") this._baselineFrame = null;
     this._applyFillToBuffer();
     this._syncPreviewPixels();
     if (this._active) void this._flushNow();
+    // Switching the Fill dropdown to "Keep current look" fetches the device's
+    // current frame and reseeds the canvas's unpainted LEDs from it.
+    if (mode === "preserve") void this._refreshBaselineFrame();
   }
 
   private async _commit(): Promise<void> {
     if (!this.connection || !this._active) return;
     this._flushColor.cancel();
     this._flushEffect.cancel();
+    this._stopHealthPoll();
     await this._flushNow();
     try {
       await paintStop(this.connection, this.controllerId, true);
@@ -427,6 +720,7 @@ export class WledViewPaint extends BasePoweredElement {
     if (!this.connection || !this._active) return;
     this._flushColor.cancel();
     this._flushEffect.cancel();
+    this._stopHealthPoll();
     try {
       await paintStop(this.connection, this.controllerId, false);
       this._status = "Live mode released";
@@ -455,6 +749,14 @@ export class WledViewPaint extends BasePoweredElement {
               </p>
             `}
         ${this._warn ? html`<p class="warn">${this._warn}</p>` : null}
+        ${this._active && !this._connectionHealthy
+          ? html`<p class="recovery" role="status">
+              ${this._connectionReason || "Paint connection lost — reconnecting…"}
+            </p>`
+          : null}
+        ${this._active && this._segWarn
+          ? html`<p class="seg-warn" role="status">${this._segWarnText()}</p>`
+          : null}
 
         ${!this.embedMode && this._layouts.length > 1
           ? html`
@@ -598,6 +900,24 @@ export class WledViewPaint extends BasePoweredElement {
       .warn-layout {
         color: var(--warning-color, #e6a700);
         margin: 0;
+      }
+      .recovery {
+        margin: 0;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--error-color, #db4437);
+        background: color-mix(in srgb, var(--error-color, #db4437) 12%, transparent);
+      }
+      .seg-warn {
+        margin: 0;
+        padding: 6px 10px;
+        border-radius: 999px;
+        align-self: flex-start;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--warning-color, #e6a700);
+        background: color-mix(in srgb, var(--warning-color, #e6a700) 16%, transparent);
       }
       .layout-pick {
         display: flex;

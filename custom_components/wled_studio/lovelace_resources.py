@@ -13,6 +13,12 @@ from .const import DOMAIN, STATIC_URL_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 
+# Only the card ENTRY chunk is registered as a Lovelace resource. After the
+# Phase 3 build split the card pulls its shared `wled-studio-core` chunk and any
+# lazy heavy-view chunks via relative imports at runtime — those siblings are
+# served from the same STATIC_URL_PREFIX dir (see __init__.py) and must NOT be
+# registered as separate resources. The ?hacstag query is applied to this entry
+# URL; the chunks ride along under cache_headers=False.
 CARD_FILENAME = "wled-studio-card.js"
 RESOURCE_PATH = f"{STATIC_URL_PREFIX}/{CARD_FILENAME}"
 

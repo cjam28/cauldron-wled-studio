@@ -10,6 +10,7 @@ import {
   clearSegmentLayoutSnapshot,
   getSegmentLayoutSnapshot,
   isMergeForEffectsActive,
+  isStudioMergedLayout,
   saveSegmentLayoutSnapshot,
   setMergeForEffectsActive,
 } from "../utils/effect-merge.js";
@@ -39,6 +40,15 @@ export class WledEffectMergeToggle extends BasePoweredElement {
     if (changed.has("controllerId")) {
       this._merged = isMergeForEffectsActive(this.controllerId);
     }
+    // Ground the checkbox in device truth: a Studio-stamped merged span means
+    // merge is on even if this browser holds no flag (merged elsewhere).
+    if (
+      (changed.has("segments") || changed.has("pixelCount")) &&
+      !this._busy &&
+      isStudioMergedLayout(this.segments, this.pixelCount)
+    ) {
+      this._merged = true;
+    }
   }
 
   protected override render() {
@@ -49,7 +59,7 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         : null;
 
     return html`
-      <label class="merge-row ${this._merged ? "on" : ""} ${this.compact ? "compact" : ""}">
+      <label class="merge-row ${this._merged ? "on" : ""}">
         <input
           type="checkbox"
           .checked=${this._merged}
@@ -76,7 +86,9 @@ export class WledEffectMergeToggle extends BasePoweredElement {
   }
 
   private async _onToggle(ev: Event): Promise<void> {
-    const checked = (ev.target as HTMLInputElement).checked;
+    // Capture the input now — ev.target is not reliable after the awaits below.
+    const input = ev.target as HTMLInputElement;
+    const checked = input.checked;
     if (!this.connection || !this.controllerId) return;
     this._busy = true;
     this._error = "";
@@ -99,15 +111,29 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         this._merged = true;
       } else {
         const saved = getSegmentLayoutSnapshot(this.controllerId);
-        if (!saved) {
-          throw new Error("No saved segment layout to restore");
+        if (saved) {
+          await applyState(
+            this.connection,
+            this.controllerId,
+            buildRestoreSegmentsState(saved),
+            { fullResponse: true }
+          );
+        } else {
+          // No snapshot in this browser. If the device layout is not a Studio
+          // merge, the flag is stale (fresh browser / cleared storage) and
+          // clearing it IS the un-merge — the segments were never touched.
+          // Only fail when the device really holds a merged span we cannot
+          // reconstruct.
+          const snap = await fetchDeviceState(this.connection, this.controllerId);
+          const segs = snap.segments ?? this.segments;
+          const leds = snap.info?.leds as { count?: number } | undefined;
+          const px = Number(leds?.count) || this.pixelCount;
+          if (isStudioMergedLayout(segs, px)) {
+            throw new Error(
+              "No saved segment layout to restore in this browser — the merge was applied elsewhere. Re-merge here first, or rebuild segments in the Layout tab."
+            );
+          }
         }
-        await applyState(
-          this.connection,
-          this.controllerId,
-          buildRestoreSegmentsState(saved),
-          { fullResponse: true }
-        );
         setMergeForEffectsActive(this.controllerId, false);
         clearSegmentLayoutSnapshot(this.controllerId);
         this._merged = false;
@@ -124,7 +150,7 @@ export class WledEffectMergeToggle extends BasePoweredElement {
       );
     } catch (err) {
       this._error = err instanceof Error ? err.message : String(err);
-      (ev.target as HTMLInputElement).checked = this._merged;
+      input.checked = this._merged;
     } finally {
       this._busy = false;
     }
@@ -148,12 +174,12 @@ export class WledEffectMergeToggle extends BasePoweredElement {
         border-color: var(--primary-color);
         background: color-mix(in srgb, var(--primary-color) 12%, transparent);
       }
-      .merge-row.compact {
+      :host([compact]) .merge-row {
         padding: 6px 10px;
         margin-bottom: 8px;
         align-items: center;
       }
-      .merge-row.compact .merge-label {
+      :host([compact]) .merge-row .merge-label {
         font-size: 0.8rem;
       }
       .merge-row input {

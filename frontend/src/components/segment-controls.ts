@@ -22,10 +22,12 @@ import {
   type WledSegment,
 } from "../api/wled-state.js";
 import { labelForSegment, toggleEditId } from "../utils/segment-edit.js";
+import { clampSliderByte } from "../utils/effect-presets-storage.js";
 import { formatHaError } from "../utils/ha-error.js";
 import { solidEffectId } from "../utils/effect-categories.js";
 import {
   isMergeForEffectsActive,
+  isMergeForEffectsExplicit,
   isWledLayoutMerged,
   mergedEffectTargetIds,
 } from "../utils/effect-merge.js";
@@ -271,9 +273,20 @@ export class WledSegmentControls extends BasePoweredElement {
       }
       await this._refreshMeta();
       await this._loadPresets();
-      this._mergeActive = isMergeForEffectsActive(this.controllerId);
       const pixelCount = this._pixelCount();
-      if (this._mergeActive && isWledLayoutMerged(this._segments, pixelCount)) {
+      // Merge is only "in effect" when the device layout actually reflects
+      // it — a bare flag (stale session, layout rebuilt elsewhere) must not
+      // hide the segment bar and collapse writes to segment 0 while the UI
+      // claims "combined segment".
+      this._mergeActive =
+        isMergeForEffectsActive(this.controllerId) &&
+        isWledLayoutMerged(this._segments, pixelCount);
+      // P1-1: reshape edit targets only on explicit opt-in, never from a
+      // bare flag (which must not mutate the selection on load).
+      if (
+        isMergeForEffectsExplicit(this.controllerId) &&
+        isWledLayoutMerged(this._segments, pixelCount)
+      ) {
         this._editIds = mergedEffectTargetIds(this._segments, true);
         this._segId = this._editIds[0] ?? 0;
       }
@@ -397,7 +410,12 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _onMergeChanged(): void {
-    this._mergeActive = isMergeForEffectsActive(this.controllerId);
+    // _load() recomputes _mergeActive against the fresh device layout; keep
+    // the interim value gated on the (stale) segments too so we never claim
+    // merge before the device confirms it.
+    this._mergeActive =
+      isMergeForEffectsActive(this.controllerId) &&
+      isWledLayoutMerged(this._segments, this._pixelCount());
     void this._load();
     this.dispatchEvent(
       new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })
@@ -544,7 +562,10 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _slider(key: keyof WledSegment, ev: Event): void {
-    const value = Number((ev.target as HTMLInputElement).value);
+    // EF-2: reject NaN/empty and clamp to the 0–255 range these sliders use
+    // (bri + sx/ix/c1/c2/c3, all max=255) instead of writing invalid values.
+    const value = clampSliderByte(Number((ev.target as HTMLInputElement).value));
+    if (value === null) return;
     this._patchSeg({ [key]: value } as Partial<WledSegment>);
   }
 
@@ -595,7 +616,6 @@ export class WledSegmentControls extends BasePoweredElement {
           ? html`
               <wled-effect-merge-toggle
                 ?compact=${this.compact}
-                class=${this.compact ? "compact-merge" : ""}
                 .connection=${this.connection}
                 .controllerId=${this.controllerId}
                 .segments=${this._segments}

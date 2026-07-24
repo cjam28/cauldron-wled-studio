@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 
 DEFAULT_MAX_SEGMENTS = 32
+# SP-5: fraction of max_segments at which the painter shows a live "running low
+# on segments" warning chip (pre-commit), instead of only hard-failing at commit.
+SEGMENT_WARN_FRACTION = 0.8
 FILL_OFF = "off"
 FILL_PRESERVE = "preserve"
 FILL_CUSTOM = "custom"
@@ -135,16 +138,6 @@ class _LedPaint:
     o3: bool = False
 
 
-def _scale_col_by_bri(col: list[int], bri: int, *, rgbw: bool) -> list[int]:
-    """Bake segment brightness into RGB(W) so commit matches DDP live preview."""
-    factor = max(0, min(255, int(bri))) / 255.0
-    out = [int(round((col[i] if i < len(col) else 0) * factor)) for i in range(3)]
-    if rgbw:
-        w = int(round((col[3] if len(col) > 3 else 0) * factor))
-        return [*out, w]
-    return out
-
-
 def _col_from_settings(settings: dict[str, Any], *, rgbw: bool) -> list[int]:
     col_raw = settings.get("col")
     if isinstance(col_raw, list) and len(col_raw) >= 3:
@@ -221,12 +214,20 @@ def _find_segment_for_led(
     return None
 
 
-def _consolidate_runs(
+def _build_runs(
     assignments: list[_LedPaint | None],
     *,
     max_segments: int,
 ) -> list[tuple[int, int, _LedPaint]]:
-    """Merge adjacent LEDs with identical paint into (start, stop, state) runs."""
+    """Merge adjacent LEDs with identical paint into (start, stop, state) runs.
+
+    Shared run-consolidation core used by both the throwing committer
+    (:func:`_consolidate_runs`) and the non-throwing estimator
+    (:func:`estimate_segment_runs` / :func:`count_paint_segments`). When the raw
+    run count exceeds ``max_segments`` it applies the same fx/on best-effort
+    merge the committer uses, so the returned list reflects what would actually
+    be sent to the device. Never raises.
+    """
     runs: list[tuple[int, int, _LedPaint]] = []
     n = len(assignments)
     i = 0
@@ -251,6 +252,16 @@ def _consolidate_runs(
             merged[-1] = (p_start, stop, state)
         else:
             merged.append((start, stop, state))
+    return merged
+
+
+def _consolidate_runs(
+    assignments: list[_LedPaint | None],
+    *,
+    max_segments: int,
+) -> list[tuple[int, int, _LedPaint]]:
+    """Commit-time run consolidation: build runs and hard-fail past ``max_segments``."""
+    merged = _build_runs(assignments, max_segments=max_segments)
     if len(merged) > max_segments:
         raise ValueError(
             f"Paint commit needs {len(merged)} segments but device allows "
@@ -346,6 +357,136 @@ def build_paint_commit_state(
     if global_bri is not None:
         patch["bri"] = max(0, min(255, int(global_bri)))
     return patch
+
+
+def estimate_segment_runs(
+    *,
+    payload: bytes,
+    rgbw: bool,
+    live_segments: list[dict[str, Any]],
+    pixel_count: int,
+    effects_by_name: dict[str, int],
+    touched: set[int],
+    baseline: bytes | None = None,
+    paint_mode: str = "color",
+    touched_fx: dict[int, int] | None = None,
+    max_segments: int = DEFAULT_MAX_SEGMENTS,
+    brush: dict[str, Any] | None = None,
+    fill: dict[str, Any] | None = None,
+) -> int:
+    """Estimate how many segment runs the current paint buffer would commit to.
+
+    Non-throwing companion to :func:`build_paint_commit_state`: reuses the exact
+    same per-LED assignment + run-consolidation logic so the count matches what
+    a real commit would produce, but never raises on overflow. Returns 0 for an
+    empty/invalid buffer or when nothing is paintable. Used for the live
+    (pre-commit) "segments running low" warning (SP-5).
+    """
+    if not payload or pixel_count <= 0:
+        return 0
+    bpp = 4 if rgbw else 3
+    if len(payload) < pixel_count * bpp:
+        return 0
+
+    solid_fx = solid_effect_id(effects_by_name)
+    segments = live_segments if live_segments else [{"id": 0, "start": 0, "stop": pixel_count}]
+    touched = set(touched)
+    brush = dict(brush or {})
+    fill = dict(fill or {})
+    fill_mode = str(fill.get("mode") or FILL_OFF)
+
+    # Mirror the preserve fast-path in build_paint_commit_state exactly: that path
+    # (``_build_color_commit_preserve_i``) emits one per-LED ``i`` patch per touched
+    # segment, but SKIPS any segment whose ``i`` array comes back empty
+    # (paint_commit.py:513). Re-derive the array via the same helper and apply the
+    # same empty-skip so the estimate can never over-count vs. the real commit,
+    # then fold in the same single-segment synthetic fallback.
+    if fill_mode == FILL_PRESERVE and not brush and paint_mode == "color" and not touched_fx:
+        count = 0
+        for raw in segments:
+            if not isinstance(raw, dict):
+                continue
+            start, stop = _segment_led_range(raw, pixel_count)
+            if stop <= start:
+                continue
+            if not any(start <= led < stop for led in touched):
+                continue
+            i_arr = build_segment_individual_i(
+                start,
+                stop,
+                payload=payload,
+                rgbw=rgbw,
+                baseline=baseline,
+                touched=touched,
+            )
+            if not i_arr:
+                continue
+            count += 1
+        # Synthetic seg-0 fallback: the committer emits exactly one patch when no
+        # real segment matched but something is touched.
+        if not count and touched:
+            return 1
+        return count
+
+    assignments = _build_assignments(
+        payload=payload,
+        rgbw=rgbw,
+        segments=segments,
+        pixel_count=pixel_count,
+        touched=touched,
+        baseline=baseline,
+        solid_fx=solid_fx,
+        brush=brush,
+        fill=fill,
+        fill_mode=fill_mode,
+        touched_fx=touched_fx or {},
+        paint_mode=paint_mode,
+    )
+    return len(_build_runs(assignments, max_segments=max_segments))
+
+
+def count_paint_segments(
+    payload: bytes,
+    *,
+    rgbw: bool,
+    live_segments: list[dict[str, Any]],
+    pixel_count: int,
+    effects_by_name: dict[str, int],
+    touched: set[int],
+    baseline: bytes | None = None,
+    paint_mode: str = "color",
+    touched_fx: dict[int, int] | None = None,
+    max_segments: int = DEFAULT_MAX_SEGMENTS,
+    brush: dict[str, Any] | None = None,
+    fill: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pre-commit segment-count snapshot for the live warning chip (SP-5).
+
+    Returns ``{seg_count, max_segments, seg_warn}`` where ``seg_warn`` is True
+    once the estimated run count reaches :data:`SEGMENT_WARN_FRACTION` of
+    ``max_segments``. Additive-only: callers merge this into the paint_frame WS
+    result; never raises (commit-time overflow is still enforced separately).
+    """
+    seg_count = estimate_segment_runs(
+        payload=payload,
+        rgbw=rgbw,
+        live_segments=live_segments,
+        pixel_count=pixel_count,
+        effects_by_name=effects_by_name,
+        touched=touched,
+        baseline=baseline,
+        paint_mode=paint_mode,
+        touched_fx=touched_fx,
+        max_segments=max_segments,
+        brush=brush,
+        fill=fill,
+    )
+    warn_at = max(1, int(SEGMENT_WARN_FRACTION * max_segments))
+    return {
+        "seg_count": seg_count,
+        "max_segments": int(max_segments),
+        "seg_warn": seg_count >= warn_at,
+    }
 
 
 def _build_color_commit_preserve_i(
@@ -466,9 +607,11 @@ def _brush_assignment(
         settings["fx"] = solid_fx
     if paint_mode == "effect":
         return _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw)
+    # The payload color already carries brush brightness — the frontend bakes
+    # bri/255 into the paint buffer (`_brushRgbw`) so the DDP live preview is
+    # WYSIWYG. Use it verbatim; scaling by brush bri again would commit
+    # col x (bri/255)^2, darker than what the user painted.
     col = _read_led_color(payload, rgbw=rgbw, led=led)
-    bri = int(settings.get("bri") if settings.get("bri") is not None else 255)
-    col = _scale_col_by_bri(col, bri, rgbw=rgbw)
     painted = _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw, col_override=col)
     return _LedPaint(
         fx=painted.fx,
@@ -487,7 +630,7 @@ def _brush_assignment(
     )
 
 
-def _build_run_commit(
+def _build_assignments(
     *,
     payload: bytes,
     rgbw: bool,
@@ -496,13 +639,13 @@ def _build_run_commit(
     touched: set[int],
     baseline: bytes | None,
     solid_fx: int,
-    max_segments: int,
     brush: dict[str, Any],
     fill: dict[str, Any],
     fill_mode: str,
     touched_fx: dict[int, int],
     paint_mode: str,
-) -> dict[str, Any]:
+) -> list[_LedPaint | None]:
+    """Per-LED paint assignment array shared by the committer + segment estimator."""
     seg_snapshot = copy.deepcopy(segments)
     assignments: list[_LedPaint | None] = [None] * pixel_count
 
@@ -528,6 +671,39 @@ def _build_run_commit(
                 rgbw=rgbw,
                 solid_fx=solid_fx,
             )
+    return assignments
+
+
+def _build_run_commit(
+    *,
+    payload: bytes,
+    rgbw: bool,
+    segments: list[dict[str, Any]],
+    pixel_count: int,
+    touched: set[int],
+    baseline: bytes | None,
+    solid_fx: int,
+    max_segments: int,
+    brush: dict[str, Any],
+    fill: dict[str, Any],
+    fill_mode: str,
+    touched_fx: dict[int, int],
+    paint_mode: str,
+) -> dict[str, Any]:
+    assignments = _build_assignments(
+        payload=payload,
+        rgbw=rgbw,
+        segments=segments,
+        pixel_count=pixel_count,
+        touched=touched,
+        baseline=baseline,
+        solid_fx=solid_fx,
+        brush=brush,
+        fill=fill,
+        fill_mode=fill_mode,
+        touched_fx=touched_fx,
+        paint_mode=paint_mode,
+    )
 
     runs = _consolidate_runs(assignments, max_segments=max_segments)
     seg_patches = [
