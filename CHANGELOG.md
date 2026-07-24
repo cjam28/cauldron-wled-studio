@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.2
 
 ### Fixed
 - **"No saved segment layout to restore" on un-merge.** The merge-for-effects flag defaulted to ON for any browser that had never toggled it, so the toggle rendered checked with no layout snapshot behind it — unchecking then errored even though the device still had its real segments. The flag now defaults to OFF (presence in storage ⟺ explicit opt-in), unchecking with a stale flag on an un-merged device is a clean no-op, and the error only appears when the device genuinely holds a Studio-merged span that this browser cannot reconstruct (clearer message included). The merged span is recognized by its `Merged (effects)` name stamp, so naturally single-segment strips are never mistaken for merged ones.
