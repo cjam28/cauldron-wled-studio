@@ -20,7 +20,7 @@ Repository is **public**: `https://github.com/cjam28/cauldron-wled-studio`
 ### 3. Home Assistant
 
 1. **Settings → Devices & services → Add integration → WLED Studio**
-2. Pick your existing WLED device (e.g. Cloud @ `192.168.20.71`).
+2. Pick your existing WLED device (e.g. Cloud @ `192.168.1.50`).
 3. Lovelace resource is added/updated automatically (`/wled_studio_static/wled-studio-card.js?hacstag=…`).
 4. Add the card: `type: custom:wled-studio-card`, `controller: Cloud`, etc.
 
