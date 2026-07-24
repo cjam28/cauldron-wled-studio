@@ -1,4 +1,4 @@
-import{b as t,i as s,_ as e,n as i,r as a}from"./wled-studio-core.js";import{B as r,g as o,b as d,v as n,t as l}from"./preview-bundle.js";let h=class extends r{constructor(){super(...arguments),this.controllerId="",this._minutes=15,this._status="",this._fading=!1,this._fadeProgress=0}async _sleepFade(){if(this.connection&&this.controllerId&&!this._fading){this._status="Starting sleep fade…",this._fading=!0,this._fadeProgress=0;try{const t=await o(this.connection,this.controllerId),s=t.state?.bri??t.segments?.[0]?.bri??128,e=Math.max(4,Math.min(30,Math.floor(2*this._minutes))),i=60*this._minutes*1e3/e;for(let t=0;t<=e;t++){const a=Math.round(s*(1-t/e));await d(this.connection,this.controllerId,{bri:a,on:t<e,tt:Math.min(25,Math.ceil(i/100))}),this._fadeProgress=Math.round(t/e*100),this._status=`Sleep fade ${this._fadeProgress}% — ${this._minutes} min total`,t<e&&await new Promise(t=>setTimeout(t,i))}this._fadeProgress=100,this._status=`Sleep fade complete (${this._minutes} min)`}catch(t){this._status=t instanceof Error?t.message:String(t)}finally{this._fading=!1}}}render(){return t`
+import{b as t,i as s,_ as e,n as i,r as a}from"./wled-studio-core.js";import{B as r,g as o,b as n,v as d,t as l}from"./preview-bundle.js";let h=class extends r{constructor(){super(...arguments),this.controllerId="",this._minutes=15,this._status="",this._fading=!1,this._fadeProgress=0}async _sleepFade(){if(this.connection&&this.controllerId&&!this._fading){this._status="Starting sleep fade…",this._fading=!0,this._fadeProgress=0;try{const t=await o(this.connection,this.controllerId),s=t.state?.bri??t.segments?.[0]?.bri??128,e=Math.max(4,Math.min(30,Math.floor(2*this._minutes))),i=60*this._minutes*1e3/e;for(let t=0;t<=e;t++){const a=Math.round(s*(1-t/e));await n(this.connection,this.controllerId,{bri:a,on:t<e,tt:Math.min(25,Math.ceil(i/100))}),this._fadeProgress=Math.round(t/e*100),this._status=`Sleep fade ${this._fadeProgress}% — ${this._minutes} min total`,t<e&&await new Promise(t=>setTimeout(t,i))}this._fadeProgress=100,this._status=`Sleep fade complete (${this._minutes} min)`}catch(t){this._status=t instanceof Error?t.message:String(t)}finally{this._fading=!1}}}render(){return t`
       <section class="schedules">
         <h2>Schedules</h2>
         <p class="lead">
@@ -15,7 +15,7 @@ import{b as t,i as s,_ as e,n as i,r as a}from"./wled-studio-core.js";import{B a
               max="120"
               ?disabled=${this._fading}
               .value=${String(this._minutes)}
-              @change=${t=>{this._minutes=parseInt(t.target.value,10)}}
+              @change=${t=>{const s=parseInt(t.target.value,10);this._minutes=Number.isFinite(s)?Math.min(120,Math.max(1,s)):this._minutes,t.target.value=String(this._minutes)}}
             />
           </label>
           <button
@@ -45,7 +45,7 @@ import{b as t,i as s,_ as e,n as i,r as a}from"./wled-studio-core.js";import{B a
           <code>wled_studio.notify</code> for doorbell flashes today.
         </p>
       </section>
-    `}static{this.styles=[...n,s`
+    `}static{this.styles=[...d,s`
       .schedules h2 {
         margin: 0 0 8px;
       }

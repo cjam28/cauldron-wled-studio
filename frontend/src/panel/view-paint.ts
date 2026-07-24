@@ -242,8 +242,27 @@ export class WledViewPaint extends BasePoweredElement {
     this._touched.clear();
   }
 
-  private async _ensureSession(): Promise<boolean> {
-    if (this._active || !this.connection || !this.controllerId) return this._active;
+  /** In-flight start, so a burst of pointermove strokes shares ONE paint_start. */
+  private _startPromise: Promise<boolean> | null = null;
+
+  private _ensureSession(): Promise<boolean> {
+    if (this._active || !this.connection || !this.controllerId) {
+      return Promise.resolve(this._active);
+    }
+    // pointermove fires paint-stroke events faster than the paint_start
+    // round-trip resolves; without this guard every early stroke issued its
+    // own paint_start (leaking transports/keepalives server-side too).
+    if (!this._startPromise) {
+      this._startPromise = this._startSession().finally(() => {
+        this._startPromise = null;
+      });
+    }
+    return this._startPromise;
+  }
+
+  private async _startSession(): Promise<boolean> {
+    const connection = this.connection;
+    if (!connection || !this.controllerId) return false;
     try {
       // Preserve mode: capture the device's current look BEFORE paintStart puts
       // the device into live paint. Fetching AFTER start would capture the
@@ -252,7 +271,7 @@ export class WledViewPaint extends BasePoweredElement {
       if (this._fill.mode === "preserve") {
         await this._refreshBaselineFrame();
       }
-      const res = await paintStart(this.connection, this.controllerId);
+      const res = await paintStart(connection, this.controllerId);
       this._active = true;
       this._touched.clear();
       this._connectionHealthy = true;

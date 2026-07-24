@@ -61,3 +61,42 @@ if (typeof HTMLElement !== "undefined" && !HTMLElement.prototype.attachInternals
     return internals;
   };
 }
+
+/**
+ * Node ≥22 ships an experimental global `localStorage` that is `undefined`
+ * unless the process runs with `--localstorage-file`. That own-property shadows
+ * the happy-dom Storage vitest would otherwise expose, so every test touching
+ * localStorage crashes with "Cannot read properties of undefined". Install an
+ * in-memory Storage ONLY when the global is missing/undefined — real browsers
+ * and fixed Node versions keep their native implementation.
+ */
+const localStorageBroken = (() => {
+  try {
+    return typeof localStorage === "undefined" || localStorage == null;
+  } catch {
+    return true;
+  }
+})();
+if (localStorageBroken) {
+  const data = new Map<string, string>();
+  const storage: Storage = {
+    get length(): number {
+      return data.size;
+    },
+    clear: (): void => data.clear(),
+    getItem: (key: string): string | null =>
+      data.has(key) ? (data.get(key) as string) : null,
+    key: (index: number): string | null => [...data.keys()][index] ?? null,
+    removeItem: (key: string): void => {
+      data.delete(key);
+    },
+    setItem: (key: string, value: string): void => {
+      data.set(key, String(value));
+    },
+  };
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storage,
+    configurable: true,
+    writable: true,
+  });
+}

@@ -123,10 +123,16 @@ export class WledViewEffects extends BasePoweredElement {
         }
       }
       const pixelCount = this._pixelCount();
-      this._mergeActive = isMergeForEffectsActive(this.controllerId);
+      const mergeFlagOn = isMergeForEffectsActive(this.controllerId);
       const wledMerged = isWledLayoutMerged(this._segments, pixelCount);
+      // Merge is only "in effect" when the device layout actually reflects
+      // it. The bare flag must never collapse edit targets to segment 0 —
+      // that silently writes to a fraction of the strip while the UI claims
+      // whole-strip. Flag-on-but-unmerged is the needs-apply prompt state,
+      // during which effects keep targeting the real per-segment selection.
+      this._mergeActive = mergeFlagOn && wledMerged;
       this._needsMergeApply =
-        this._mergeActive && this._segments.length > 1 && !wledMerged;
+        mergeFlagOn && this._segments.length > 1 && !wledMerged;
       // P1-1: only reshape edit targets when merge was EXPLICITLY enabled for
       // this controller. The default-true active flag must not silently mutate
       // the user's segment selection on load.
@@ -240,7 +246,12 @@ export class WledViewEffects extends BasePoweredElement {
   }
 
   private _onMergeChanged(): void {
-    this._mergeActive = isMergeForEffectsActive(this.controllerId);
+    // _load() recomputes _mergeActive against the fresh device layout; keep
+    // the interim value gated on the (stale) segments too so we never claim
+    // merge before the device confirms it.
+    this._mergeActive =
+      isMergeForEffectsActive(this.controllerId) &&
+      isWledLayoutMerged(this._segments, this._pixelCount());
     void this._load();
     this._emitTargetsChanged();
   }

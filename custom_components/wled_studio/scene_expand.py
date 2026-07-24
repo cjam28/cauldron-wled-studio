@@ -19,7 +19,14 @@ def expand_scene_state(
     if not isinstance(scene_segs, list) or not scene_segs:
         return out
 
-    template = dict(scene_segs[0]) if isinstance(scene_segs[0], dict) else {}
+    # A captured scene carries one entry per segment — replay each segment's
+    # OWN look. The first entry doubles as the broadcast template for target
+    # ids the scene has no entry for (starter scenes ship a single segment).
+    default_template = dict(scene_segs[0]) if isinstance(scene_segs[0], dict) else {}
+    scene_by_id: dict[int, dict[str, Any]] = {}
+    for raw in scene_segs:
+        if isinstance(raw, dict) and "id" in raw:
+            scene_by_id[int(raw["id"])] = raw
     live_by_id: dict[int, dict[str, Any]] = {}
     for raw in live_segments:
         if isinstance(raw, dict) and "id" in raw:
@@ -35,6 +42,7 @@ def expand_scene_state(
 
     new_segs: list[dict[str, Any]] = []
     for sid in ids:
+        template = dict(scene_by_id.get(sid, default_template))
         base = dict(live_by_id.get(sid, {"id": sid}))
         # Live layout first, then scene template overwrites fx/col/bri (not start/stop).
         merged = {**base, **template, "id": sid}

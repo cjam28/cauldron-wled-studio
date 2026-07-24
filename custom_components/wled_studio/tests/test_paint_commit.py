@@ -94,7 +94,14 @@ def test_custom_fill_applies_effect() -> None:
     assert 7 in fx_vals
 
 
-def test_color_commit_bakes_bri_into_rgb() -> None:
+def test_color_commit_uses_payload_color_verbatim() -> None:
+    """Commit must NOT scale the payload color by brush brightness again.
+
+    The frontend bakes brush bri into the paint buffer (`_brushRgbw`) so the
+    DDP live preview is WYSIWYG — the payload color IS the final display
+    value. Scaling here a second time committed `col x (bri/255)^2`, visibly
+    darker than the live preview for any brush brightness below 255.
+    """
     from wled_studio.paint_commit import _brush_assignment
 
     payload = bytes([200, 100, 50, 0] * 5)
@@ -108,9 +115,9 @@ def test_color_commit_bakes_bri_into_rgb() -> None:
         paint_mode="color",
     )
     assert paint.bri == 255
-    assert paint.col[0] == 100
-    assert paint.col[1] == 50
-    assert paint.col[2] == 25
+    assert paint.col[0] == 200
+    assert paint.col[1] == 100
+    assert paint.col[2] == 50
 
 
 def test_effect_brush_uses_brush_color_not_ddp_pixel() -> None:

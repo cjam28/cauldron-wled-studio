@@ -138,16 +138,6 @@ class _LedPaint:
     o3: bool = False
 
 
-def _scale_col_by_bri(col: list[int], bri: int, *, rgbw: bool) -> list[int]:
-    """Bake segment brightness into RGB(W) so commit matches DDP live preview."""
-    factor = max(0, min(255, int(bri))) / 255.0
-    out = [int(round((col[i] if i < len(col) else 0) * factor)) for i in range(3)]
-    if rgbw:
-        w = int(round((col[3] if len(col) > 3 else 0) * factor))
-        return [*out, w]
-    return out
-
-
 def _col_from_settings(settings: dict[str, Any], *, rgbw: bool) -> list[int]:
     col_raw = settings.get("col")
     if isinstance(col_raw, list) and len(col_raw) >= 3:
@@ -617,9 +607,11 @@ def _brush_assignment(
         settings["fx"] = solid_fx
     if paint_mode == "effect":
         return _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw)
+    # The payload color already carries brush brightness — the frontend bakes
+    # bri/255 into the paint buffer (`_brushRgbw`) so the DDP live preview is
+    # WYSIWYG. Use it verbatim; scaling by brush bri again would commit
+    # col x (bri/255)^2, darker than what the user painted.
     col = _read_led_color(payload, rgbw=rgbw, led=led)
-    bri = int(settings.get("bri") if settings.get("bri") is not None else 255)
-    col = _scale_col_by_bri(col, bri, rgbw=rgbw)
     painted = _paint_from_settings(settings, solid_fx=solid_fx, rgbw=rgbw, col_override=col)
     return _LedPaint(
         fx=painted.fx,

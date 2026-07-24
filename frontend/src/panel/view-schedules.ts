@@ -69,10 +69,13 @@ export class WledViewSchedules extends BasePoweredElement {
               ?disabled=${this._fading}
               .value=${String(this._minutes)}
               @change=${(e: Event) => {
-                this._minutes = parseInt(
-                  (e.target as HTMLInputElement).value,
-                  10
-                );
+                const v = parseInt((e.target as HTMLInputElement).value, 10);
+                // Clamp to the input's min/max; an empty/invalid field would
+                // otherwise make the fade loop a silent no-op (NaN steps).
+                this._minutes = Number.isFinite(v)
+                  ? Math.min(120, Math.max(1, v))
+                  : this._minutes;
+                (e.target as HTMLInputElement).value = String(this._minutes);
               }}
             />
           </label>

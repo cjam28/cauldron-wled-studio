@@ -273,10 +273,16 @@ export class WledSegmentControls extends BasePoweredElement {
       }
       await this._refreshMeta();
       await this._loadPresets();
-      this._mergeActive = isMergeForEffectsActive(this.controllerId);
       const pixelCount = this._pixelCount();
-      // P1-1: reshape edit targets only on explicit opt-in, never from the
-      // default-true active flag (which must not mutate the selection on load).
+      // Merge is only "in effect" when the device layout actually reflects
+      // it — a bare flag (stale session, layout rebuilt elsewhere) must not
+      // hide the segment bar and collapse writes to segment 0 while the UI
+      // claims "combined segment".
+      this._mergeActive =
+        isMergeForEffectsActive(this.controllerId) &&
+        isWledLayoutMerged(this._segments, pixelCount);
+      // P1-1: reshape edit targets only on explicit opt-in, never from a
+      // bare flag (which must not mutate the selection on load).
       if (
         isMergeForEffectsExplicit(this.controllerId) &&
         isWledLayoutMerged(this._segments, pixelCount)
@@ -404,7 +410,12 @@ export class WledSegmentControls extends BasePoweredElement {
   }
 
   private _onMergeChanged(): void {
-    this._mergeActive = isMergeForEffectsActive(this.controllerId);
+    // _load() recomputes _mergeActive against the fresh device layout; keep
+    // the interim value gated on the (stale) segments too so we never claim
+    // merge before the device confirms it.
+    this._mergeActive =
+      isMergeForEffectsActive(this.controllerId) &&
+      isWledLayoutMerged(this._segments, this._pixelCount());
     void this._load();
     this.dispatchEvent(
       new CustomEvent("wled-preview-refresh", { bubbles: true, composed: true })

@@ -53,6 +53,7 @@ class PaintSession:
         self._transport: asyncio.DatagramTransport | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._commit_lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()
         self._effect_preview_task: asyncio.Task[None] | None = None
         self._active = False
         self._coordinator: WledStudioCoordinator | None = None
@@ -156,27 +157,33 @@ class PaintSession:
     async def start(self, coordinator: WledStudioCoordinator | None = None) -> None:
         if self._active:
             return
-        self._coordinator = coordinator
-        await self._client.get_state(refresh=True)
-        await self._capture_baseline(coordinator)
-        loop = asyncio.get_running_loop()
-        self._transport, _ = await loop.create_datagram_endpoint(
-            asyncio.DatagramProtocol,
-            local_addr=("0.0.0.0", 0),
-            family=2,  # AF_INET
-        )
-        self._active = True
-        self._touched.clear()
-        self._touched_fx.clear()
-        self._paint_mode = "color"
-        self._brush = {}
-        self._fill = {"mode": "off"}
-        self._ddp_live = True
-        self._consecutive_send_failures = 0
-        self._last_failure_reason = None
-        self._last_success_ts = time.monotonic()
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        await self._client.apply_state({"live": True})
+        # ws handlers run as independent tasks; overlapping paint_start /
+        # paint_frame calls would otherwise each pass the _active check during
+        # the awaits below and leak UDP transports + duplicate keepalive tasks.
+        async with self._start_lock:
+            if self._active:
+                return
+            self._coordinator = coordinator
+            await self._client.get_state(refresh=True)
+            await self._capture_baseline(coordinator)
+            loop = asyncio.get_running_loop()
+            self._transport, _ = await loop.create_datagram_endpoint(
+                asyncio.DatagramProtocol,
+                local_addr=("0.0.0.0", 0),
+                family=2,  # AF_INET
+            )
+            self._active = True
+            self._touched.clear()
+            self._touched_fx.clear()
+            self._paint_mode = "color"
+            self._brush = {}
+            self._fill = {"mode": "off"}
+            self._ddp_live = True
+            self._consecutive_send_failures = 0
+            self._last_failure_reason = None
+            self._last_success_ts = time.monotonic()
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+            await self._client.apply_state({"live": True})
 
     async def stop(self, *, commit: bool = False) -> None:
         was_active = self._active

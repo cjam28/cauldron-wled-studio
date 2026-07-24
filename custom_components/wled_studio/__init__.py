@@ -36,7 +36,15 @@ PLATFORMS: list[Platform] = [Platform.SCENE]
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Register static JS bundle and sidebar panel (idempotent)."""
+    """Register static JS bundle and sidebar panel (idempotent per version)."""
+    version = INTEGRATION_VERSION
+    prev_version = hass.data.get(f"{DOMAIN}_frontend_version")
+    if str(prev_version or "") != version:
+        # Version changed on disk (HACS update + reload without HA restart):
+        # drop the registered flag so panel/resource URLs pick up the new
+        # ?hacstag cache-bust. This must run BEFORE the early-return guard —
+        # it used to sit after it and could never fire.
+        hass.data.pop(f"{DOMAIN}_frontend_registered", None)
     if hass.data.get(f"{DOMAIN}_frontend_registered"):
         return
 
@@ -52,11 +60,6 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             www_dir,
         )
 
-    version = INTEGRATION_VERSION
-    prev_version = hass.data.get(f"{DOMAIN}_frontend_version")
-    if str(prev_version or "") != version:
-        hass.data.pop(f"{DOMAIN}_frontend_registered", None)
-
     # Serve the WHOLE www/ dir (not just the entry files). After the Phase 3
     # build split the bundle is many files: the entry chunks plus the shared
     # `wled-studio-core` chunk and the lazily-imported heavy-view chunks
@@ -64,15 +67,20 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     # chunks by relative URL, so all of them must be reachable under the same
     # prefix. cache_headers=False keeps every chunk revalidated; the entry
     # resource URLs additionally carry ?hacstag for an explicit cache-bust.
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                STATIC_URL_PREFIX,
-                str(www_dir),
-                cache_headers=False,
-            )
-        ]
-    )
+    # The static path maps a fixed URL prefix to the on-disk dir; register it
+    # once per HA process (re-registering the same route raises). Version
+    # changes only need fresh ?hacstag URLs on the panel/resources below.
+    if not hass.data.get(f"{DOMAIN}_static_path_registered"):
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    STATIC_URL_PREFIX,
+                    str(www_dir),
+                    cache_headers=False,
+                )
+            ]
+        )
+        hass.data[f"{DOMAIN}_static_path_registered"] = True
 
     card_url = card_resource_url(version)
     tag = resource_hacstag(version)
@@ -95,6 +103,8 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             }
         },
         require_admin=True,
+        # A version-change re-run replaces the existing panel (new ?hacstag).
+        update=True,
     )
 
     # Do not use add_extra_js_url — loading the same card bundle twice causes

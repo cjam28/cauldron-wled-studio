@@ -627,7 +627,10 @@ async def ws_layout_upload_bg(
         connection.send_error(msg["id"], "invalid_format", "Invalid image data")
         return
     try:
-        background_url = save_layout_background(
+        # Disk write runs in the executor — an 8 MiB floorplan must not
+        # block the event loop.
+        background_url = await hass.async_add_executor_job(
+            save_layout_background,
             hass,
             msg["controller_id"],
             msg["layout_id"],
