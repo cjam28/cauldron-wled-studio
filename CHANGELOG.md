@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.3
+
+### Fixed
+- **Flashing "throttled" hint no longer shifts page content.** The live-strip status was rendered directly from each frame's status, which flaps live/throttled at frame rate for coalesced viewers — the hint popped in and out, bouncing everything below it. The hint is now sticky (stays up ~4 s past the last coalesced frame) and lives in a fixed-height slot, so nothing below the strip moves. The strip canvas overlay also no longer dims/strobes for "throttled" frames (they are painted fresh; the overlay is reserved for genuine non-painting states).
+- Build stamp brought back in sync with `manifest.json` (v0.12.2 shipped with a stale `WLED_STUDIO_BUILD`).
+
 ## 0.12.2
 
 ### Fixed

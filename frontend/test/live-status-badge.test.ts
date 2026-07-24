@@ -153,21 +153,31 @@ describe("<wled-studio-live-preview> status badge", () => {
     expect(badge?.textContent?.trim()).toBe("reconnecting");
   });
 
-  it("clears the hint when a subsequent fresh frame arrives", async () => {
-    pushFrame!(makeFrame({ status: "drop", dropped: 1 }));
-    await el.updateComplete;
-    // Drop shows the subtle hint, never the alarming badge.
-    expect(el.shadowRoot?.querySelector(".status-hint")).toBeTruthy();
-    expect(el.shadowRoot?.querySelector(".status-badge")).toBeNull();
+  it("holds the hint steady across live/throttled flapping, then clears after the hold window", async () => {
+    // Remote viewers interleave drop-marked and clean frames at frame rate.
+    // Clearing the hint on every fresh frame made it strobe, and because the
+    // hint occupies flow layout the content below shifted up/down rapidly.
+    vi.useFakeTimers();
+    try {
+      pushFrame!(makeFrame({ status: "drop", dropped: 1 }));
+      await el.updateComplete;
+      expect(el.shadowRoot?.querySelector(".status-hint")).toBeTruthy();
+      expect(el.shadowRoot?.querySelector(".status-badge")).toBeNull();
 
-    pushFrame!(makeFrame({ status: "live" }));
-    await el.updateComplete;
+      // A fresh frame right after must NOT clear the hint (sticky hold).
+      pushFrame!(makeFrame({ status: "live" }));
+      await el.updateComplete;
+      expect(el["_status"]).toBe("live");
+      expect(el.shadowRoot?.querySelector(".status-hint")).toBeTruthy();
 
-    expect(el["_status"]).toBe("live");
-    // Live state renders no status span at all (badge, hint, or plain).
-    expect(el.shadowRoot?.querySelector(".status-badge")).toBeNull();
-    expect(el.shadowRoot?.querySelector(".status-hint")).toBeNull();
-    expect(el.shadowRoot?.querySelector(".status")).toBeNull();
+      // Once the hold window passes without further drops, the hint clears.
+      vi.advanceTimersByTime(4100);
+      await el.updateComplete;
+      expect(el.shadowRoot?.querySelector(".status-hint")).toBeNull();
+      expect(el.shadowRoot?.querySelector(".status-badge")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the connecting label distinct from the degraded badge", async () => {
