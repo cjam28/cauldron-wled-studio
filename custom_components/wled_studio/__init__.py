@@ -9,6 +9,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -19,6 +20,7 @@ from .const import (
     STATIC_URL_PREFIX,
 )
 from .coordinator import WledStudioCoordinator
+from .wled_client import WledClientUnavailable
 from .lovelace_resources import (
     async_register_lovelace_resources,
     async_remove_lovelace_resources,
@@ -144,7 +146,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_ws_api(hass)
     await async_setup_services(hass)
     coordinator = WledStudioCoordinator(hass, entry)
-    await coordinator.async_setup()
+    try:
+        await coordinator.async_setup()
+    except WledClientUnavailable as err:
+        # The strip being momentarily unreachable (reboot, Wi-Fi sleep) must
+        # not permanently kill the entry — ConfigEntryNotReady makes HA retry
+        # with backoff. A bare exception here left the integration dead until
+        # a manual reload while the stock WLED entry recovered on its own.
+        raise ConfigEntryNotReady(f"WLED at {entry.data.get('host')} not reachable: {err}") from err
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     entry.async_on_unload(coordinator.async_shutdown)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

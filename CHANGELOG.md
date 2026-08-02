@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.4
+
+### Fixed
+- **A temporarily unreachable strip no longer permanently kills the integration.** `async_setup_entry` raised a bare `WledClientUnavailable` when the WLED device was offline during setup (device reboot, Wi-Fi sleep, stock-WLED reload cascade), leaving the entry in a failed state with no retry — the Studio panel and card reported no controllers until a manual reload. Setup now raises `ConfigEntryNotReady`, so Home Assistant retries with backoff and the integration comes back on its own.
+
 ## 0.12.3
 
 ### Fixed
