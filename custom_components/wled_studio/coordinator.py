@@ -90,6 +90,19 @@ class WledStudioCoordinator:
 
     def _resolve_master_entity(self) -> str | None:
         ent_reg = er.async_get(self.hass)
+        # The stock WLED master light's unique_id is the bare device MAC
+        # (segment lights carry a `_<seg>` suffix). Resolve by that first —
+        # entity_id heuristics broke when the registry held segment 0 at
+        # `light.<device>` (master brightness then drove one segment only).
+        mac = str((self.client.info if self.client else {}).get("mac") or "").lower()
+        if mac:
+            for entity in ent_reg.entities.values():
+                if (
+                    entity.config_entry_id == self.wled_entry_id
+                    and entity.domain == "light"
+                    and str(entity.unique_id or "").lower() == mac
+                ):
+                    return entity.entity_id
         candidates: list[str] = []
         for entity in ent_reg.entities.values():
             if entity.config_entry_id != self.wled_entry_id:
