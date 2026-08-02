@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.5
+
+### Fixed
+- **Master light resolution is now keyed to the device MAC.** `_resolve_master_entity` picked the alphabetically-first non-segment light entity, which mis-bound the master to segment 0 whenever the registry held a segment at `light.<device>` — Studio's master brightness then drove one segment only. The stock WLED master's `unique_id` is the bare MAC (segments carry a `_<seg>` suffix), so resolution now matches on that, with the old heuristic kept as fallback.
+
 ## 0.12.4
 
 ### Fixed
